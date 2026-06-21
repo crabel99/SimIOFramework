@@ -1,0 +1,16 @@
+{
+  "name": "framework-arduino-samd-simio",
+  "version": "0.5.0",
+  "description": "Arduino Wiring-based Framework for Microchip SAM D microcontrollers (SimIO SAMD Core)",
+  "keywords": [
+    "framework",
+    "arduino",
+    "microchip",
+    "samd"
+  ],
+  "license": "LGPL-2.1-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crabel99/SimIOFramework"
+  }
+}
