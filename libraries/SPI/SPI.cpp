@@ -459,7 +459,7 @@ void SPIClass::detachInterrupt() {
   void SPI_IT_HANDLER(void) __attribute__ ((weak));
   void SPI_IT_HANDLER(void) { SPI.onService(); }
 
-  #ifdef FAMILY_SAMD5X
+  #if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
     #ifndef SPI_IT_HANDLER_0
 #define SPI_IT_HANDLER_0 SPI_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SPI)
 #define SPI_IT_HANDLER_1 SPI_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SPI)
@@ -483,7 +483,7 @@ void SPIClass::detachInterrupt() {
 #define SPI1_IT_HANDLER SPI_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SPI1)
 #endif
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
 #ifndef SPI1_IT_HANDLER_0
 #define SPI1_IT_HANDLER_0 SPI_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SPI1)
 #define SPI1_IT_HANDLER_1 SPI_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SPI1)
@@ -510,7 +510,7 @@ void SPIClass::detachInterrupt() {
 #define SPI2_IT_HANDLER SPI_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SPI2)
 #endif
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
 #ifndef SPI2_IT_HANDLER_0
 #define SPI2_IT_HANDLER_0 SPI_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SPI2)
 #define SPI2_IT_HANDLER_1 SPI_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SPI2)
@@ -537,7 +537,7 @@ void SPIClass::detachInterrupt() {
 #define SPI3_IT_HANDLER SPI_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SPI3)
 #endif
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
 #ifndef SPI3_IT_HANDLER_0
 #define SPI3_IT_HANDLER_0 SPI_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SPI3)
 #define SPI3_IT_HANDLER_1 SPI_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SPI3)
@@ -564,7 +564,7 @@ void SPIClass::detachInterrupt() {
 #define SPI4_IT_HANDLER SPI_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SPI4)
 #endif
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
 #ifndef SPI4_IT_HANDLER_0
 #define SPI4_IT_HANDLER_0 SPI_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SPI4)
 #define SPI4_IT_HANDLER_1 SPI_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SPI4)
@@ -591,7 +591,7 @@ void SPIClass::detachInterrupt() {
 #define SPI5_IT_HANDLER SPI_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SPI5)
 #endif
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
 #ifndef SPI5_IT_HANDLER_0
 #define SPI5_IT_HANDLER_0 SPI_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SPI5)
 #define SPI5_IT_HANDLER_1 SPI_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SPI5)
@@ -619,7 +619,7 @@ void SPIClass::detachInterrupt() {
 #define SPI6_IT_HANDLER SPI_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SPI6)
 #endif
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
 #ifndef SPI6_IT_HANDLER_0
 #define SPI6_IT_HANDLER_0 SPI_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SPI6)
 #define SPI6_IT_HANDLER_1 SPI_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SPI6)
@@ -647,7 +647,7 @@ void SPIClass::detachInterrupt() {
 #define SPI7_IT_HANDLER SPI_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SPI7)
 #endif
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
 #ifndef SPI7_IT_HANDLER_0
 #define SPI7_IT_HANDLER_0 SPI_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SPI7)
 #define SPI7_IT_HANDLER_1 SPI_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SPI7)

@@ -458,12 +458,12 @@ void TwoWire::onDeferredReceive(void* user, int length)
     Wire.onService();
   }
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
   void WIRE_IT_HANDLER_0(void) { Wire.onService(); }
   void WIRE_IT_HANDLER_1(void) { Wire.onService(); }
   void WIRE_IT_HANDLER_2(void) { Wire.onService(); }
   void WIRE_IT_HANDLER_3(void) { Wire.onService(); }
-#endif // FAMILY_SAMD5X
+#endif // SAMD51/SAME5x
 #endif
 
 #if WIRE_INTERFACES_COUNT > 1
@@ -471,12 +471,12 @@ void TwoWire::onDeferredReceive(void* user, int length)
 
     void WIRE1_IT_HANDLER(void) { Wire1.onService(); }
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
     void WIRE1_IT_HANDLER_0(void) { Wire1.onService(); }
     void WIRE1_IT_HANDLER_1(void) { Wire1.onService(); }
     void WIRE1_IT_HANDLER_2(void) { Wire1.onService(); }
     void WIRE1_IT_HANDLER_3(void) { Wire1.onService(); }
-#endif // FAMILY_SAMD5X
+#endif // SAMD51/SAME5x
 #endif
 
 #if WIRE_INTERFACES_COUNT > 2
@@ -484,12 +484,12 @@ void TwoWire::onDeferredReceive(void* user, int length)
 
     void WIRE2_IT_HANDLER(void) { Wire2.onService(); }
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
     void WIRE2_IT_HANDLER_0(void) { Wire2.onService(); }
     void WIRE2_IT_HANDLER_1(void) { Wire2.onService(); }
     void WIRE2_IT_HANDLER_2(void) { Wire2.onService(); }
     void WIRE2_IT_HANDLER_3(void) { Wire2.onService(); }
-#endif // FAMILY_SAMD5X
+#endif // SAMD51/SAME5x
 #endif
 
 #if WIRE_INTERFACES_COUNT > 3
@@ -497,12 +497,12 @@ void TwoWire::onDeferredReceive(void* user, int length)
 
     void WIRE3_IT_HANDLER(void) { Wire3.onService(); }
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
     void WIRE3_IT_HANDLER_0(void) { Wire3.onService(); }
     void WIRE3_IT_HANDLER_1(void) { Wire3.onService(); }
     void WIRE3_IT_HANDLER_2(void) { Wire3.onService(); }
     void WIRE3_IT_HANDLER_3(void) { Wire3.onService(); }
-#endif // FAMILY_SAMD5X
+#endif // SAMD51/SAME5x
 #endif
 
 #if WIRE_INTERFACES_COUNT > 4
@@ -510,12 +510,12 @@ void TwoWire::onDeferredReceive(void* user, int length)
 
     void WIRE4_IT_HANDLER(void) { Wire4.onService(); }
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
     void WIRE4_IT_HANDLER_0(void) { Wire4.onService(); }
     void WIRE4_IT_HANDLER_1(void) { Wire4.onService(); }
     void WIRE4_IT_HANDLER_2(void) { Wire4.onService(); }
     void WIRE4_IT_HANDLER_3(void) { Wire4.onService(); }
-#endif // FAMILY_SAMD5X
+#endif // SAMD51/SAME5x
 #endif
 
 #if WIRE_INTERFACES_COUNT > 5
@@ -523,10 +523,10 @@ void TwoWire::onDeferredReceive(void* user, int length)
 
     void WIRE5_IT_HANDLER(void) { Wire5.onService(); }
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
     void WIRE5_IT_HANDLER_0(void) { Wire5.onService(); }
     void WIRE5_IT_HANDLER_1(void) { Wire5.onService(); }
     void WIRE5_IT_HANDLER_2(void) { Wire5.onService(); }
     void WIRE5_IT_HANDLER_3(void) { Wire5.onService(); }
-#endif // FAMILY_SAMD5X
+#endif // SAMD51/SAME5x
 #endif

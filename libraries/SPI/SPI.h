@@ -42,7 +42,7 @@
 #define SPI_MODE2 0x03
 #define SPI_MODE3 0x01
 
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
 // SAMD51 has configurable MAX_SPI, else use peripheral clock default.
 // Update: changing MAX_SPI via compiler flags is DEPRECATED, because
 // this affects ALL SPI peripherals including some that should NOT be
@@ -84,7 +84,7 @@ class SPISettings {
   }
 
   void init_AlwaysInline(uint32_t clock, BitOrder bitOrder, uint8_t dataMode) __attribute__((__always_inline__)) {
-#ifdef FAMILY_SAMD5X
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
     this->clockFreq = clock; // Clipping handled in SERCOM.cpp
 #else
     this->clockFreq = clock >= MAX_SPI ? MAX_SPI : clock;
