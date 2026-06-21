@@ -7,3 +7,4 @@ bootloaders/*/build/
 .ci-home
 .ci_home
 *.log
+.vscode/
