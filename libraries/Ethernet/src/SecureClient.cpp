@@ -6,6 +6,25 @@ SecureClient::SecureClient()
 SecureClient::SecureClient(EthernetSocket &socket)
     : EthernetClient(socket), _lastError(SecureClientNoError) {}
 
+SecureClient::SecureClient(EthernetSocketProvider &provider)
+    : EthernetClient(provider), _lastError(SecureClientNoError) {}
+
+SecureClient::SecureClient(SecureClient &&other)
+    : EthernetClient(static_cast<EthernetClient &&>(other)),
+      _lastError(other._lastError) {
+  other._lastError = SecureClientNoError;
+}
+
+SecureClient &SecureClient::operator=(SecureClient &&other) {
+  if (this == &other)
+    return *this;
+
+  EthernetClient::operator=(static_cast<EthernetClient &&>(other));
+  _lastError = other._lastError;
+  other._lastError = SecureClientNoError;
+  return *this;
+}
+
 int SecureClient::connect(IPAddress, uint16_t) {
   _lastError = SecureClientTlsUnavailable;
   return 0;

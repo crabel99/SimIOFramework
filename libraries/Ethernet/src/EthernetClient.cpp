@@ -1,26 +1,86 @@
 #include "EthernetClient.h"
 
-EthernetClient::EthernetClient() : _socket(nullptr) {}
+EthernetClient::EthernetClient()
+    : _socket(nullptr), _provider(nullptr), _ownsSocket(false) {}
 
-EthernetClient::EthernetClient(EthernetSocket &socket) : _socket(&socket) {}
+EthernetClient::EthernetClient(EthernetSocket &socket)
+    : _socket(&socket), _provider(nullptr), _ownsSocket(false) {}
 
-void EthernetClient::setSocket(EthernetSocket &socket) { _socket = &socket; }
+EthernetClient::EthernetClient(EthernetSocketProvider &provider)
+    : _socket(nullptr), _provider(&provider), _ownsSocket(false) {}
 
-void EthernetClient::clearSocket() { _socket = nullptr; }
+EthernetClient::EthernetClient(EthernetSocketProvider &provider,
+                               EthernetSocket &socket)
+    : _socket(&socket), _provider(&provider), _ownsSocket(true) {}
+
+EthernetClient::EthernetClient(EthernetClient &&other)
+    : _socket(other._socket), _provider(other._provider),
+      _ownsSocket(other._ownsSocket) {
+  other._socket = nullptr;
+  other._provider = nullptr;
+  other._ownsSocket = false;
+}
+
+EthernetClient &EthernetClient::operator=(EthernetClient &&other) {
+  if (this == &other)
+    return *this;
+
+  releaseOwnedSocket();
+  _socket = other._socket;
+  _provider = other._provider;
+  _ownsSocket = other._ownsSocket;
+  other._socket = nullptr;
+  other._provider = nullptr;
+  other._ownsSocket = false;
+  return *this;
+}
+
+EthernetClient::~EthernetClient() { releaseOwnedSocket(); }
+
+void EthernetClient::setSocket(EthernetSocket &socket) {
+  releaseOwnedSocket();
+  _socket = &socket;
+  _provider = nullptr;
+  _ownsSocket = false;
+}
+
+void EthernetClient::setSocketProvider(EthernetSocketProvider &provider) {
+  releaseOwnedSocket();
+  _socket = nullptr;
+  _provider = &provider;
+  _ownsSocket = false;
+}
+
+void EthernetClient::clearSocket() {
+  releaseOwnedSocket();
+  _socket = nullptr;
+  _provider = nullptr;
+  _ownsSocket = false;
+}
 
 int EthernetClient::connect(IPAddress ip, uint16_t port) {
-  if (_socket == nullptr || !_socket->carrierUp())
+  if (!ensureSocket() || !_socket->carrierUp())
     return 0;
 
-  return _socket->connect(ip, port);
+  const int result = _socket->connect(ip, port);
+  if (result == 0 && _ownsSocket)
+    releaseOwnedSocket();
+
+  return result;
 }
 
 int EthernetClient::connect(const char *host, uint16_t port) {
-  if (_socket == nullptr || host == nullptr || host[0] == '\0' ||
-      !_socket->carrierUp())
+  if (host == nullptr || host[0] == '\0')
     return 0;
 
-  return _socket->connect(host, port);
+  if (!ensureSocket() || !_socket->carrierUp())
+    return 0;
+
+  const int result = _socket->connect(host, port);
+  if (result == 0 && _ownsSocket)
+    releaseOwnedSocket();
+
+  return result;
 }
 
 size_t EthernetClient::write(uint8_t value) {
@@ -75,6 +135,9 @@ void EthernetClient::flush() {
 void EthernetClient::stop() {
   if (_socket != nullptr)
     _socket->stop();
+
+  if (_ownsSocket)
+    releaseOwnedSocket();
 }
 
 uint8_t EthernetClient::connected() {
@@ -85,3 +148,25 @@ uint8_t EthernetClient::connected() {
 }
 
 EthernetClient::operator bool() { return _socket != nullptr; }
+
+bool EthernetClient::ensureSocket() {
+  if (_socket != nullptr)
+    return true;
+
+  if (_provider == nullptr)
+    return false;
+
+  _socket = _provider->acquireClientSocket();
+  _ownsSocket = _socket != nullptr;
+  return _socket != nullptr;
+}
+
+void EthernetClient::releaseOwnedSocket() {
+  if (_ownsSocket && _provider != nullptr && _socket != nullptr)
+    _provider->releaseClientSocket(_socket);
+
+  if (_ownsSocket)
+    _socket = nullptr;
+
+  _ownsSocket = false;
+}

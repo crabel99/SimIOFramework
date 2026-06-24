@@ -11,6 +11,11 @@ class SecureClient : public EthernetClient {
 public:
   SecureClient();
   explicit SecureClient(EthernetSocket &socket);
+  explicit SecureClient(EthernetSocketProvider &provider);
+  SecureClient(const SecureClient &) = delete;
+  SecureClient &operator=(const SecureClient &) = delete;
+  SecureClient(SecureClient &&other);
+  SecureClient &operator=(SecureClient &&other);
 
   int connect(IPAddress ip, uint16_t port) override;
   int connect(const char *host, uint16_t port) override;
