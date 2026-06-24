@@ -31,6 +31,38 @@ public:
     uint32_t transmitStatus;
   };
 
+  struct Statistics {
+    uint64_t transmitOctets;
+    uint32_t transmitFrames;
+    uint32_t transmitBroadcastFrames;
+    uint32_t transmitMulticastFrames;
+    uint32_t transmitPauseFrames;
+    uint32_t transmitUnderruns;
+    uint32_t transmitSingleCollisionFrames;
+    uint32_t transmitMultipleCollisionFrames;
+    uint32_t transmitExcessiveCollisions;
+    uint32_t transmitLateCollisions;
+    uint32_t transmitDeferredFrames;
+    uint32_t transmitCarrierSenseErrors;
+    uint64_t receiveOctets;
+    uint32_t receiveFrames;
+    uint32_t receiveBroadcastFrames;
+    uint32_t receiveMulticastFrames;
+    uint32_t receivePauseFrames;
+    uint32_t receiveUndersizeFrames;
+    uint32_t receiveOversizeFrames;
+    uint32_t receiveJabbers;
+    uint32_t receiveFcsErrors;
+    uint32_t receiveLengthFieldErrors;
+    uint32_t receiveSymbolErrors;
+    uint32_t receiveAlignmentErrors;
+    uint32_t receiveResourceErrors;
+    uint32_t receiveOverruns;
+    uint32_t receiveIpHeaderChecksumErrors;
+    uint32_t receiveTcpChecksumErrors;
+    uint32_t receiveUdpChecksumErrors;
+  };
+
   static constexpr uint32_t RxDescriptorOwnership = 1u << 0;
   static constexpr uint32_t RxDescriptorWrap = 1u << 1;
   static constexpr uint32_t RxDescriptorLengthMask = 0x00001FFFu;
@@ -78,6 +110,8 @@ public:
   static void clearReceiveStatus(uint32_t mask);
   static void clearTransmitStatus(uint32_t mask);
   static void clearStatus(uint32_t receiveMask, uint32_t transmitMask);
+  static Statistics statistics();
+  static void clearStatistics();
   static bool queueTransmitBuffer(const uint8_t *buffer, uint16_t length);
   static bool queueTransmitFrame(const TransmitFragment *fragments,
                                  uint8_t fragmentCount);

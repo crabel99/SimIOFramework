@@ -58,6 +58,10 @@ void exitCritical(uint32_t primask) {
   __set_PRIMASK(primask);
 }
 
+uint64_t combineCounterWords(uint32_t low, uint32_t high) {
+  return (static_cast<uint64_t>(high) << 32) | low;
+}
+
 void gmacPendSvService(uint8_t serviceId, void *) {
   if (serviceId != gmac::pendSvServiceId())
     return;
@@ -415,6 +419,47 @@ void gmac::clearStatus(uint32_t receiveMask, uint32_t transmitMask) {
   clearReceiveStatus(receiveMask);
   clearTransmitStatus(transmitMask);
 }
+
+gmac::Statistics gmac::statistics() {
+  gmac_registers_t *regs = gmacRegisters();
+  Statistics current = {};
+
+  current.transmitOctets =
+      combineCounterWords(regs->GMAC_OTLO, regs->GMAC_OTHI);
+  current.transmitFrames = regs->GMAC_FT;
+  current.transmitBroadcastFrames = regs->GMAC_BCFT;
+  current.transmitMulticastFrames = regs->GMAC_MFT;
+  current.transmitPauseFrames = regs->GMAC_PFT;
+  current.transmitUnderruns = regs->GMAC_TUR;
+  current.transmitSingleCollisionFrames = regs->GMAC_SCF;
+  current.transmitMultipleCollisionFrames = regs->GMAC_MCF;
+  current.transmitExcessiveCollisions = regs->GMAC_EC;
+  current.transmitLateCollisions = regs->GMAC_LC;
+  current.transmitDeferredFrames = regs->GMAC_DTF;
+  current.transmitCarrierSenseErrors = regs->GMAC_CSE;
+
+  current.receiveOctets = combineCounterWords(regs->GMAC_ORLO, regs->GMAC_ORHI);
+  current.receiveFrames = regs->GMAC_FR;
+  current.receiveBroadcastFrames = regs->GMAC_BCFR;
+  current.receiveMulticastFrames = regs->GMAC_MFR;
+  current.receivePauseFrames = regs->GMAC_PFR;
+  current.receiveUndersizeFrames = regs->GMAC_UFR;
+  current.receiveOversizeFrames = regs->GMAC_OFR;
+  current.receiveJabbers = regs->GMAC_JR;
+  current.receiveFcsErrors = regs->GMAC_FCSE;
+  current.receiveLengthFieldErrors = regs->GMAC_LFFE;
+  current.receiveSymbolErrors = regs->GMAC_RSE;
+  current.receiveAlignmentErrors = regs->GMAC_AE;
+  current.receiveResourceErrors = regs->GMAC_RRE;
+  current.receiveOverruns = regs->GMAC_ROE;
+  current.receiveIpHeaderChecksumErrors = regs->GMAC_IHCE;
+  current.receiveTcpChecksumErrors = regs->GMAC_TCE;
+  current.receiveUdpChecksumErrors = regs->GMAC_UCE;
+
+  return current;
+}
+
+void gmac::clearStatistics() { gmacRegisters()->GMAC_NCR |= GMAC_NCR_CLRSTAT_Msk; }
 
 bool gmac::queueTransmitBuffer(const uint8_t *buffer, uint16_t length) {
   const TransmitFragment fragment = {buffer, length};

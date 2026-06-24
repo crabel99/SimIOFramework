@@ -167,6 +167,10 @@ void EthernetClass::clearStatus(uint32_t receiveMask, uint32_t transmitMask) {
   gmac::clearStatus(receiveMask, transmitMask);
 }
 
+gmac::Statistics EthernetClass::statistics() const { return gmac::statistics(); }
+
+void EthernetClass::clearStatistics() { gmac::clearStatistics(); }
+
 bool EthernetClass::frameAvailable(uint16_t *length) {
   if (!_begun)
     return false;

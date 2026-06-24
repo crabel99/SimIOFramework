@@ -51,6 +51,8 @@ public:
   void clearHashFilter();
   gmac::Status status() const;
   void clearStatus(uint32_t receiveMask, uint32_t transmitMask);
+  gmac::Statistics statistics() const;
+  void clearStatistics();
   bool frameAvailable(uint16_t *length = nullptr);
   bool readFrame(uint8_t *buffer, uint16_t capacity, uint16_t *length);
   bool writeFrame(const uint8_t *buffer, uint16_t length);
