@@ -145,6 +145,22 @@ bool EthernetClass::updateLinkConfiguration() {
   return true;
 }
 
+void EthernetClass::setPromiscuousMode(bool enabled) {
+  gmac::setPromiscuousMode(enabled);
+}
+
+void EthernetClass::setBroadcastReception(bool enabled) {
+  gmac::setBroadcastReception(enabled);
+}
+
+void EthernetClass::setHashFilter(uint32_t bottom, uint32_t top,
+                                  bool multicastEnabled,
+                                  bool unicastEnabled) {
+  gmac::setHashFilter(bottom, top, multicastEnabled, unicastEnabled);
+}
+
+void EthernetClass::clearHashFilter() { gmac::clearHashFilter(); }
+
 bool EthernetClass::frameAvailable(uint16_t *length) {
   if (!_begun)
     return false;

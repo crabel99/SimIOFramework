@@ -302,6 +302,44 @@ void gmac::configureLink(LinkSpeed speed, bool fullDuplex) {
   regs->GMAC_NCFGR = config;
 }
 
+void gmac::setPromiscuousMode(bool enabled) {
+  gmac_registers_t *regs = gmacRegisters();
+  if (enabled) {
+    regs->GMAC_NCFGR |= GMAC_NCFGR_CAF_Msk;
+  } else {
+    regs->GMAC_NCFGR &= ~GMAC_NCFGR_CAF_Msk;
+  }
+}
+
+void gmac::setBroadcastReception(bool enabled) {
+  gmac_registers_t *regs = gmacRegisters();
+  if (enabled) {
+    regs->GMAC_NCFGR &= ~GMAC_NCFGR_NBC_Msk;
+  } else {
+    regs->GMAC_NCFGR |= GMAC_NCFGR_NBC_Msk;
+  }
+}
+
+void gmac::setHashFilter(uint32_t bottom, uint32_t top, bool multicastEnabled,
+                         bool unicastEnabled) {
+  gmac_registers_t *regs = gmacRegisters();
+  uint32_t config =
+      regs->GMAC_NCFGR & ~(GMAC_NCFGR_MTIHEN_Msk | GMAC_NCFGR_UNIHEN_Msk);
+
+  regs->GMAC_HRB = bottom;
+  regs->GMAC_HRT = top;
+
+  if (multicastEnabled)
+    config |= GMAC_NCFGR_MTIHEN_Msk;
+
+  if (unicastEnabled)
+    config |= GMAC_NCFGR_UNIHEN_Msk;
+
+  regs->GMAC_NCFGR = config;
+}
+
+void gmac::clearHashFilter() { setHashFilter(0, 0, false, false); }
+
 bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
                                  uint8_t rxDescriptorCount, uint8_t *rxBuffers,
                                  uint16_t rxBufferSize,

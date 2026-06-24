@@ -57,6 +57,11 @@ public:
   static bool beginManagement(uint32_t mckHz = F_CPU);
   static bool isManagementIdle();
   static void configureLink(LinkSpeed speed, bool fullDuplex);
+  static void setPromiscuousMode(bool enabled);
+  static void setBroadcastReception(bool enabled);
+  static void setHashFilter(uint32_t bottom, uint32_t top,
+                            bool multicastEnabled, bool unicastEnabled);
+  static void clearHashFilter();
   static bool configureFrameBuffers(Descriptor *rxDescriptors,
                                     uint8_t rxDescriptorCount,
                                     uint8_t *rxBuffers, uint16_t rxBufferSize,
