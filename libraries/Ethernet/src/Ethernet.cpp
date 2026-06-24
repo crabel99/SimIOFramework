@@ -1,6 +1,8 @@
 #include "Ethernet.h"
 
 #ifdef ETHERNET_HARDWARE_AVAILABLE
+#include <Arduino.h>
+#include <utility/phy/PhyRegisters.h>
 #include <string.h>
 
 namespace {
@@ -22,6 +24,7 @@ uint8_t rxQueueCount = 0;
 EthernetClass::FrameReceiveCallback frameReceiveCallback = nullptr;
 void *frameReceiveCallbackContext = nullptr;
 bool txBufferInUse = false;
+EthernetClass *phyInterruptOwner = nullptr;
 
 uint32_t enterCritical() {
   const uint32_t primask = __get_PRIMASK();
@@ -186,20 +189,6 @@ void drainReceivedFrames() {
   }
 }
 
-void handleGmacEvents(gmac::EventMask events, void *) {
-  if ((events & gmac::EventRxReady) != 0)
-    drainReceivedFrames();
-
-  if ((events & gmac::EventRxRecovered) != 0)
-    clearReceiveQueue();
-
-  if ((events & (gmac::EventTxComplete | gmac::EventTxRecovered)) != 0) {
-    const uint32_t primask = enterCritical();
-    txBufferInUse = false;
-    exitCritical(primask);
-  }
-}
-
 bool isUsableMac(const uint8_t mac[6]) {
   if (mac == nullptr)
     return false;
@@ -224,26 +213,89 @@ bool configureEthernetFrameBuffers() {
                                      &rxBuffers[0][0], kFrameBufferSize,
                                      &txDescriptors[0], kTxDescriptorCount);
 }
+
+bool resolveAdvertisedLink(uint16_t localAdvertisement,
+                           uint16_t partnerAbility,
+                           EthernetPhyLinkSpeed *speed,
+                           EthernetPhyDuplex *duplex) {
+  if (speed == nullptr || duplex == nullptr)
+    return false;
+
+  const uint16_t common = localAdvertisement & partnerAbility;
+
+  if ((common & PhyRegAnad::bit::HundredBaseTXFull) != 0) {
+    *speed = EthernetPhySpeed100M;
+    *duplex = EthernetPhyFullDuplex;
+    return true;
+  }
+
+  if ((common & PhyRegAnad::bit::HundredBaseTXHalf) != 0) {
+    *speed = EthernetPhySpeed100M;
+    *duplex = EthernetPhyHalfDuplex;
+    return true;
+  }
+
+  if ((common & PhyRegAnad::bit::TenBaseTFull) != 0) {
+    *speed = EthernetPhySpeed10M;
+    *duplex = EthernetPhyFullDuplex;
+    return true;
+  }
+
+  if ((common & PhyRegAnad::bit::TenBaseTHalf) != 0) {
+    *speed = EthernetPhySpeed10M;
+    *duplex = EthernetPhyHalfDuplex;
+    return true;
+  }
+
+  return false;
+}
 } // namespace
 
 EthernetClass Ethernet;
 
 EthernetClass::EthernetClass()
     : _mac{0, 0, 0, 0, 0, 0}, _hasMac(false), _begun(false),
-      _phy(&defaultPhy) {}
+      _phy(&defaultPhy), _linkStatus(Unknown),
+      _linkSpeed(EthernetPhySpeedUnknown), _duplex(EthernetPhyDuplexUnknown),
+      _linkChangeCallback(nullptr), _linkChangeCallbackContext(nullptr),
+      _carrierCallback(nullptr), _carrierCallbackContext(nullptr), _miim(),
+      _linkRefreshPending(false), _linkRefreshRequested(false),
+      _phyInterruptAttached(false), _phyInterruptPin(0),
+      _phyInterruptMode(FALLING), _linkAdvertisement(0) {}
 
 EthernetClass::EthernetClass(const uint8_t mac[6])
     : _mac{0, 0, 0, 0, 0, 0}, _hasMac(false), _begun(false),
-      _phy(&defaultPhy) {
+      _phy(&defaultPhy), _linkStatus(Unknown),
+      _linkSpeed(EthernetPhySpeedUnknown), _duplex(EthernetPhyDuplexUnknown),
+      _linkChangeCallback(nullptr), _linkChangeCallbackContext(nullptr),
+      _carrierCallback(nullptr), _carrierCallbackContext(nullptr), _miim(),
+      _linkRefreshPending(false), _linkRefreshRequested(false),
+      _phyInterruptAttached(false), _phyInterruptPin(0),
+      _phyInterruptMode(FALLING), _linkAdvertisement(0) {
   setMacAddress(mac);
 }
 
 EthernetClass::EthernetClass(EthernetPhy &phy)
-    : _mac{0, 0, 0, 0, 0, 0}, _hasMac(false), _begun(false), _phy(&phy) {}
+    : _mac{0, 0, 0, 0, 0, 0}, _hasMac(false), _begun(false), _phy(&phy),
+      _linkStatus(Unknown), _linkSpeed(EthernetPhySpeedUnknown),
+      _duplex(EthernetPhyDuplexUnknown), _linkChangeCallback(nullptr),
+      _linkChangeCallbackContext(nullptr), _carrierCallback(nullptr),
+      _carrierCallbackContext(nullptr), _miim(), _linkRefreshPending(false),
+      _linkRefreshRequested(false), _phyInterruptAttached(false),
+      _phyInterruptPin(0), _phyInterruptMode(FALLING), _linkAdvertisement(0) {
+  _miim.setPhyAddress(phy.address());
+}
 
 EthernetClass::EthernetClass(const uint8_t mac[6], EthernetPhy &phy)
-    : _mac{0, 0, 0, 0, 0, 0}, _hasMac(false), _begun(false), _phy(&phy) {
+    : _mac{0, 0, 0, 0, 0, 0}, _hasMac(false), _begun(false), _phy(&phy),
+      _linkStatus(Unknown), _linkSpeed(EthernetPhySpeedUnknown),
+      _duplex(EthernetPhyDuplexUnknown), _linkChangeCallback(nullptr),
+      _linkChangeCallbackContext(nullptr), _carrierCallback(nullptr),
+      _carrierCallbackContext(nullptr), _miim(), _linkRefreshPending(false),
+      _linkRefreshRequested(false), _phyInterruptAttached(false),
+      _phyInterruptPin(0), _phyInterruptMode(FALLING), _linkAdvertisement(0) {
   setMacAddress(mac);
+  _miim.setPhyAddress(phy.address());
 }
 
 EthernetHardwareStatus EthernetClass::hardwareStatus() const {
@@ -251,12 +303,23 @@ EthernetHardwareStatus EthernetClass::hardwareStatus() const {
 }
 
 EthernetLinkStatus EthernetClass::linkStatus() const {
-  return Unknown;
+  return _linkStatus;
 }
+
+EthernetPhyLinkSpeed EthernetClass::linkSpeed() const { return _linkSpeed; }
+
+EthernetPhyDuplex EthernetClass::duplex() const { return _duplex; }
+
+bool EthernetClass::carrierUp() const { return _linkStatus == LinkON; }
 
 void EthernetClass::setPhy(EthernetPhy &phy) {
   _phy = &phy;
   _begun = false;
+  _miim.reset();
+  _miim.setPhyAddress(phy.address());
+  _linkRefreshPending = false;
+  _linkRefreshRequested = false;
+  updateCachedLink(Unknown, EthernetPhySpeedUnknown, EthernetPhyDuplexUnknown);
 }
 
 EthernetPhy *EthernetClass::phy() const { return _phy; }
@@ -281,7 +344,68 @@ void EthernetClass::macAddress(uint8_t mac[6]) const {
 }
 
 bool EthernetClass::updateLinkConfiguration() {
+  if (_linkStatus != LinkON || _linkSpeed == EthernetPhySpeedUnknown ||
+      _duplex == EthernetPhyDuplexUnknown)
+    return false;
+
+  gmac::configureLink(_linkSpeed == EthernetPhySpeed100M ? gmac::LinkSpeed100M
+                                                         : gmac::LinkSpeed10M,
+                      _duplex == EthernetPhyFullDuplex);
+  return true;
+}
+
+bool EthernetClass::requestLinkRefresh() {
+  if (_phy == nullptr || _linkRefreshPending)
+    return false;
+
+  _linkRefreshPending = true;
+  if (queueMdioRead(static_cast<uint8_t>(PhyRegBmstat::addr),
+                    EthernetClass::handleLinkStatusRead, this))
+    return true;
+
+  _linkRefreshPending = false;
   return false;
+}
+
+void EthernetClass::requestLinkRefreshFromIsr() {
+  _linkRefreshRequested = true;
+  gmac::scheduleEvent(gmac::EventManagementComplete);
+}
+
+bool EthernetClass::setPhyInterruptPin(uint32_t pin, uint32_t mode) {
+  clearPhyInterruptPin();
+
+  phyInterruptOwner = this;
+  _phyInterruptPin = pin;
+  _phyInterruptMode = mode;
+  attachInterrupt(digitalPinToInterrupt(pin), EthernetClass::handlePhyInterrupt,
+                  mode);
+  _phyInterruptAttached = true;
+  return true;
+}
+
+void EthernetClass::clearPhyInterruptPin() {
+  if (_phyInterruptAttached)
+    detachInterrupt(digitalPinToInterrupt(_phyInterruptPin));
+
+  if (phyInterruptOwner == this)
+    phyInterruptOwner = nullptr;
+
+  _phyInterruptAttached = false;
+}
+
+bool EthernetClass::service() {
+  return _miim.service();
+}
+
+bool EthernetClass::queueMdioRead(uint8_t registerAddress,
+                                  MdioCallback callback, void *context) {
+  return _miim.queueRead(registerAddress, callback, context);
+}
+
+bool EthernetClass::queueMdioWrite(uint8_t registerAddress, uint16_t value,
+                                   MdioCallback callback, void *context) {
+  return _miim.queueWrite(registerAddress, value, callback, context);
 }
 
 void EthernetClass::configureReceiveOptions(
@@ -330,6 +454,169 @@ void EthernetClass::clearFrameReceiveCallback() {
   frameReceiveCallback = nullptr;
   frameReceiveCallbackContext = nullptr;
   exitCritical(primask);
+}
+
+void EthernetClass::setLinkChangeCallback(LinkChangeCallback callback,
+                                          void *context) {
+  _linkChangeCallback = callback;
+  _linkChangeCallbackContext = context;
+}
+
+void EthernetClass::clearLinkChangeCallback() {
+  _linkChangeCallback = nullptr;
+  _linkChangeCallbackContext = nullptr;
+}
+
+void EthernetClass::setCarrierCallback(CarrierCallback callback,
+                                       void *context) {
+  _carrierCallback = callback;
+  _carrierCallbackContext = context;
+}
+
+void EthernetClass::clearCarrierCallback() {
+  _carrierCallback = nullptr;
+  _carrierCallbackContext = nullptr;
+}
+
+bool EthernetClass::updateCachedLink(EthernetLinkStatus status,
+                                     EthernetPhyLinkSpeed speed,
+                                     EthernetPhyDuplex duplex) {
+  const bool changed = _linkStatus != status || _linkSpeed != speed ||
+                       _duplex != duplex;
+  const bool carrierChanged = (_linkStatus == LinkON) != (status == LinkON);
+
+  _linkStatus = status;
+  _linkSpeed = speed;
+  _duplex = duplex;
+
+  if (!changed)
+    return false;
+
+  if (status == LinkON)
+    updateLinkConfiguration();
+
+  if (carrierChanged && _carrierCallback != nullptr)
+    _carrierCallback(status == LinkON, _carrierCallbackContext);
+
+  if (_linkChangeCallback != nullptr)
+    _linkChangeCallback(status, speed, duplex, _linkChangeCallbackContext);
+
+  return true;
+}
+
+void EthernetClass::handleGmacEvents(gmac::EventMask events) {
+  if ((events & gmac::EventRxReady) != 0)
+    drainReceivedFrames();
+
+  if ((events & gmac::EventRxRecovered) != 0)
+    clearReceiveQueue();
+
+  if ((events & (gmac::EventTxComplete | gmac::EventTxRecovered)) != 0) {
+    const uint32_t primask = enterCritical();
+    txBufferInUse = false;
+    exitCritical(primask);
+  }
+
+  if (_linkRefreshRequested && !_linkRefreshPending) {
+    _linkRefreshRequested = false;
+    requestLinkRefresh();
+  }
+
+  if ((events & gmac::EventManagementComplete) != 0)
+    service();
+}
+
+void EthernetClass::handleLinkStatusRead(bool success, uint16_t value) {
+  if (!success) {
+    _linkRefreshPending = false;
+    updateCachedLink(Unknown, EthernetPhySpeedUnknown,
+                     EthernetPhyDuplexUnknown);
+    return;
+  }
+
+  if ((value & PhyRegBmstat::bit::LinkStatus) == 0) {
+    _linkRefreshPending = false;
+    updateCachedLink(LinkOFF, EthernetPhySpeedUnknown,
+                     EthernetPhyDuplexUnknown);
+    return;
+  }
+
+  if (!queueMdioRead(static_cast<uint8_t>(PhyRegAnad::addr),
+                     EthernetClass::handleLinkAdvertisementRead, this)) {
+    _linkRefreshPending = false;
+    updateCachedLink(LinkON, EthernetPhySpeedUnknown,
+                     EthernetPhyDuplexUnknown);
+  }
+}
+
+void EthernetClass::handleLinkAdvertisementRead(bool success, uint16_t value) {
+  if (!success) {
+    _linkRefreshPending = false;
+    updateCachedLink(Unknown, EthernetPhySpeedUnknown,
+                     EthernetPhyDuplexUnknown);
+    return;
+  }
+
+  _linkAdvertisement = value;
+  if (!queueMdioRead(static_cast<uint8_t>(PhyRegAnlpad::addr),
+                     EthernetClass::handleLinkPartnerAbilityRead, this)) {
+    _linkRefreshPending = false;
+    updateCachedLink(LinkON, EthernetPhySpeedUnknown,
+                     EthernetPhyDuplexUnknown);
+  }
+}
+
+void EthernetClass::handleLinkPartnerAbilityRead(bool success,
+                                                 uint16_t value) {
+  _linkRefreshPending = false;
+
+  if (!success) {
+    updateCachedLink(Unknown, EthernetPhySpeedUnknown,
+                     EthernetPhyDuplexUnknown);
+    return;
+  }
+
+  EthernetPhyLinkSpeed speed = EthernetPhySpeedUnknown;
+  EthernetPhyDuplex duplex = EthernetPhyDuplexUnknown;
+  if (!resolveAdvertisedLink(_linkAdvertisement, value, &speed, &duplex)) {
+    updateCachedLink(LinkON, EthernetPhySpeedUnknown,
+                     EthernetPhyDuplexUnknown);
+    return;
+  }
+
+  updateCachedLink(LinkON, speed, duplex);
+}
+
+void EthernetClass::handleGmacEvents(gmac::EventMask events, void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->handleGmacEvents(events);
+}
+
+void EthernetClass::handleLinkStatusRead(bool success, uint16_t value,
+                                         void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->handleLinkStatusRead(success, value);
+}
+
+void EthernetClass::handleLinkAdvertisementRead(bool success, uint16_t value,
+                                                void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->handleLinkAdvertisementRead(success, value);
+}
+
+void EthernetClass::handleLinkPartnerAbilityRead(bool success, uint16_t value,
+                                                 void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->handleLinkPartnerAbilityRead(success, value);
+}
+
+void EthernetClass::handlePhyInterrupt() {
+  if (phyInterruptOwner != nullptr)
+    phyInterruptOwner->requestLinkRefreshFromIsr();
 }
 
 bool EthernetClass::frameAvailable(uint16_t *length) {
@@ -384,11 +671,15 @@ int EthernetClass::begin() {
       !gmac::beginManagement())
     return 0;
 
+  _miim.reset();
+  _miim.setPhyAddress(_phy->address());
+  _linkRefreshPending = false;
+  _linkRefreshRequested = false;
   gmac::setMacAddress(_mac);
   if (!configureEthernetFrameBuffers())
     return 0;
 
-  if (!gmac::registerEventCallback(handleGmacEvents))
+  if (!gmac::registerEventCallback(EthernetClass::handleGmacEvents, this))
     return 0;
 
   gmac::enableFrameIo();

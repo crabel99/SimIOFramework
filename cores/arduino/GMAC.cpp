@@ -28,7 +28,8 @@ constexpr uintptr_t kDescriptorAlignmentMask = 0x3u;
 constexpr uint32_t kFrameInterruptMask =
     GMAC_IER_RCOMP_Msk | GMAC_IER_RXUBR_Msk | GMAC_IER_TXUBR_Msk |
     GMAC_IER_TUR_Msk | GMAC_IER_RLEX_Msk | GMAC_IER_TFC_Msk |
-    GMAC_IER_TCOMP_Msk | GMAC_IER_ROVR_Msk | GMAC_IER_HRESP_Msk;
+    GMAC_IER_TCOMP_Msk | GMAC_IER_ROVR_Msk | GMAC_IER_HRESP_Msk |
+    GMAC_IER_MFS_Msk;
 constexpr uint32_t kReceiveErrorStatusMask =
     GMAC_RSR_BNA_Msk | GMAC_RSR_RXOVR_Msk | GMAC_RSR_HNO_Msk;
 constexpr uint32_t kTransmitErrorStatusMask =
