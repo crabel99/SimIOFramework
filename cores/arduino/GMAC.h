@@ -16,6 +16,22 @@ public:
   using EventMask = uint32_t;
   using EventCallback = void (*)(EventMask events, void *context);
 
+  struct Descriptor {
+    volatile uint32_t word0;
+    volatile uint32_t word1;
+  };
+
+  static constexpr uint32_t RxDescriptorOwnership = 1u << 0;
+  static constexpr uint32_t RxDescriptorWrap = 1u << 1;
+  static constexpr uint32_t RxDescriptorLengthMask = 0x00001FFFu;
+  static constexpr uint32_t RxDescriptorStartOfFrame = 1u << 14;
+  static constexpr uint32_t RxDescriptorEndOfFrame = 1u << 15;
+  static constexpr uint32_t TxDescriptorLengthMask = 0x00003FFFu;
+  static constexpr uint32_t TxDescriptorLastBuffer = 1u << 15;
+  static constexpr uint32_t TxDescriptorWrap = 1u << 30;
+  static constexpr uint32_t TxDescriptorUsed = 1u << 31;
+  static constexpr uint16_t RxBufferSizeGranularity = 64;
+
   enum Event : EventMask {
     EventNone = 0,
     EventRxReady = 1u << 0,
@@ -30,6 +46,13 @@ public:
   static constexpr uint8_t pendSvServiceId();
   static bool beginManagement(uint32_t mckHz = F_CPU);
   static bool isManagementIdle();
+  static bool configureFrameBuffers(Descriptor *rxDescriptors,
+                                    uint8_t rxDescriptorCount,
+                                    uint8_t *rxBuffers, uint16_t rxBufferSize,
+                                    Descriptor *txDescriptors,
+                                    uint8_t txDescriptorCount);
+  static void enableFrameIo();
+  static void disableFrameIo();
   static void setMacAddress(const uint8_t mac[6]);
   static void getMacAddress(uint8_t mac[6]);
   static bool registerEventCallback(EventCallback callback,

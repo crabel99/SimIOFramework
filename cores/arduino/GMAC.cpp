@@ -9,6 +9,11 @@ constexpr uint32_t kMdioTimeoutMs = 10;
 constexpr uint32_t kMdioWriteTen = 2;
 constexpr uint32_t kMdioReadOperation = 2;
 constexpr uint32_t kMdioWriteOperation = 1;
+constexpr uintptr_t kDescriptorAlignmentMask = 0x3u;
+constexpr uint32_t kFrameInterruptMask =
+    GMAC_IER_RCOMP_Msk | GMAC_IER_RXUBR_Msk | GMAC_IER_TXUBR_Msk |
+    GMAC_IER_TUR_Msk | GMAC_IER_RLEX_Msk | GMAC_IER_TFC_Msk |
+    GMAC_IER_TCOMP_Msk | GMAC_IER_ROVR_Msk | GMAC_IER_HRESP_Msk;
 
 struct GmacEventState {
   volatile gmac::EventMask pendingEvents = gmac::EventNone;
@@ -116,6 +121,34 @@ gmac::EventMask eventsFromInterruptStatus(uint32_t status) {
 
   return events;
 }
+
+bool isWordAligned(const void *address) {
+  return (reinterpret_cast<uintptr_t>(address) & kDescriptorAlignmentMask) == 0;
+}
+
+void initializeRxDescriptors(gmac::Descriptor *descriptors,
+                             uint8_t descriptorCount, uint8_t *buffers,
+                             uint16_t bufferSize) {
+  for (uint8_t i = 0; i < descriptorCount; ++i) {
+    const uintptr_t bufferAddress = reinterpret_cast<uintptr_t>(
+        buffers + (static_cast<uint32_t>(i) * bufferSize));
+    descriptors[i].word0 =
+        static_cast<uint32_t>(bufferAddress) & GMAC_RBQB_Msk;
+    descriptors[i].word1 = 0;
+  }
+
+  descriptors[descriptorCount - 1].word0 |= gmac::RxDescriptorWrap;
+}
+
+void initializeTxDescriptors(gmac::Descriptor *descriptors,
+                             uint8_t descriptorCount) {
+  for (uint8_t i = 0; i < descriptorCount; ++i) {
+    descriptors[i].word0 = 0;
+    descriptors[i].word1 = gmac::TxDescriptorUsed;
+  }
+
+  descriptors[descriptorCount - 1].word1 |= gmac::TxDescriptorWrap;
+}
 } // namespace
 
 bool gmac::available() { return true; }
@@ -148,6 +181,58 @@ bool gmac::beginManagement(uint32_t mckHz) {
 }
 
 bool gmac::isManagementIdle() { return waitManagementIdle(); }
+
+bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
+                                 uint8_t rxDescriptorCount, uint8_t *rxBuffers,
+                                 uint16_t rxBufferSize,
+                                 Descriptor *txDescriptors,
+                                 uint8_t txDescriptorCount) {
+  if (rxDescriptors == nullptr || rxBuffers == nullptr ||
+      txDescriptors == nullptr || rxDescriptorCount == 0 ||
+      txDescriptorCount == 0 || rxBufferSize == 0 ||
+      (rxBufferSize % RxBufferSizeGranularity) != 0) {
+    return false;
+  }
+
+  if (!isWordAligned(rxDescriptors) || !isWordAligned(txDescriptors) ||
+      !isWordAligned(rxBuffers)) {
+    return false;
+  }
+
+  gmac_registers_t *regs = gmacRegisters();
+
+  disableFrameIo();
+  initializeRxDescriptors(rxDescriptors, rxDescriptorCount, rxBuffers,
+                          rxBufferSize);
+  initializeTxDescriptors(txDescriptors, txDescriptorCount);
+
+  regs->GMAC_RBQB =
+      static_cast<uint32_t>(reinterpret_cast<uintptr_t>(rxDescriptors)) &
+      GMAC_RBQB_Msk;
+  regs->GMAC_TBQB =
+      static_cast<uint32_t>(reinterpret_cast<uintptr_t>(txDescriptors)) &
+      GMAC_TBQB_Msk;
+  regs->GMAC_DCFGR = (regs->GMAC_DCFGR & ~GMAC_DCFGR_DRBS_Msk) |
+                     GMAC_DCFGR_DRBS(rxBufferSize / RxBufferSizeGranularity);
+  regs->GMAC_RSR = GMAC_RSR_Msk;
+  regs->GMAC_TSR = GMAC_TSR_Msk;
+
+  return true;
+}
+
+void gmac::enableFrameIo() {
+  gmac_registers_t *regs = gmacRegisters();
+  regs->GMAC_RSR = GMAC_RSR_Msk;
+  regs->GMAC_TSR = GMAC_TSR_Msk;
+  regs->GMAC_IER = kFrameInterruptMask;
+  regs->GMAC_NCR |= GMAC_NCR_RXEN_Msk | GMAC_NCR_TXEN_Msk;
+}
+
+void gmac::disableFrameIo() {
+  gmac_registers_t *regs = gmacRegisters();
+  regs->GMAC_NCR &= ~(GMAC_NCR_RXEN_Msk | GMAC_NCR_TXEN_Msk);
+  regs->GMAC_IDR = kFrameInterruptMask;
+}
 
 bool gmac::registerEventCallback(EventCallback callback, void *context) {
   if (callback == nullptr) {
@@ -197,7 +282,7 @@ void gmac::scheduleEvent(EventMask events) {
 
 void gmac::handleInterrupt() {
   gmac_registers_t *regs = gmacRegisters();
-  const uint32_t status = regs->GMAC_ISR & regs->GMAC_IMR;
+  const uint32_t status = regs->GMAC_ISR & ~regs->GMAC_IMR;
   scheduleEvent(eventsFromInterruptStatus(status));
 }
 
