@@ -2,15 +2,15 @@
 
 #include <EthernetClient.h>
 #include <Server.h>
-#include <utility/netif/EthernetServerProvider.h>
+#include <utility/transport/TransportProvider.h>
 
 class EthernetServer : public Server {
 public:
   explicit EthernetServer(uint16_t port);
-  EthernetServer(uint16_t port, EthernetServerProvider &provider);
+  EthernetServer(uint16_t port, TransportProvider &provider);
   ~EthernetServer();
 
-  void setProvider(EthernetServerProvider &provider);
+  void setProvider(TransportProvider &provider);
   void clearProvider();
   void begin() override;
   void stop();
@@ -27,6 +27,6 @@ public:
 
 private:
   uint16_t _port;
-  EthernetServerProvider *_provider;
+  TransportProvider *_provider;
   bool _listening;
 };

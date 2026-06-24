@@ -6,10 +6,10 @@ EthernetClient::EthernetClient()
 EthernetClient::EthernetClient(EthernetSocket &socket)
     : _socket(&socket), _provider(nullptr), _ownsSocket(false) {}
 
-EthernetClient::EthernetClient(EthernetSocketProvider &provider)
+EthernetClient::EthernetClient(TransportProvider &provider)
     : _socket(nullptr), _provider(&provider), _ownsSocket(false) {}
 
-EthernetClient::EthernetClient(EthernetSocketProvider &provider,
+EthernetClient::EthernetClient(TransportProvider &provider,
                                EthernetSocket &socket)
     : _socket(&socket), _provider(&provider), _ownsSocket(true) {}
 
@@ -44,7 +44,7 @@ void EthernetClient::setSocket(EthernetSocket &socket) {
   _ownsSocket = false;
 }
 
-void EthernetClient::setSocketProvider(EthernetSocketProvider &provider) {
+void EthernetClient::setTransportProvider(TransportProvider &provider) {
   releaseOwnedSocket();
   _socket = nullptr;
   _provider = &provider;
@@ -156,17 +156,24 @@ bool EthernetClient::ensureSocket() {
   if (_provider == nullptr)
     return false;
 
-  _socket = _provider->acquireClientSocket();
+  _socket = acquireProviderSocket();
   _ownsSocket = _socket != nullptr;
   return _socket != nullptr;
 }
 
 void EthernetClient::releaseOwnedSocket() {
   if (_ownsSocket && _provider != nullptr && _socket != nullptr)
-    _provider->releaseClientSocket(_socket);
+    _provider->releaseSocket(_socket);
 
   if (_ownsSocket)
     _socket = nullptr;
 
   _ownsSocket = false;
+}
+
+EthernetSocket *EthernetClient::acquireProviderSocket() {
+  if (_provider == nullptr)
+    return nullptr;
+
+  return _provider->acquireClientSocket();
 }

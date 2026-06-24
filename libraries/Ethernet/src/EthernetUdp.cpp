@@ -2,10 +2,9 @@
 
 EthernetUDP::EthernetUDP() : _provider(nullptr) {}
 
-EthernetUDP::EthernetUDP(EthernetUdpProvider &provider)
-    : _provider(&provider) {}
+EthernetUDP::EthernetUDP(TransportProvider &provider) : _provider(&provider) {}
 
-void EthernetUDP::setProvider(EthernetUdpProvider &provider) {
+void EthernetUDP::setProvider(TransportProvider &provider) {
   _provider = &provider;
 }
 

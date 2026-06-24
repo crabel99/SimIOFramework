@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Ethernet.h>
-#include <utility/netif/EthernetFrameDriver.h>
+#include <utility/netif/FrameDriver.h>
 
 #ifdef ETHERNET_HARDWARE_AVAILABLE
 

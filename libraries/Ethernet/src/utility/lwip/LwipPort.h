@@ -1,6 +1,6 @@
 #pragma once
 
-#include <utility/netif/EthernetNetif.h>
+#include <utility/netif/Netif.h>
 
 enum EthernetLwipErr {
   EthernetLwipErrOk = 0,

@@ -3,13 +3,12 @@
 EthernetServer::EthernetServer(uint16_t port)
     : _port(port), _provider(nullptr), _listening(false) {}
 
-EthernetServer::EthernetServer(uint16_t port,
-                               EthernetServerProvider &provider)
+EthernetServer::EthernetServer(uint16_t port, TransportProvider &provider)
     : _port(port), _provider(&provider), _listening(false) {}
 
 EthernetServer::~EthernetServer() { stop(); }
 
-void EthernetServer::setProvider(EthernetServerProvider &provider) {
+void EthernetServer::setProvider(TransportProvider &provider) {
   stop();
   _provider = &provider;
 }

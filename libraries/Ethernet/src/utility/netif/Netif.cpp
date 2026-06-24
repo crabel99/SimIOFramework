@@ -1,4 +1,4 @@
-#include "EthernetNetif.h"
+#include "Netif.h"
 
 EthernetNetif::EthernetNetif(EthernetFrameDriver &driver) : _driver(&driver) {}
 

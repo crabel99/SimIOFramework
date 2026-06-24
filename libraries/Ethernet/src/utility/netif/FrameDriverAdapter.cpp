@@ -1,4 +1,4 @@
-#include "EthernetFrameDriverAdapter.h"
+#include "FrameDriverAdapter.h"
 
 #ifdef ETHERNET_HARDWARE_AVAILABLE
 namespace {

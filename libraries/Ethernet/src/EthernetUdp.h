@@ -1,14 +1,14 @@
 #pragma once
 
 #include <Udp.h>
-#include <utility/netif/EthernetUdpProvider.h>
+#include <utility/transport/TransportProvider.h>
 
 class EthernetUDP : public UDP {
 public:
   EthernetUDP();
-  explicit EthernetUDP(EthernetUdpProvider &provider);
+  explicit EthernetUDP(TransportProvider &provider);
 
-  void setProvider(EthernetUdpProvider &provider);
+  void setProvider(TransportProvider &provider);
   void clearProvider();
 
   uint8_t begin(uint16_t port) override;
@@ -33,5 +33,5 @@ public:
   using Print::write;
 
 private:
-  EthernetUdpProvider *_provider;
+  TransportProvider *_provider;
 };

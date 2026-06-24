@@ -1,7 +1,7 @@
 #pragma once
 
 #include <EthernetClient.h>
-#include <utility/tls/SecureClientProvider.h>
+#include <utility/transport/TransportProvider.h>
 
 enum SecureClientError : int {
   SecureClientNoError = 0,
@@ -13,8 +13,7 @@ class SecureClient : public EthernetClient {
 public:
   SecureClient();
   explicit SecureClient(EthernetSocket &socket);
-  explicit SecureClient(EthernetSocketProvider &provider);
-  explicit SecureClient(SecureClientProvider &provider);
+  explicit SecureClient(TransportProvider &provider);
   SecureClient(const SecureClient &) = delete;
   SecureClient &operator=(const SecureClient &) = delete;
   SecureClient(SecureClient &&other);
@@ -27,6 +26,7 @@ public:
   int lastError() const;
 
 private:
-  SecureClientProvider *_secureProvider;
+  EthernetSocket *acquireProviderSocket() override;
+
   int _lastError;
 };

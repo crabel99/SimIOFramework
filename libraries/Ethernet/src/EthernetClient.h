@@ -1,15 +1,14 @@
 #pragma once
 
 #include <Client.h>
-#include <utility/netif/EthernetSocket.h>
-#include <utility/netif/EthernetSocketProvider.h>
+#include <utility/transport/TransportProvider.h>
 
 class EthernetClient : public Client {
 public:
   EthernetClient();
   explicit EthernetClient(EthernetSocket &socket);
-  explicit EthernetClient(EthernetSocketProvider &provider);
-  EthernetClient(EthernetSocketProvider &provider, EthernetSocket &socket);
+  explicit EthernetClient(TransportProvider &provider);
+  EthernetClient(TransportProvider &provider, EthernetSocket &socket);
   EthernetClient(const EthernetClient &) = delete;
   EthernetClient &operator=(const EthernetClient &) = delete;
   EthernetClient(EthernetClient &&other);
@@ -17,7 +16,7 @@ public:
   ~EthernetClient();
 
   void setSocket(EthernetSocket &socket);
-  void setSocketProvider(EthernetSocketProvider &provider);
+  void setTransportProvider(TransportProvider &provider);
   void clearSocket();
 
   int connect(IPAddress ip, uint16_t port) override;
@@ -35,11 +34,15 @@ public:
 
   using Print::write;
 
+protected:
+  virtual EthernetSocket *acquireProviderSocket();
+  TransportProvider *transportProvider() const { return _provider; }
+
 private:
   bool ensureSocket();
   void releaseOwnedSocket();
 
   EthernetSocket *_socket;
-  EthernetSocketProvider *_provider;
+  TransportProvider *_provider;
   bool _ownsSocket;
 };
