@@ -9,22 +9,14 @@ enum SecureClientError : int {
 
 class SecureClient : public EthernetClient {
 public:
-  SecureClient() : EthernetClient(), _lastError(SecureClientNoError) {}
-  explicit SecureClient(EthernetSocket &socket)
-      : EthernetClient(socket), _lastError(SecureClientNoError) {}
+  SecureClient();
+  explicit SecureClient(EthernetSocket &socket);
 
-  int connect(IPAddress, uint16_t) override {
-    _lastError = SecureClientTlsUnavailable;
-    return 0;
-  }
+  int connect(IPAddress ip, uint16_t port) override;
+  int connect(const char *host, uint16_t port) override;
 
-  int connect(const char *, uint16_t) override {
-    _lastError = SecureClientTlsUnavailable;
-    return 0;
-  }
-
-  bool tlsAvailable() const { return false; }
-  int lastError() const { return _lastError; }
+  bool tlsAvailable() const;
+  int lastError() const;
 
 private:
   int _lastError;
