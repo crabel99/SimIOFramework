@@ -7,6 +7,7 @@
 
 namespace {
 constexpr uint32_t kMdioTimeoutMs = 10;
+constexpr uint32_t kTransmitHaltWaitCycles = 10000;
 constexpr uint32_t kMdioWriteTen = 2;
 constexpr uint32_t kMdioReadOperation = 2;
 constexpr uint32_t kMdioWriteOperation = 1;
@@ -15,9 +16,16 @@ constexpr uint32_t kFrameInterruptMask =
     GMAC_IER_RCOMP_Msk | GMAC_IER_RXUBR_Msk | GMAC_IER_TXUBR_Msk |
     GMAC_IER_TUR_Msk | GMAC_IER_RLEX_Msk | GMAC_IER_TFC_Msk |
     GMAC_IER_TCOMP_Msk | GMAC_IER_ROVR_Msk | GMAC_IER_HRESP_Msk;
+constexpr uint32_t kReceiveErrorStatusMask =
+    GMAC_RSR_BNA_Msk | GMAC_RSR_RXOVR_Msk | GMAC_RSR_HNO_Msk;
+constexpr uint32_t kTransmitErrorStatusMask =
+    GMAC_TSR_UBR_Msk | GMAC_TSR_RLE_Msk | GMAC_TSR_TFC_Msk |
+    GMAC_TSR_HRESP_Msk;
 
 struct GmacEventState {
   volatile gmac::EventMask pendingEvents = gmac::EventNone;
+  volatile uint32_t pendingReceiveStatus = 0;
+  volatile uint32_t pendingTransmitStatus = 0;
   gmac::EventCallback callback = nullptr;
   void *callbackContext = nullptr;
   bool serviceRegistered = false;
@@ -63,6 +71,20 @@ uint64_t combineCounterWords(uint32_t low, uint32_t high) {
   return (static_cast<uint64_t>(high) << 32) | low;
 }
 
+gmac::EventMask recoverHardwareErrors(const gmac::Status &status) {
+  const bool recoverRx = (status.receiveStatus & kReceiveErrorStatusMask) != 0;
+  const bool recoverTx = (status.transmitStatus & kTransmitErrorStatusMask) != 0;
+  gmac::EventMask recovered = gmac::EventNone;
+
+  if ((recoverRx || (!recoverRx && !recoverTx)) && gmac::recoverReceive())
+    recovered |= gmac::EventRxRecovered;
+
+  if ((recoverTx || (!recoverRx && !recoverTx)) && gmac::recoverTransmit())
+    recovered |= gmac::EventTxRecovered;
+
+  return recovered;
+}
+
 void gmacPendSvService(uint8_t serviceId, void *) {
   if (serviceId != gmac::pendSvServiceId())
     return;
@@ -70,16 +92,24 @@ void gmacPendSvService(uint8_t serviceId, void *) {
   gmac::EventCallback callback = nullptr;
   void *callbackContext = nullptr;
   gmac::EventMask events = gmac::EventNone;
+  gmac::Status errorStatus = {};
 
   const uint32_t primask = enterCritical();
   events = eventState.pendingEvents;
+  errorStatus.receiveStatus = eventState.pendingReceiveStatus;
+  errorStatus.transmitStatus = eventState.pendingTransmitStatus;
   eventState.pendingEvents = gmac::EventNone;
+  eventState.pendingReceiveStatus = 0;
+  eventState.pendingTransmitStatus = 0;
   callback = eventState.callback;
   callbackContext = eventState.callbackContext;
   exitCritical(primask);
 
   if ((events & gmac::EventTxComplete) != 0)
     gmac::reclaimTransmitDescriptors();
+
+  if ((events & gmac::EventError) != 0)
+    events |= recoverHardwareErrors(errorStatus);
 
   if (callback != nullptr && events != gmac::EventNone)
     callback(events, callbackContext);
@@ -95,6 +125,20 @@ bool ensurePendSvServiceRegistered() {
     eventState.serviceRegistered = true;
 
   return registered;
+}
+
+void scheduleEventWithStatus(gmac::EventMask events,
+                             const gmac::Status &errorStatus) {
+  if (events == gmac::EventNone || !ensurePendSvServiceRegistered())
+    return;
+
+  const uint32_t primask = enterCritical();
+  eventState.pendingEvents |= events;
+  eventState.pendingReceiveStatus |= errorStatus.receiveStatus;
+  eventState.pendingTransmitStatus |= errorStatus.transmitStatus;
+  exitCritical(primask);
+
+  PendSV::instance().setPending(gmac::pendSvServiceId());
 }
 
 uint32_t mdcClockBits(uint32_t mckHz) {
@@ -123,6 +167,19 @@ bool waitManagementIdle() {
 
     yield();
   } while ((millis() - startMs) < kMdioTimeoutMs);
+
+  return false;
+}
+
+bool waitTransmitIdle() {
+  gmac_registers_t *regs = gmacRegisters();
+
+  for (uint32_t i = 0; i < kTransmitHaltWaitCycles; ++i) {
+    if ((regs->GMAC_TSR & GMAC_TSR_TXGO_Msk) == 0)
+      return true;
+
+    __DMB();
+  }
 
   return false;
 }
@@ -489,6 +546,11 @@ bool gmac::recoverTransmit() {
       GMAC_TBQB_Msk;
 
   regs->GMAC_NCR |= GMAC_NCR_THALT_Msk;
+  if (!waitTransmitIdle()) {
+    regs->GMAC_NCR &= ~GMAC_NCR_THALT_Msk;
+    return false;
+  }
+
   regs->GMAC_NCR &= ~GMAC_NCR_TXEN_Msk;
   initializeTxDescriptors(frameState.txDescriptors, frameState.txDescriptorCount);
   __DMB();
@@ -780,6 +842,8 @@ bool gmac::registerEventCallback(EventCallback callback, void *context) {
 void gmac::clearEventCallback() {
   const uint32_t primask = enterCritical();
   eventState.pendingEvents = EventNone;
+  eventState.pendingReceiveStatus = 0;
+  eventState.pendingTransmitStatus = 0;
   eventState.callback = nullptr;
   eventState.callbackContext = nullptr;
   eventState.serviceRegistered = false;
@@ -796,15 +860,18 @@ gmac::EventMask gmac::pendingEvents() {
 }
 
 void gmac::scheduleEvent(EventMask events) {
-  if (events == EventNone || !ensurePendSvServiceRegistered())
-    return;
+  Status errorStatus = {};
+  if ((events & EventError) != 0)
+    errorStatus = status();
 
-  const uint32_t primask = enterCritical();
-  eventState.pendingEvents |= events;
-  exitCritical(primask);
-
-  PendSV::instance().setPending(pendSvServiceId());
+  scheduleEventWithStatus(events, errorStatus);
 }
+
+#if defined(UNIT_TEST)
+void gmac::scheduleErrorForTest(const Status &status) {
+  scheduleEventWithStatus(EventError, status);
+}
+#endif
 
 void gmac::handleInterrupt() {
   gmac_registers_t *regs = gmacRegisters();

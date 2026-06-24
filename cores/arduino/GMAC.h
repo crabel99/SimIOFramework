@@ -89,6 +89,8 @@ public:
     EventTxComplete = 1u << 1,
     EventManagementComplete = 1u << 2,
     EventError = 1u << 3,
+    EventRxRecovered = 1u << 4,
+    EventTxRecovered = 1u << 5,
   };
 
   enum LinkSpeed : uint8_t {
@@ -141,6 +143,9 @@ public:
   static void clearEventCallback();
   static EventMask pendingEvents();
   static void scheduleEvent(EventMask events);
+#if defined(UNIT_TEST)
+  static void scheduleErrorForTest(const Status &status);
+#endif
   static void handleInterrupt();
   static bool mdioRead(uint8_t phyAddress, uint8_t registerAddress,
                        uint16_t *value);
