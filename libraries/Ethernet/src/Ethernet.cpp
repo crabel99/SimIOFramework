@@ -13,9 +13,155 @@ alignas(4) gmac::Descriptor rxDescriptors[kRxDescriptorCount];
 alignas(4) gmac::Descriptor txDescriptors[kTxDescriptorCount];
 alignas(4) uint8_t rxBuffers[kRxDescriptorCount][kFrameBufferSize];
 alignas(4) uint8_t txBuffers[kTxDescriptorCount][kFrameBufferSize];
+alignas(4) uint8_t rxDrainBuffer[kFrameBufferSize];
+alignas(4) uint8_t rxQueueBuffers[kRxDescriptorCount][kFrameBufferSize];
+uint16_t rxQueueLengths[kRxDescriptorCount];
+uint8_t rxQueueReadIndex = 0;
+uint8_t rxQueueWriteIndex = 0;
+uint8_t rxQueueCount = 0;
 bool txBufferInUse = false;
 
+uint32_t enterCritical() {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  return primask;
+}
+
+void exitCritical(uint32_t primask) {
+  __set_PRIMASK(primask);
+}
+
+uint8_t nextQueueIndex(uint8_t index) {
+  ++index;
+  if (index >= kRxDescriptorCount)
+    return 0;
+
+  return index;
+}
+
+void clearReceiveQueue() {
+  const uint32_t primask = enterCritical();
+  rxQueueReadIndex = 0;
+  rxQueueWriteIndex = 0;
+  rxQueueCount = 0;
+  exitCritical(primask);
+}
+
+bool receiveQueueFull() {
+  const uint32_t primask = enterCritical();
+  const bool full = rxQueueCount >= kRxDescriptorCount;
+  exitCritical(primask);
+  return full;
+}
+
+bool queueReceivedFrame(const uint8_t *frame, uint16_t length) {
+  if (frame == nullptr || length == 0 || length > kFrameBufferSize)
+    return false;
+
+  const uint32_t primask = enterCritical();
+  const bool full = rxQueueCount >= kRxDescriptorCount;
+  const uint8_t index = rxQueueWriteIndex;
+  exitCritical(primask);
+
+  if (full)
+    return false;
+
+  memcpy(&rxQueueBuffers[index][0], frame, length);
+
+  const uint32_t publishPrimask = enterCritical();
+  rxQueueLengths[index] = length;
+  rxQueueWriteIndex = nextQueueIndex(rxQueueWriteIndex);
+  ++rxQueueCount;
+  exitCritical(publishPrimask);
+  return true;
+}
+
+bool popReceivedFrame(uint8_t *buffer, uint16_t capacity, uint16_t *length) {
+  if (buffer == nullptr || length == nullptr)
+    return false;
+
+  const uint32_t primask = enterCritical();
+  if (rxQueueCount == 0) {
+    exitCritical(primask);
+    return false;
+  }
+
+  const uint8_t index = rxQueueReadIndex;
+  const uint16_t queuedLength = rxQueueLengths[index];
+  if (capacity < queuedLength) {
+    *length = queuedLength;
+    exitCritical(primask);
+    return false;
+  }
+
+  memcpy(buffer, &rxQueueBuffers[index][0], queuedLength);
+  rxQueueReadIndex = nextQueueIndex(rxQueueReadIndex);
+  --rxQueueCount;
+  exitCritical(primask);
+
+  *length = queuedLength;
+  return true;
+}
+
+bool queuedFrameAvailable(uint16_t *length) {
+  const uint32_t primask = enterCritical();
+  if (rxQueueCount == 0) {
+    exitCritical(primask);
+    return false;
+  }
+
+  if (length != nullptr)
+    *length = rxQueueLengths[rxQueueReadIndex];
+
+  exitCritical(primask);
+  return true;
+}
+
+bool discardQueuedFrame() {
+  const uint32_t primask = enterCritical();
+  if (rxQueueCount == 0) {
+    exitCritical(primask);
+    return false;
+  }
+
+  rxQueueReadIndex = nextQueueIndex(rxQueueReadIndex);
+  --rxQueueCount;
+  exitCritical(primask);
+  return true;
+}
+
+void drainReceivedFrames() {
+  while (!receiveQueueFull()) {
+    uint16_t length = 0;
+    if (!gmac::receivedFrameSize(&length)) {
+      if (!gmac::discardReceivedFrame())
+        return;
+      continue;
+    }
+
+    if (length == 0 || length > kFrameBufferSize) {
+      gmac::discardReceivedFrame();
+      continue;
+    }
+
+    if (!gmac::readReceivedFrame(rxDrainBuffer, sizeof(rxDrainBuffer),
+                                 &length)) {
+      gmac::discardReceivedFrame();
+      return;
+    }
+
+    if (!queueReceivedFrame(rxDrainBuffer, length))
+      return;
+  }
+}
+
 void handleGmacEvents(gmac::EventMask events, void *) {
+  if ((events & gmac::EventRxReady) != 0)
+    drainReceivedFrames();
+
+  if ((events & gmac::EventRxRecovered) != 0)
+    clearReceiveQueue();
+
   if ((events & (gmac::EventTxComplete | gmac::EventTxRecovered)) != 0)
     txBufferInUse = false;
 }
@@ -68,6 +214,7 @@ bool toGmacDuplex(EthernetPhyDuplex phyDuplex, bool *fullDuplex) {
 }
 
 bool configureEthernetFrameBuffers() {
+  clearReceiveQueue();
   txBufferInUse = false;
   return gmac::configureFrameBuffers(&rxDescriptors[0], kRxDescriptorCount,
                                      &rxBuffers[0][0], kFrameBufferSize,
@@ -185,14 +332,7 @@ bool EthernetClass::frameAvailable(uint16_t *length) {
   if (!_begun)
     return false;
 
-  uint16_t frameLength = 0;
-  if (!gmac::receivedFrameSize(&frameLength))
-    return false;
-
-  if (length != nullptr)
-    *length = frameLength;
-
-  return true;
+  return queuedFrameAvailable(length);
 }
 
 bool EthernetClass::readFrame(uint8_t *buffer, uint16_t capacity,
@@ -200,15 +340,12 @@ bool EthernetClass::readFrame(uint8_t *buffer, uint16_t capacity,
   if (!_begun)
     return false;
 
-  return gmac::readReceivedFrame(buffer, capacity, length);
+  return popReceivedFrame(buffer, capacity, length);
 }
 
 bool EthernetClass::writeFrame(const uint8_t *buffer, uint16_t length) {
   if (!_begun || buffer == nullptr || length == 0 || length > kFrameBufferSize)
     return false;
-
-  if (txBufferInUse && gmac::reclaimTransmitDescriptors() > 0)
-    txBufferInUse = false;
 
   if (txBufferInUse)
     return false;
@@ -225,7 +362,7 @@ bool EthernetClass::discardFrame() {
   if (!_begun)
     return false;
 
-  return gmac::discardReceivedFrame();
+  return discardQueuedFrame();
 }
 
 int EthernetClass::begin() {
