@@ -27,6 +27,7 @@ struct GmacFrameState {
   gmac::Descriptor *rxDescriptors = nullptr;
   uint8_t rxDescriptorCount = 0;
   uint8_t rxReadIndex = 0;
+  uint8_t *rxBuffers = nullptr;
   uint16_t rxBufferSize = 0;
   gmac::Descriptor *txDescriptors = nullptr;
   uint8_t txDescriptorCount = 0;
@@ -397,6 +398,7 @@ bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
   frameState.rxDescriptors = rxDescriptors;
   frameState.rxDescriptorCount = rxDescriptorCount;
   frameState.rxReadIndex = 0;
+  frameState.rxBuffers = rxBuffers;
   frameState.rxBufferSize = rxBufferSize;
   frameState.txDescriptors = txDescriptors;
   frameState.txDescriptorCount = txDescriptorCount;
@@ -446,6 +448,62 @@ void gmac::clearTransmitStatus(uint32_t mask) { gmacRegisters()->GMAC_TSR = mask
 void gmac::clearStatus(uint32_t receiveMask, uint32_t transmitMask) {
   clearReceiveStatus(receiveMask);
   clearTransmitStatus(transmitMask);
+}
+
+bool gmac::recoverReceive() {
+  if (frameState.rxDescriptors == nullptr || frameState.rxDescriptorCount == 0 ||
+      frameState.rxBuffers == nullptr || frameState.rxBufferSize == 0)
+    return false;
+
+  gmac_registers_t *regs = gmacRegisters();
+  const bool wasEnabled = (regs->GMAC_NCR & GMAC_NCR_RXEN_Msk) != 0;
+  const uint32_t descriptorBase =
+      static_cast<uint32_t>(reinterpret_cast<uintptr_t>(
+          frameState.rxDescriptors)) &
+      GMAC_RBQB_Msk;
+
+  regs->GMAC_NCR &= ~GMAC_NCR_RXEN_Msk;
+  initializeRxDescriptors(frameState.rxDescriptors, frameState.rxDescriptorCount,
+                          frameState.rxBuffers, frameState.rxBufferSize);
+  __DMB();
+  frameState.rxReadIndex = 0;
+  regs->GMAC_RBQB = descriptorBase;
+  regs->GMAC_RSR = GMAC_RSR_Msk;
+  __DMB();
+
+  if (wasEnabled)
+    regs->GMAC_NCR |= GMAC_NCR_RXEN_Msk;
+
+  return true;
+}
+
+bool gmac::recoverTransmit() {
+  if (frameState.txDescriptors == nullptr || frameState.txDescriptorCount == 0)
+    return false;
+
+  gmac_registers_t *regs = gmacRegisters();
+  const bool wasEnabled = (regs->GMAC_NCR & GMAC_NCR_TXEN_Msk) != 0;
+  const uint32_t descriptorBase =
+      static_cast<uint32_t>(reinterpret_cast<uintptr_t>(
+          frameState.txDescriptors)) &
+      GMAC_TBQB_Msk;
+
+  regs->GMAC_NCR |= GMAC_NCR_THALT_Msk;
+  regs->GMAC_NCR &= ~GMAC_NCR_TXEN_Msk;
+  initializeTxDescriptors(frameState.txDescriptors, frameState.txDescriptorCount);
+  __DMB();
+  frameState.txWriteIndex = 0;
+  frameState.txCleanIndex = 0;
+  frameState.txQueuedCount = 0;
+  regs->GMAC_TBQB = descriptorBase;
+  regs->GMAC_TSR = GMAC_TSR_Msk;
+  regs->GMAC_NCR &= ~GMAC_NCR_THALT_Msk;
+  __DMB();
+
+  if (wasEnabled)
+    regs->GMAC_NCR |= GMAC_NCR_TXEN_Msk;
+
+  return true;
 }
 
 gmac::Statistics gmac::statistics() {

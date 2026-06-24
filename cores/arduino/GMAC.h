@@ -120,6 +120,8 @@ public:
   static void clearReceiveStatus(uint32_t mask);
   static void clearTransmitStatus(uint32_t mask);
   static void clearStatus(uint32_t receiveMask, uint32_t transmitMask);
+  static bool recoverReceive();
+  static bool recoverTransmit();
   static Statistics statistics();
   static void clearStatistics();
   static bool queueTransmitBuffer(const uint8_t *buffer, uint16_t length);
