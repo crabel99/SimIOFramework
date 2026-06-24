@@ -43,6 +43,7 @@ public:
   EthernetPhy *phy() const;
   bool setMacAddress(const uint8_t mac[6]);
   void macAddress(uint8_t mac[6]) const;
+  bool updateLinkConfiguration();
   int begin();
   int begin(const uint8_t *mac);
 

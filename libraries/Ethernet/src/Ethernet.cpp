@@ -20,6 +20,40 @@ bool isUsableMac(const uint8_t mac[6]) {
 
   return anySet && !allOnes && (mac[0] & 0x01u) == 0;
 }
+
+bool toGmacSpeed(EthernetPhyLinkSpeed phySpeed, gmac::LinkSpeed *gmacSpeed) {
+  if (gmacSpeed == nullptr) {
+    return false;
+  }
+
+  switch (phySpeed) {
+  case EthernetPhySpeed10M:
+    *gmacSpeed = gmac::LinkSpeed10M;
+    return true;
+  case EthernetPhySpeed100M:
+    *gmacSpeed = gmac::LinkSpeed100M;
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool toGmacDuplex(EthernetPhyDuplex phyDuplex, bool *fullDuplex) {
+  if (fullDuplex == nullptr) {
+    return false;
+  }
+
+  switch (phyDuplex) {
+  case EthernetPhyHalfDuplex:
+    *fullDuplex = false;
+    return true;
+  case EthernetPhyFullDuplex:
+    *fullDuplex = true;
+    return true;
+  default:
+    return false;
+  }
+}
 } // namespace
 
 EthernetClass Ethernet;
@@ -84,6 +118,27 @@ void EthernetClass::macAddress(uint8_t mac[6]) const {
   }
 }
 
+bool EthernetClass::updateLinkConfiguration() {
+  if (_phy == nullptr) {
+    return false;
+  }
+
+  if (!_phy->linkUp()) {
+    return true;
+  }
+
+  gmac::LinkSpeed speed = gmac::LinkSpeed10M;
+  bool fullDuplex = false;
+
+  if (!toGmacSpeed(_phy->linkSpeed(), &speed) ||
+      !toGmacDuplex(_phy->duplex(), &fullDuplex)) {
+    return false;
+  }
+
+  gmac::configureLink(speed, fullDuplex);
+  return true;
+}
+
 int EthernetClass::begin() {
   _begun = false;
 
@@ -104,7 +159,7 @@ int EthernetClass::begin() {
   }
 
   gmac::setMacAddress(_mac);
-  if (!_phy->begin() || !_phy->configure()) {
+  if (!_phy->begin() || !_phy->configure() || !updateLinkConfiguration()) {
     return 0;
   }
 
