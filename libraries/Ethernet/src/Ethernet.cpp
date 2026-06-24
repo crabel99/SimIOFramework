@@ -1,5 +1,15 @@
 #include "Ethernet.h"
 
+/**
+ * @file Ethernet.cpp
+ * @brief SAME5x Ethernet coordinator implementation.
+ *
+ * This file wires GMAC frame events, the bounded MIIM manager, cached PHY link
+ * state, and raw frame queues into the `EthernetClass` contract. It intentionally
+ * stays below the IP/socket layer: no DHCP, DNS, TCP, UDP, TLS, lwIP pbuf, or
+ * socket ownership belongs here.
+ */
+
 #ifdef ETHERNET_HARDWARE_AVAILABLE
 #include <Arduino.h>
 #include <utility/phy/PhyRegisters.h>
@@ -359,8 +369,7 @@ bool EthernetClass::requestLinkRefresh() {
     return false;
 
   _linkRefreshPending = true;
-  if (queueMdioRead(static_cast<uint8_t>(PhyRegBmstat::addr),
-                    EthernetClass::handleLinkStatusRead, this))
+  if (queueLinkStatusRead())
     return true;
 
   _linkRefreshPending = false;
@@ -396,16 +405,6 @@ void EthernetClass::clearPhyInterruptPin() {
 
 bool EthernetClass::service() {
   return _miim.service();
-}
-
-bool EthernetClass::queueMdioRead(uint8_t registerAddress,
-                                  MdioCallback callback, void *context) {
-  return _miim.queueRead(registerAddress, callback, context);
-}
-
-bool EthernetClass::queueMdioWrite(uint8_t registerAddress, uint16_t value,
-                                   MdioCallback callback, void *context) {
-  return _miim.queueWrite(registerAddress, value, callback, context);
 }
 
 void EthernetClass::configureReceiveOptions(
@@ -504,6 +503,24 @@ bool EthernetClass::updateCachedLink(EthernetLinkStatus status,
   return true;
 }
 
+bool EthernetClass::queueLinkStatusRead() {
+  return _miim.read(_phy->address(), static_cast<uint8_t>(PhyRegBmstat::addr),
+                    EthernetClass::handleLinkStatusRead, this) !=
+         MiimManager::InvalidOperationHandle;
+}
+
+bool EthernetClass::queueLinkAdvertisementRead() {
+  return _miim.read(_phy->address(), static_cast<uint8_t>(PhyRegAnad::addr),
+                    EthernetClass::handleLinkAdvertisementRead, this) !=
+         MiimManager::InvalidOperationHandle;
+}
+
+bool EthernetClass::queueLinkPartnerAbilityRead() {
+  return _miim.read(_phy->address(), static_cast<uint8_t>(PhyRegAnlpad::addr),
+                    EthernetClass::handleLinkPartnerAbilityRead, this) !=
+         MiimManager::InvalidOperationHandle;
+}
+
 void EthernetClass::handleGmacEvents(gmac::EventMask events) {
   if ((events & gmac::EventRxReady) != 0)
     drainReceivedFrames();
@@ -526,8 +543,12 @@ void EthernetClass::handleGmacEvents(gmac::EventMask events) {
     service();
 }
 
-void EthernetClass::handleLinkStatusRead(bool success, uint16_t value) {
-  if (!success) {
+void EthernetClass::handleLinkStatusRead(MiimManager::OperationHandle handle,
+                                         MiimManager::OperationResult result,
+                                         uint16_t value) {
+  _miim.release(handle);
+
+  if (result != MiimManager::ResultOk) {
     _linkRefreshPending = false;
     updateCachedLink(Unknown, EthernetPhySpeedUnknown,
                      EthernetPhyDuplexUnknown);
@@ -541,16 +562,19 @@ void EthernetClass::handleLinkStatusRead(bool success, uint16_t value) {
     return;
   }
 
-  if (!queueMdioRead(static_cast<uint8_t>(PhyRegAnad::addr),
-                     EthernetClass::handleLinkAdvertisementRead, this)) {
+  if (!queueLinkAdvertisementRead()) {
     _linkRefreshPending = false;
     updateCachedLink(LinkON, EthernetPhySpeedUnknown,
                      EthernetPhyDuplexUnknown);
   }
 }
 
-void EthernetClass::handleLinkAdvertisementRead(bool success, uint16_t value) {
-  if (!success) {
+void EthernetClass::handleLinkAdvertisementRead(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value) {
+  _miim.release(handle);
+
+  if (result != MiimManager::ResultOk) {
     _linkRefreshPending = false;
     updateCachedLink(Unknown, EthernetPhySpeedUnknown,
                      EthernetPhyDuplexUnknown);
@@ -558,19 +582,20 @@ void EthernetClass::handleLinkAdvertisementRead(bool success, uint16_t value) {
   }
 
   _linkAdvertisement = value;
-  if (!queueMdioRead(static_cast<uint8_t>(PhyRegAnlpad::addr),
-                     EthernetClass::handleLinkPartnerAbilityRead, this)) {
+  if (!queueLinkPartnerAbilityRead()) {
     _linkRefreshPending = false;
     updateCachedLink(LinkON, EthernetPhySpeedUnknown,
                      EthernetPhyDuplexUnknown);
   }
 }
 
-void EthernetClass::handleLinkPartnerAbilityRead(bool success,
-                                                 uint16_t value) {
+void EthernetClass::handleLinkPartnerAbilityRead(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value) {
+  _miim.release(handle);
   _linkRefreshPending = false;
 
-  if (!success) {
+  if (result != MiimManager::ResultOk) {
     updateCachedLink(Unknown, EthernetPhySpeedUnknown,
                      EthernetPhyDuplexUnknown);
     return;
@@ -593,25 +618,28 @@ void EthernetClass::handleGmacEvents(gmac::EventMask events, void *context) {
     ethernet->handleGmacEvents(events);
 }
 
-void EthernetClass::handleLinkStatusRead(bool success, uint16_t value,
-                                         void *context) {
+void EthernetClass::handleLinkStatusRead(MiimManager::OperationHandle handle,
+                                         MiimManager::OperationResult result,
+                                         uint16_t value, void *context) {
   EthernetClass *ethernet = static_cast<EthernetClass *>(context);
   if (ethernet != nullptr)
-    ethernet->handleLinkStatusRead(success, value);
+    ethernet->handleLinkStatusRead(handle, result, value);
 }
 
-void EthernetClass::handleLinkAdvertisementRead(bool success, uint16_t value,
-                                                void *context) {
+void EthernetClass::handleLinkAdvertisementRead(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value, void *context) {
   EthernetClass *ethernet = static_cast<EthernetClass *>(context);
   if (ethernet != nullptr)
-    ethernet->handleLinkAdvertisementRead(success, value);
+    ethernet->handleLinkAdvertisementRead(handle, result, value);
 }
 
-void EthernetClass::handleLinkPartnerAbilityRead(bool success, uint16_t value,
-                                                 void *context) {
+void EthernetClass::handleLinkPartnerAbilityRead(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value, void *context) {
   EthernetClass *ethernet = static_cast<EthernetClass *>(context);
   if (ethernet != nullptr)
-    ethernet->handleLinkPartnerAbilityRead(success, value);
+    ethernet->handleLinkPartnerAbilityRead(handle, result, value);
 }
 
 void EthernetClass::handlePhyInterrupt() {
