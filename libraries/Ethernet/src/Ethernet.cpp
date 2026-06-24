@@ -161,6 +161,12 @@ void EthernetClass::setHashFilter(uint32_t bottom, uint32_t top,
 
 void EthernetClass::clearHashFilter() { gmac::clearHashFilter(); }
 
+gmac::Status EthernetClass::status() const { return gmac::status(); }
+
+void EthernetClass::clearStatus(uint32_t receiveMask, uint32_t transmitMask) {
+  gmac::clearStatus(receiveMask, transmitMask);
+}
+
 bool EthernetClass::frameAvailable(uint16_t *length) {
   if (!_begun)
     return false;

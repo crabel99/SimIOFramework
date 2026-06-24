@@ -26,6 +26,11 @@ public:
     uint16_t length;
   };
 
+  struct Status {
+    uint32_t receiveStatus;
+    uint32_t transmitStatus;
+  };
+
   static constexpr uint32_t RxDescriptorOwnership = 1u << 0;
   static constexpr uint32_t RxDescriptorWrap = 1u << 1;
   static constexpr uint32_t RxDescriptorLengthMask = 0x00001FFFu;
@@ -69,6 +74,10 @@ public:
                                     uint8_t txDescriptorCount);
   static void enableFrameIo();
   static void disableFrameIo();
+  static Status status();
+  static void clearReceiveStatus(uint32_t mask);
+  static void clearTransmitStatus(uint32_t mask);
+  static void clearStatus(uint32_t receiveMask, uint32_t transmitMask);
   static bool queueTransmitBuffer(const uint8_t *buffer, uint16_t length);
   static bool queueTransmitFrame(const TransmitFragment *fragments,
                                  uint8_t fragmentCount);

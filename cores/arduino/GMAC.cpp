@@ -401,6 +401,21 @@ void gmac::disableFrameIo() {
   regs->GMAC_IDR = kFrameInterruptMask;
 }
 
+gmac::Status gmac::status() {
+  gmac_registers_t *regs = gmacRegisters();
+  const Status current = {regs->GMAC_RSR, regs->GMAC_TSR};
+  return current;
+}
+
+void gmac::clearReceiveStatus(uint32_t mask) { gmacRegisters()->GMAC_RSR = mask; }
+
+void gmac::clearTransmitStatus(uint32_t mask) { gmacRegisters()->GMAC_TSR = mask; }
+
+void gmac::clearStatus(uint32_t receiveMask, uint32_t transmitMask) {
+  clearReceiveStatus(receiveMask);
+  clearTransmitStatus(transmitMask);
+}
+
 bool gmac::queueTransmitBuffer(const uint8_t *buffer, uint16_t length) {
   const TransmitFragment fragment = {buffer, length};
   return queueTransmitFrame(&fragment, 1);
