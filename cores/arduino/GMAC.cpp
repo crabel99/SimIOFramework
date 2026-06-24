@@ -22,7 +22,16 @@ struct GmacEventState {
   bool serviceRegistered = false;
 };
 
+struct GmacFrameState {
+  gmac::Descriptor *txDescriptors = nullptr;
+  uint8_t txDescriptorCount = 0;
+  uint8_t txWriteIndex = 0;
+  uint8_t txCleanIndex = 0;
+  uint8_t txQueuedCount = 0;
+};
+
 GmacEventState eventState;
+GmacFrameState frameState;
 
 gmac_registers_t *gmacRegisters() {
   return reinterpret_cast<gmac_registers_t *>(GMAC_PERIPH);
@@ -149,6 +158,14 @@ void initializeTxDescriptors(gmac::Descriptor *descriptors,
 
   descriptors[descriptorCount - 1].word1 |= gmac::TxDescriptorWrap;
 }
+
+uint8_t nextDescriptorIndex(uint8_t index, uint8_t descriptorCount) {
+  ++index;
+  if (index >= descriptorCount) {
+    return 0;
+  }
+  return index;
+}
 } // namespace
 
 bool gmac::available() { return true; }
@@ -205,6 +222,11 @@ bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
   initializeRxDescriptors(rxDescriptors, rxDescriptorCount, rxBuffers,
                           rxBufferSize);
   initializeTxDescriptors(txDescriptors, txDescriptorCount);
+  frameState.txDescriptors = txDescriptors;
+  frameState.txDescriptorCount = txDescriptorCount;
+  frameState.txWriteIndex = 0;
+  frameState.txCleanIndex = 0;
+  frameState.txQueuedCount = 0;
 
   regs->GMAC_RBQB =
       static_cast<uint32_t>(reinterpret_cast<uintptr_t>(rxDescriptors)) &
@@ -232,6 +254,58 @@ void gmac::disableFrameIo() {
   gmac_registers_t *regs = gmacRegisters();
   regs->GMAC_NCR &= ~(GMAC_NCR_RXEN_Msk | GMAC_NCR_TXEN_Msk);
   regs->GMAC_IDR = kFrameInterruptMask;
+}
+
+bool gmac::queueTransmitBuffer(const uint8_t *buffer, uint16_t length) {
+  if (buffer == nullptr || length == 0 || length > TxDescriptorLengthMask ||
+      !isWordAligned(buffer) || frameState.txDescriptors == nullptr ||
+      frameState.txDescriptorCount == 0 ||
+      frameState.txQueuedCount >= frameState.txDescriptorCount) {
+    return false;
+  }
+
+  Descriptor &descriptor =
+      frameState.txDescriptors[frameState.txWriteIndex];
+  if ((descriptor.word1 & TxDescriptorUsed) == 0) {
+    return false;
+  }
+
+  const uint32_t wrap = descriptor.word1 & TxDescriptorWrap;
+  descriptor.word0 = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(buffer));
+  descriptor.word1 = wrap | (static_cast<uint32_t>(length) &
+                             TxDescriptorLengthMask) |
+                     TxDescriptorLastBuffer;
+  frameState.txWriteIndex =
+      nextDescriptorIndex(frameState.txWriteIndex, frameState.txDescriptorCount);
+  ++frameState.txQueuedCount;
+
+  gmacRegisters()->GMAC_NCR |= GMAC_NCR_TSTART_Msk;
+  return true;
+}
+
+uint8_t gmac::reclaimTransmitDescriptors() {
+  if (frameState.txDescriptors == nullptr || frameState.txDescriptorCount == 0) {
+    return 0;
+  }
+
+  uint8_t reclaimed = 0;
+  while (frameState.txQueuedCount > 0) {
+    Descriptor &descriptor =
+        frameState.txDescriptors[frameState.txCleanIndex];
+    if ((descriptor.word1 & TxDescriptorUsed) == 0) {
+      break;
+    }
+
+    const uint32_t wrap = descriptor.word1 & TxDescriptorWrap;
+    descriptor.word0 = 0;
+    descriptor.word1 = wrap | TxDescriptorUsed;
+    frameState.txCleanIndex = nextDescriptorIndex(frameState.txCleanIndex,
+                                                  frameState.txDescriptorCount);
+    --frameState.txQueuedCount;
+    ++reclaimed;
+  }
+
+  return reclaimed;
 }
 
 bool gmac::registerEventCallback(EventCallback callback, void *context) {
