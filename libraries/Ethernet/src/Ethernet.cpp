@@ -193,8 +193,11 @@ void handleGmacEvents(gmac::EventMask events, void *) {
   if ((events & gmac::EventRxRecovered) != 0)
     clearReceiveQueue();
 
-  if ((events & (gmac::EventTxComplete | gmac::EventTxRecovered)) != 0)
+  if ((events & (gmac::EventTxComplete | gmac::EventTxRecovered)) != 0) {
+    const uint32_t primask = enterCritical();
     txBufferInUse = false;
+    exitCritical(primask);
+  }
 }
 
 bool isUsableMac(const uint8_t mac[6]) {
@@ -214,7 +217,9 @@ bool isUsableMac(const uint8_t mac[6]) {
 
 bool configureEthernetFrameBuffers() {
   clearReceiveQueue();
+  const uint32_t primask = enterCritical();
   txBufferInUse = false;
+  exitCritical(primask);
   return gmac::configureFrameBuffers(&rxDescriptors[0], kRxDescriptorCount,
                                      &rxBuffers[0][0], kFrameBufferSize,
                                      &txDescriptors[0], kTxDescriptorCount);
@@ -346,14 +351,22 @@ bool EthernetClass::writeFrame(const uint8_t *buffer, uint16_t length) {
   if (!_begun || buffer == nullptr || length == 0 || length > kFrameBufferSize)
     return false;
 
-  if (txBufferInUse)
+  uint32_t primask = enterCritical();
+  if (txBufferInUse) {
+    exitCritical(primask);
     return false;
+  }
+  txBufferInUse = true;
+  exitCritical(primask);
 
   memcpy(&txBuffers[0][0], buffer, length);
-  if (!gmac::queueTransmitBuffer(&txBuffers[0][0], length))
+  if (!gmac::queueTransmitBuffer(&txBuffers[0][0], length)) {
+    primask = enterCritical();
+    txBufferInUse = false;
+    exitCritical(primask);
     return false;
+  }
 
-  txBufferInUse = true;
   return true;
 }
 

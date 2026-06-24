@@ -6,10 +6,17 @@
 #include <string.h>
 
 /*
- * SAME5x DMA coherency:
- * SAME53/54 do not expose a CPU data cache for SRAM frame buffers or GMAC
- * descriptors. The barriers below order descriptor/status ownership changes
- * between the CPU and GMAC DMA engine.
+ * SAME5x GMAC DMA coherency policy:
+ *
+ * This driver currently targets SAME53/54 GMAC. These parts do not have a CPU
+ * data cache covering SRAM descriptor rings or frame buffers, so descriptor and
+ * frame-buffer cache clean/invalidate hooks are intentionally not present here.
+ *
+ * The barriers below are still required. They order CPU descriptor/status
+ * writes and reads around ownership transitions with the GMAC DMA engine. If
+ * this file is ever widened to a data-cache-capable target, do not just rely on
+ * these barriers: add explicit CMSIS cache clean/invalidate operations for
+ * descriptor rings and frame buffers before enabling that target.
  */
 
 namespace {
