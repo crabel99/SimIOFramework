@@ -184,8 +184,11 @@ bool findReceivedFrame(RxFrameSpan *span) {
 
   uint8_t index = frameState.rxReadIndex;
   gmac::Descriptor &firstDescriptor = frameState.rxDescriptors[index];
-  if ((firstDescriptor.word0 & gmac::RxDescriptorOwnership) == 0 ||
-      (firstDescriptor.word1 & gmac::RxDescriptorStartOfFrame) == 0)
+  if ((firstDescriptor.word0 & gmac::RxDescriptorOwnership) == 0)
+    return false;
+
+  __DMB();
+  if ((firstDescriptor.word1 & gmac::RxDescriptorStartOfFrame) == 0)
     return false;
 
   for (uint8_t count = 1; count <= frameState.rxDescriptorCount; ++count) {
@@ -193,6 +196,7 @@ bool findReceivedFrame(RxFrameSpan *span) {
     if ((descriptor.word0 & gmac::RxDescriptorOwnership) == 0)
       return false;
 
+    __DMB();
     const uint32_t status = descriptor.word1;
     if ((status & gmac::RxDescriptorEndOfFrame) != 0) {
       span->startIndex = frameState.rxReadIndex;
@@ -219,6 +223,7 @@ bool findDiscardableRxSpan(RxFrameSpan *span) {
     if ((descriptor.word0 & gmac::RxDescriptorOwnership) == 0)
       return false;
 
+    __DMB();
     const uint32_t status = descriptor.word1;
     if ((status & gmac::RxDescriptorEndOfFrame) != 0) {
       span->startIndex = frameState.rxReadIndex;
@@ -241,8 +246,10 @@ void releaseReceivedFrameSpan(const RxFrameSpan &span) {
   uint8_t index = span.startIndex;
   for (uint8_t i = 0; i < span.descriptorCount; ++i) {
     gmac::Descriptor &descriptor = frameState.rxDescriptors[index];
-    descriptor.word0 &= ~gmac::RxDescriptorOwnership;
     descriptor.word1 = 0;
+    __DMB();
+    descriptor.word0 &= ~gmac::RxDescriptorOwnership;
+    __DMB();
     index = nextDescriptorIndex(index, frameState.rxDescriptorCount);
   }
 
@@ -316,6 +323,7 @@ bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
   initializeRxDescriptors(rxDescriptors, rxDescriptorCount, rxBuffers,
                           rxBufferSize);
   initializeTxDescriptors(txDescriptors, txDescriptorCount);
+  __DMB();
   frameState.rxDescriptors = rxDescriptors;
   frameState.rxDescriptorCount = rxDescriptorCount;
   frameState.rxReadIndex = 0;
@@ -345,6 +353,7 @@ void gmac::enableFrameIo() {
   regs->GMAC_RSR = GMAC_RSR_Msk;
   regs->GMAC_TSR = GMAC_TSR_Msk;
   regs->GMAC_IER = kFrameInterruptMask;
+  __DMB();
   regs->GMAC_NCR |= GMAC_NCR_RXEN_Msk | GMAC_NCR_TXEN_Msk;
 }
 
@@ -379,6 +388,7 @@ bool gmac::queueTransmitFrame(const TransmitFragment *fragments,
     if ((descriptor.word1 & TxDescriptorUsed) == 0)
       return false;
 
+    __DMB();
     index = nextDescriptorIndex(index, frameState.txDescriptorCount);
   }
 
@@ -388,18 +398,22 @@ bool gmac::queueTransmitFrame(const TransmitFragment *fragments,
     const uint32_t lastBuffer =
         (i == (fragmentCount - 1)) ? TxDescriptorLastBuffer : 0;
 
+    __DMB();
     descriptor.word0 =
         static_cast<uint32_t>(reinterpret_cast<uintptr_t>(fragments[i].buffer));
+    __DMB();
     descriptor.word1 =
         wrap |
         (static_cast<uint32_t>(fragments[i].length) & TxDescriptorLengthMask) |
         lastBuffer;
+    __DMB();
 
     frameState.txWriteIndex = nextDescriptorIndex(frameState.txWriteIndex,
                                                   frameState.txDescriptorCount);
     ++frameState.txQueuedCount;
   }
 
+  __DMB();
   gmacRegisters()->GMAC_NCR |= GMAC_NCR_TSTART_Msk;
   return true;
 }
@@ -417,12 +431,15 @@ uint8_t gmac::reclaimTransmitDescriptors() {
 
     while (frameDescriptorCount < frameState.txQueuedCount) {
       Descriptor &descriptor = frameState.txDescriptors[index];
-      if ((descriptor.word1 & TxDescriptorUsed) == 0) {
+      uint32_t status = descriptor.word1;
+      if ((status & TxDescriptorUsed) == 0) {
         break;
       }
 
+      __DMB();
+      status = descriptor.word1;
       ++frameDescriptorCount;
-      if ((descriptor.word1 & TxDescriptorLastBuffer) != 0) {
+      if ((status & TxDescriptorLastBuffer) != 0) {
         frameComplete = true;
         break;
       }
@@ -505,6 +522,7 @@ bool gmac::readReceivedFrame(uint8_t *buffer, uint16_t capacity,
     const uint8_t *source =
         reinterpret_cast<const uint8_t *>(descriptor.word0 & GMAC_RBQB_Msk);
 
+    __DMB();
     memcpy(buffer + offset, source, chunkLength);
     offset += chunkLength;
     remaining -= chunkLength;
