@@ -108,6 +108,9 @@ public:
   static void configureReceiveOptions(const ReceiveOptions &options);
   static void setPromiscuousMode(bool enabled);
   static void setBroadcastReception(bool enabled);
+  static bool hashIndexForAddress(const uint8_t mac[6], uint8_t *index);
+  static bool multicastHashForAddress(const uint8_t mac[6], uint32_t *bottom,
+                                      uint32_t *top);
   static void setHashFilter(uint32_t bottom, uint32_t top,
                             bool multicastEnabled, bool unicastEnabled);
   static void clearHashFilter();

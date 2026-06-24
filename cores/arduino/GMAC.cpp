@@ -417,6 +417,38 @@ void gmac::setBroadcastReception(bool enabled) {
   }
 }
 
+bool gmac::hashIndexForAddress(const uint8_t mac[6], uint8_t *index) {
+  if (mac == nullptr || index == nullptr)
+    return false;
+
+  uint8_t hashIndex = 0;
+  for (uint8_t hashBit = 0; hashBit < 6; ++hashBit) {
+    uint8_t value = 0;
+    for (uint8_t addressBit = hashBit; addressBit < 48; addressBit += 6)
+      value ^= (mac[addressBit / 8] >> (addressBit % 8)) & 0x01u;
+
+    hashIndex |= value << hashBit;
+  }
+
+  *index = hashIndex;
+  return true;
+}
+
+bool gmac::multicastHashForAddress(const uint8_t mac[6], uint32_t *bottom,
+                                   uint32_t *top) {
+  if (bottom == nullptr || top == nullptr || mac == nullptr ||
+      (mac[0] & 0x01u) == 0)
+    return false;
+
+  uint8_t index = 0;
+  if (!hashIndexForAddress(mac, &index))
+    return false;
+
+  *bottom = index < 32 ? (1u << index) : 0;
+  *top = index >= 32 ? (1u << (index - 32)) : 0;
+  return true;
+}
+
 void gmac::setHashFilter(uint32_t bottom, uint32_t top, bool multicastEnabled,
                          bool unicastEnabled) {
   gmac_registers_t *regs = gmacRegisters();
