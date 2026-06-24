@@ -306,6 +306,34 @@ void gmac::configureLink(LinkSpeed speed, bool fullDuplex) {
   regs->GMAC_NCFGR = config;
 }
 
+void gmac::configureReceiveOptions(const ReceiveOptions &options) {
+  gmac_registers_t *regs = gmacRegisters();
+  uint32_t config = regs->GMAC_NCFGR &
+                    ~(GMAC_NCFGR_RXCOEN_Msk | GMAC_NCFGR_RFCS_Msk |
+                      GMAC_NCFGR_IRXFCS_Msk | GMAC_NCFGR_LFERD_Msk |
+                      GMAC_NCFGR_MAXFS_Msk | GMAC_NCFGR_JFRAME_Msk);
+
+  if (options.checksumOffload)
+    config |= GMAC_NCFGR_RXCOEN_Msk;
+
+  if (options.removeFrameCheckSequence)
+    config |= GMAC_NCFGR_RFCS_Msk;
+
+  if (options.ignoreFrameCheckSequence)
+    config |= GMAC_NCFGR_IRXFCS_Msk;
+
+  if (options.discardLengthFieldErrors)
+    config |= GMAC_NCFGR_LFERD_Msk;
+
+  if (options.accept1536ByteFrames)
+    config |= GMAC_NCFGR_MAXFS_Msk;
+
+  if (options.jumboFrames)
+    config |= GMAC_NCFGR_JFRAME_Msk;
+
+  regs->GMAC_NCFGR = config;
+}
+
 void gmac::setPromiscuousMode(bool enabled) {
   gmac_registers_t *regs = gmacRegisters();
   if (enabled) {

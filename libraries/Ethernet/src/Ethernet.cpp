@@ -145,6 +145,11 @@ bool EthernetClass::updateLinkConfiguration() {
   return true;
 }
 
+void EthernetClass::configureReceiveOptions(
+    const gmac::ReceiveOptions &options) {
+  gmac::configureReceiveOptions(options);
+}
+
 void EthernetClass::setPromiscuousMode(bool enabled) {
   gmac::setPromiscuousMode(enabled);
 }

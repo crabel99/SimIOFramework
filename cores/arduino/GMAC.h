@@ -63,6 +63,15 @@ public:
     uint32_t receiveUdpChecksumErrors;
   };
 
+  struct ReceiveOptions {
+    bool checksumOffload = false;
+    bool removeFrameCheckSequence = false;
+    bool ignoreFrameCheckSequence = false;
+    bool discardLengthFieldErrors = false;
+    bool accept1536ByteFrames = false;
+    bool jumboFrames = false;
+  };
+
   static constexpr uint32_t RxDescriptorOwnership = 1u << 0;
   static constexpr uint32_t RxDescriptorWrap = 1u << 1;
   static constexpr uint32_t RxDescriptorLengthMask = 0x00001FFFu;
@@ -94,6 +103,7 @@ public:
   static bool beginManagement(uint32_t mckHz = F_CPU);
   static bool isManagementIdle();
   static void configureLink(LinkSpeed speed, bool fullDuplex);
+  static void configureReceiveOptions(const ReceiveOptions &options);
   static void setPromiscuousMode(bool enabled);
   static void setBroadcastReception(bool enabled);
   static void setHashFilter(uint32_t bottom, uint32_t top,

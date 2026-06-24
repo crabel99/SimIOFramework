@@ -44,6 +44,7 @@ public:
   bool setMacAddress(const uint8_t mac[6]);
   void macAddress(uint8_t mac[6]) const;
   bool updateLinkConfiguration();
+  void configureReceiveOptions(const gmac::ReceiveOptions &options);
   void setPromiscuousMode(bool enabled);
   void setBroadcastReception(bool enabled);
   void setHashFilter(uint32_t bottom, uint32_t top, bool multicastEnabled,
