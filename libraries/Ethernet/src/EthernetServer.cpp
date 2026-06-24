@@ -1,10 +1,23 @@
 #include "EthernetServer.h"
 
+EthernetServer::EthernetServer(uint16_t port)
+    : _port(port), _provider(nullptr), _listening(false) {}
+
 EthernetServer::EthernetServer(uint16_t port,
                                EthernetServerProvider &provider)
     : _port(port), _provider(&provider), _listening(false) {}
 
 EthernetServer::~EthernetServer() { stop(); }
+
+void EthernetServer::setProvider(EthernetServerProvider &provider) {
+  stop();
+  _provider = &provider;
+}
+
+void EthernetServer::clearProvider() {
+  stop();
+  _provider = nullptr;
+}
 
 void EthernetServer::begin() {
   if (_provider == nullptr)

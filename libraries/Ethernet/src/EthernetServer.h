@@ -6,9 +6,12 @@
 
 class EthernetServer : public Server {
 public:
+  explicit EthernetServer(uint16_t port);
   EthernetServer(uint16_t port, EthernetServerProvider &provider);
   ~EthernetServer();
 
+  void setProvider(EthernetServerProvider &provider);
+  void clearProvider();
   void begin() override;
   void stop();
   EthernetClient available();
