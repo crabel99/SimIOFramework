@@ -5,6 +5,13 @@
 #include <PendSV.h>
 #include <string.h>
 
+/*
+ * SAME5x DMA coherency:
+ * SAME53/54 do not expose a CPU data cache for SRAM frame buffers or GMAC
+ * descriptors. The barriers below order descriptor/status ownership changes
+ * between the CPU and GMAC DMA engine.
+ */
+
 namespace {
 constexpr uint32_t kMdioTimeoutMs = 10;
 constexpr uint32_t kTransmitHaltWaitCycles = 10000;

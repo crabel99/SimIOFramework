@@ -15,6 +15,11 @@ alignas(4) uint8_t rxBuffers[kRxDescriptorCount][kFrameBufferSize];
 alignas(4) uint8_t txBuffers[kTxDescriptorCount][kFrameBufferSize];
 bool txBufferInUse = false;
 
+void handleGmacEvents(gmac::EventMask events, void *) {
+  if ((events & (gmac::EventTxComplete | gmac::EventTxRecovered)) != 0)
+    txBufferInUse = false;
+}
+
 bool isUsableMac(const uint8_t mac[6]) {
   if (mac == nullptr)
     return false;
@@ -233,6 +238,9 @@ int EthernetClass::begin() {
   gmac::setMacAddress(_mac);
   if (!_phy->begin() || !_phy->configure() || !updateLinkConfiguration() ||
       !configureEthernetFrameBuffers())
+    return 0;
+
+  if (!gmac::registerEventCallback(handleGmacEvents))
     return 0;
 
   gmac::enableFrameIo();
