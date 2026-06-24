@@ -40,12 +40,18 @@ public:
     EventError = 1u << 3,
   };
 
+  enum LinkSpeed : uint8_t {
+    LinkSpeed10M,
+    LinkSpeed100M,
+  };
+
   static bool available();
   inline static uintptr_t baseAddress() { return GMAC_PERIPH; }
   static int irqNumber();
   static constexpr uint8_t pendSvServiceId();
   static bool beginManagement(uint32_t mckHz = F_CPU);
   static bool isManagementIdle();
+  static void configureLink(LinkSpeed speed, bool fullDuplex);
   static bool configureFrameBuffers(Descriptor *rxDescriptors,
                                     uint8_t rxDescriptorCount,
                                     uint8_t *rxBuffers, uint16_t rxBufferSize,

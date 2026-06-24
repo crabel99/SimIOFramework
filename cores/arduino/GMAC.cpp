@@ -202,6 +202,21 @@ bool gmac::beginManagement(uint32_t mckHz) {
 
 bool gmac::isManagementIdle() { return waitManagementIdle(); }
 
+void gmac::configureLink(LinkSpeed speed, bool fullDuplex) {
+  gmac_registers_t *regs = gmacRegisters();
+  uint32_t config = regs->GMAC_NCFGR & ~(GMAC_NCFGR_SPD_Msk |
+                                         GMAC_NCFGR_FD_Msk);
+
+  if (speed == LinkSpeed100M) {
+    config |= GMAC_NCFGR_SPD_Msk;
+  }
+  if (fullDuplex) {
+    config |= GMAC_NCFGR_FD_Msk;
+  }
+
+  regs->GMAC_NCFGR = config;
+}
+
 bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
                                  uint8_t rxDescriptorCount, uint8_t *rxBuffers,
                                  uint16_t rxBufferSize,
