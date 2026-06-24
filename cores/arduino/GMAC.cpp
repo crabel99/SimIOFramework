@@ -66,6 +66,10 @@ void gmacPendSvService(uint8_t serviceId, void *) {
   callbackContext = eventState.callbackContext;
   exitCritical(primask);
 
+  if ((events & gmac::EventTxComplete) != 0) {
+    gmac::reclaimTransmitDescriptors();
+  }
+
   if (callback != nullptr && events != gmac::EventNone) {
     callback(events, callbackContext);
   }
