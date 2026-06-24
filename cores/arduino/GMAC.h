@@ -148,6 +148,7 @@ public:
   static void scheduleEvent(EventMask events);
 #if defined(UNIT_TEST)
   static void scheduleErrorForTest(const Status &status);
+  static void forceTransmitBusyForTest(bool busy);
 #endif
   static void handleInterrupt();
   static bool mdioRead(uint8_t phyAddress, uint8_t registerAddress,

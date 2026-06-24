@@ -20,6 +20,9 @@ enum EthernetLinkStatus {
 
 class EthernetClass {
 public:
+  using FrameReceiveCallback = void (*)(const uint8_t *frame, uint16_t length,
+                                        void *context);
+
   /**
    * Create an Ethernet coordinator using the default generic IEEE PHY.
    *
@@ -54,6 +57,9 @@ public:
   void clearStatus(uint32_t receiveMask, uint32_t transmitMask);
   gmac::Statistics statistics() const;
   void clearStatistics();
+  void setFrameReceiveCallback(FrameReceiveCallback callback,
+                               void *context = nullptr);
+  void clearFrameReceiveCallback();
   bool frameAvailable(uint16_t *length = nullptr);
   bool readFrame(uint8_t *buffer, uint16_t capacity, uint16_t *length);
   bool writeFrame(const uint8_t *buffer, uint16_t length);

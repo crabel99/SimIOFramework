@@ -19,6 +19,8 @@ uint16_t rxQueueLengths[kRxDescriptorCount];
 uint8_t rxQueueReadIndex = 0;
 uint8_t rxQueueWriteIndex = 0;
 uint8_t rxQueueCount = 0;
+EthernetClass::FrameReceiveCallback frameReceiveCallback = nullptr;
+void *frameReceiveCallbackContext = nullptr;
 bool txBufferInUse = false;
 
 uint32_t enterCritical() {
@@ -52,6 +54,29 @@ bool receiveQueueFull() {
   const bool full = rxQueueCount >= kRxDescriptorCount;
   exitCritical(primask);
   return full;
+}
+
+bool receiveCallbackRegistered() {
+  const uint32_t primask = enterCritical();
+  const bool registered = frameReceiveCallback != nullptr;
+  exitCritical(primask);
+  return registered;
+}
+
+bool deliverReceivedFrame(const uint8_t *frame, uint16_t length) {
+  if (frame == nullptr || length == 0)
+    return false;
+
+  const uint32_t primask = enterCritical();
+  EthernetClass::FrameReceiveCallback callback = frameReceiveCallback;
+  void *context = frameReceiveCallbackContext;
+  exitCritical(primask);
+
+  if (callback == nullptr)
+    return false;
+
+  callback(frame, length, context);
+  return true;
 }
 
 bool queueReceivedFrame(const uint8_t *frame, uint16_t length) {
@@ -131,7 +156,10 @@ bool discardQueuedFrame() {
 }
 
 void drainReceivedFrames() {
-  while (!receiveQueueFull()) {
+  for (uint8_t drained = 0; drained < kRxDescriptorCount; ++drained) {
+    if (!receiveCallbackRegistered() && receiveQueueFull())
+      return;
+
     uint16_t length = 0;
     if (!gmac::receivedFrameSize(&length)) {
       if (!gmac::discardReceivedFrame())
@@ -149,6 +177,9 @@ void drainReceivedFrames() {
       gmac::discardReceivedFrame();
       return;
     }
+
+    if (deliverReceivedFrame(rxDrainBuffer, length))
+      continue;
 
     if (!queueReceivedFrame(rxDrainBuffer, length))
       return;
@@ -327,6 +358,23 @@ void EthernetClass::clearStatus(uint32_t receiveMask, uint32_t transmitMask) {
 gmac::Statistics EthernetClass::statistics() const { return gmac::statistics(); }
 
 void EthernetClass::clearStatistics() { gmac::clearStatistics(); }
+
+void EthernetClass::setFrameReceiveCallback(FrameReceiveCallback callback,
+                                            void *context) {
+  const uint32_t primask = enterCritical();
+  frameReceiveCallback = callback;
+  frameReceiveCallbackContext = context;
+  exitCritical(primask);
+
+  clearReceiveQueue();
+}
+
+void EthernetClass::clearFrameReceiveCallback() {
+  const uint32_t primask = enterCritical();
+  frameReceiveCallback = nullptr;
+  frameReceiveCallbackContext = nullptr;
+  exitCritical(primask);
+}
 
 bool EthernetClass::frameAvailable(uint16_t *length) {
   if (!_begun)

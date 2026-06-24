@@ -14,7 +14,6 @@
 
 namespace {
 constexpr uint32_t kMdioTimeoutMs = 10;
-constexpr uint32_t kTransmitHaltWaitCycles = 10000;
 constexpr uint32_t kMdioWriteTen = 2;
 constexpr uint32_t kMdioReadOperation = 2;
 constexpr uint32_t kMdioWriteOperation = 1;
@@ -59,6 +58,9 @@ struct RxFrameSpan {
 
 GmacEventState eventState;
 GmacFrameState frameState;
+#if defined(UNIT_TEST)
+bool forceTransmitBusy = false;
+#endif
 
 gmac_registers_t *gmacRegisters() {
   return reinterpret_cast<gmac_registers_t *>(GMAC_PERIPH);
@@ -164,6 +166,15 @@ uint32_t mdcClockBits(uint32_t mckHz) {
   return GMAC_NCFGR_CLK_MCK96;
 }
 
+bool transmitBusy(gmac_registers_t *regs) {
+#if defined(UNIT_TEST)
+  if (forceTransmitBusy)
+    return true;
+#endif
+
+  return (regs->GMAC_TSR & GMAC_TSR_TXGO_Msk) != 0;
+}
+
 bool waitManagementIdle() {
   gmac_registers_t *regs = gmacRegisters();
   const uint32_t startMs = millis();
@@ -174,19 +185,6 @@ bool waitManagementIdle() {
 
     yield();
   } while ((millis() - startMs) < kMdioTimeoutMs);
-
-  return false;
-}
-
-bool waitTransmitIdle() {
-  gmac_registers_t *regs = gmacRegisters();
-
-  for (uint32_t i = 0; i < kTransmitHaltWaitCycles; ++i) {
-    if ((regs->GMAC_TSR & GMAC_TSR_TXGO_Msk) == 0)
-      return true;
-
-    __DMB();
-  }
 
   return false;
 }
@@ -585,10 +583,9 @@ bool gmac::recoverTransmit() {
       GMAC_TBQB_Msk;
 
   regs->GMAC_NCR |= GMAC_NCR_THALT_Msk;
-  if (!waitTransmitIdle()) {
-    regs->GMAC_NCR &= ~GMAC_NCR_THALT_Msk;
+  __DMB();
+  if (transmitBusy(regs))
     return false;
-  }
 
   regs->GMAC_NCR &= ~GMAC_NCR_TXEN_Msk;
   initializeTxDescriptors(frameState.txDescriptors, frameState.txDescriptorCount);
@@ -910,6 +907,8 @@ void gmac::scheduleEvent(EventMask events) {
 void gmac::scheduleErrorForTest(const Status &status) {
   scheduleEventWithStatus(EventError, status);
 }
+
+void gmac::forceTransmitBusyForTest(bool busy) { forceTransmitBusy = busy; }
 #endif
 
 void gmac::handleInterrupt() {
