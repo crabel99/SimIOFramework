@@ -1,0 +1,7 @@
+Ethernet	KEYWORD1
+EthernetClass	KEYWORD1
+EthernetHardwareStatus	KEYWORD1
+EthernetLinkStatus	KEYWORD1
+hardwareStatus	KEYWORD2
+linkStatus	KEYWORD2
+begin	KEYWORD2

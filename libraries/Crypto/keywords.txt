@@ -1,0 +1,6 @@
+Crypto	KEYWORD1
+CryptoHardwareMask	KEYWORD1
+hasAES	KEYWORD2
+hasPUKCC	KEYWORD2
+hasTRNG	KEYWORD2
+hardwareMask	KEYWORD2
