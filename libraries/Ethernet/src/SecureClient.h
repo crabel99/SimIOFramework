@@ -1,10 +1,12 @@
 #pragma once
 
 #include <EthernetClient.h>
+#include <utility/tls/SecureClientProvider.h>
 
 enum SecureClientError : int {
   SecureClientNoError = 0,
   SecureClientTlsUnavailable = -1,
+  SecureClientConnectFailed = -2,
 };
 
 class SecureClient : public EthernetClient {
@@ -12,6 +14,7 @@ public:
   SecureClient();
   explicit SecureClient(EthernetSocket &socket);
   explicit SecureClient(EthernetSocketProvider &provider);
+  explicit SecureClient(SecureClientProvider &provider);
   SecureClient(const SecureClient &) = delete;
   SecureClient &operator=(const SecureClient &) = delete;
   SecureClient(SecureClient &&other);
@@ -24,5 +27,6 @@ public:
   int lastError() const;
 
 private:
+  SecureClientProvider *_secureProvider;
   int _lastError;
 };
