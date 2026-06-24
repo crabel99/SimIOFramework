@@ -467,6 +467,23 @@ uint8_t gmac::reclaimTransmitDescriptors() {
   return reclaimed;
 }
 
+bool gmac::receivedFrameSize(uint16_t *length) {
+  if (length == nullptr || frameState.rxBufferSize == 0)
+    return false;
+
+  RxFrameSpan span;
+  if (!findReceivedFrame(&span))
+    return false;
+
+  const uint32_t readableCapacity =
+      static_cast<uint32_t>(span.descriptorCount) * frameState.rxBufferSize;
+  if (span.length == 0 || span.length > readableCapacity)
+    return false;
+
+  *length = span.length;
+  return true;
+}
+
 bool gmac::peekReceivedFrame(uint8_t **buffer, uint16_t *length) {
   if (buffer == nullptr || length == nullptr ||
       frameState.rxDescriptors == nullptr ||

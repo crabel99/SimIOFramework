@@ -1,14 +1,23 @@
 #include "Ethernet.h"
 
 #ifdef ETHERNET_HARDWARE_AVAILABLE
+#include <string.h>
 
 namespace {
 EthernetPhy defaultPhy;
+constexpr uint8_t kRxDescriptorCount = 4;
+constexpr uint8_t kTxDescriptorCount = 1;
+constexpr uint16_t kFrameBufferSize = 1536;
+
+alignas(4) gmac::Descriptor rxDescriptors[kRxDescriptorCount];
+alignas(4) gmac::Descriptor txDescriptors[kTxDescriptorCount];
+alignas(4) uint8_t rxBuffers[kRxDescriptorCount][kFrameBufferSize];
+alignas(4) uint8_t txBuffers[kTxDescriptorCount][kFrameBufferSize];
+bool txBufferInUse = false;
 
 bool isUsableMac(const uint8_t mac[6]) {
-  if (mac == nullptr) {
+  if (mac == nullptr)
     return false;
-  }
 
   bool anySet = false;
   bool allOnes = true;
@@ -22,9 +31,8 @@ bool isUsableMac(const uint8_t mac[6]) {
 }
 
 bool toGmacSpeed(EthernetPhyLinkSpeed phySpeed, gmac::LinkSpeed *gmacSpeed) {
-  if (gmacSpeed == nullptr) {
+  if (gmacSpeed == nullptr)
     return false;
-  }
 
   switch (phySpeed) {
   case EthernetPhySpeed10M:
@@ -39,9 +47,8 @@ bool toGmacSpeed(EthernetPhyLinkSpeed phySpeed, gmac::LinkSpeed *gmacSpeed) {
 }
 
 bool toGmacDuplex(EthernetPhyDuplex phyDuplex, bool *fullDuplex) {
-  if (fullDuplex == nullptr) {
+  if (fullDuplex == nullptr)
     return false;
-  }
 
   switch (phyDuplex) {
   case EthernetPhyHalfDuplex:
@@ -53,6 +60,13 @@ bool toGmacDuplex(EthernetPhyDuplex phyDuplex, bool *fullDuplex) {
   default:
     return false;
   }
+}
+
+bool configureEthernetFrameBuffers() {
+  txBufferInUse = false;
+  return gmac::configureFrameBuffers(&rxDescriptors[0], kRxDescriptorCount,
+                                     &rxBuffers[0][0], kFrameBufferSize,
+                                     &txDescriptors[0], kTxDescriptorCount);
 }
 } // namespace
 
@@ -81,9 +95,8 @@ EthernetHardwareStatus EthernetClass::hardwareStatus() const {
 }
 
 EthernetLinkStatus EthernetClass::linkStatus() const {
-  if (!_begun || _phy == nullptr) {
+  if (!_begun || _phy == nullptr)
     return Unknown;
-  }
 
   return _phy->linkUp() ? LinkON : LinkOFF;
 }
@@ -96,81 +109,109 @@ void EthernetClass::setPhy(EthernetPhy &phy) {
 EthernetPhy *EthernetClass::phy() const { return _phy; }
 
 bool EthernetClass::setMacAddress(const uint8_t mac[6]) {
-  if (!isUsableMac(mac)) {
+  if (!isUsableMac(mac))
     return false;
-  }
 
-  for (uint8_t i = 0; i < 6; ++i) {
+  for (uint8_t i = 0; i < 6; ++i)
     _mac[i] = mac[i];
-  }
 
   _hasMac = true;
   return true;
 }
 
 void EthernetClass::macAddress(uint8_t mac[6]) const {
-  if (mac == nullptr) {
+  if (mac == nullptr)
     return;
-  }
 
-  for (uint8_t i = 0; i < 6; ++i) {
+  for (uint8_t i = 0; i < 6; ++i)
     mac[i] = _mac[i];
-  }
 }
 
 bool EthernetClass::updateLinkConfiguration() {
-  if (_phy == nullptr) {
+  if (_phy == nullptr)
     return false;
-  }
 
-  if (!_phy->linkUp()) {
+  if (!_phy->linkUp())
     return true;
-  }
 
   gmac::LinkSpeed speed = gmac::LinkSpeed10M;
   bool fullDuplex = false;
 
   if (!toGmacSpeed(_phy->linkSpeed(), &speed) ||
-      !toGmacDuplex(_phy->duplex(), &fullDuplex)) {
+      !toGmacDuplex(_phy->duplex(), &fullDuplex))
     return false;
-  }
 
   gmac::configureLink(speed, fullDuplex);
   return true;
 }
 
+bool EthernetClass::frameAvailable(uint16_t *length) {
+  if (!_begun)
+    return false;
+
+  uint16_t frameLength = 0;
+  if (!gmac::receivedFrameSize(&frameLength))
+    return false;
+
+  if (length != nullptr)
+    *length = frameLength;
+
+  return true;
+}
+
+bool EthernetClass::readFrame(uint8_t *buffer, uint16_t capacity,
+                              uint16_t *length) {
+  if (!_begun)
+    return false;
+
+  return gmac::readReceivedFrame(buffer, capacity, length);
+}
+
+bool EthernetClass::writeFrame(const uint8_t *buffer, uint16_t length) {
+  if (!_begun || buffer == nullptr || length == 0 || length > kFrameBufferSize)
+    return false;
+
+  if (txBufferInUse && gmac::reclaimTransmitDescriptors() > 0)
+    txBufferInUse = false;
+
+  if (txBufferInUse)
+    return false;
+
+  memcpy(&txBuffers[0][0], buffer, length);
+  if (!gmac::queueTransmitBuffer(&txBuffers[0][0], length))
+    return false;
+
+  txBufferInUse = true;
+  return true;
+}
+
+bool EthernetClass::discardFrame() {
+  if (!_begun)
+    return false;
+
+  return gmac::discardReceivedFrame();
+}
+
 int EthernetClass::begin() {
   _begun = false;
 
-  if (hardwareStatus() == EthernetNoHardware) {
+  if (hardwareStatus() == EthernetNoHardware || !_hasMac || _phy == nullptr ||
+      !gmac::beginManagement())
     return 0;
-  }
-
-  if (!_hasMac) {
-    return 0;
-  }
-
-  if (_phy == nullptr) {
-    return 0;
-  }
-
-  if (!gmac::beginManagement()) {
-    return 0;
-  }
 
   gmac::setMacAddress(_mac);
-  if (!_phy->begin() || !_phy->configure() || !updateLinkConfiguration()) {
+  if (!_phy->begin() || !_phy->configure() || !updateLinkConfiguration() ||
+      !configureEthernetFrameBuffers())
     return 0;
-  }
 
+  gmac::enableFrameIo();
   _begun = true;
   return 1;
 }
 
 int EthernetClass::begin(const uint8_t *mac) {
-  if (!setMacAddress(mac)) {
+  if (!setMacAddress(mac))
     return 0;
-  }
 
   return begin();
 }

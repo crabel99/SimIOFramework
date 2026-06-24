@@ -44,6 +44,10 @@ public:
   bool setMacAddress(const uint8_t mac[6]);
   void macAddress(uint8_t mac[6]) const;
   bool updateLinkConfiguration();
+  bool frameAvailable(uint16_t *length = nullptr);
+  bool readFrame(uint8_t *buffer, uint16_t capacity, uint16_t *length);
+  bool writeFrame(const uint8_t *buffer, uint16_t length);
+  bool discardFrame();
   int begin();
   int begin(const uint8_t *mac);
 
