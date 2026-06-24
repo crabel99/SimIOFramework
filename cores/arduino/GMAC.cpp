@@ -265,12 +265,11 @@ void gmac::configureLink(LinkSpeed speed, bool fullDuplex) {
   uint32_t config = regs->GMAC_NCFGR & ~(GMAC_NCFGR_SPD_Msk |
                                          GMAC_NCFGR_FD_Msk);
 
-  if (speed == LinkSpeed100M) {
+  if (speed == LinkSpeed100M)
     config |= GMAC_NCFGR_SPD_Msk;
-  }
-  if (fullDuplex) {
+
+  if (fullDuplex)
     config |= GMAC_NCFGR_FD_Msk;
-  }
 
   regs->GMAC_NCFGR = config;
 }
@@ -283,14 +282,12 @@ bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
   if (rxDescriptors == nullptr || rxBuffers == nullptr ||
       txDescriptors == nullptr || rxDescriptorCount == 0 ||
       txDescriptorCount == 0 || rxBufferSize == 0 ||
-      (rxBufferSize % RxBufferSizeGranularity) != 0) {
+      (rxBufferSize % RxBufferSizeGranularity) != 0)
     return false;
-  }
 
   if (!isWordAligned(rxDescriptors) || !isWordAligned(txDescriptors) ||
-      !isWordAligned(rxBuffers)) {
+      !isWordAligned(rxBuffers))
     return false;
-  }
 
   gmac_registers_t *regs = gmacRegisters();
 
@@ -337,27 +334,50 @@ void gmac::disableFrameIo() {
 }
 
 bool gmac::queueTransmitBuffer(const uint8_t *buffer, uint16_t length) {
-  if (buffer == nullptr || length == 0 || length > TxDescriptorLengthMask ||
-      !isWordAligned(buffer) || frameState.txDescriptors == nullptr ||
+  const TransmitFragment fragment = {buffer, length};
+  return queueTransmitFrame(&fragment, 1);
+}
+
+bool gmac::queueTransmitFrame(const TransmitFragment *fragments,
+                              uint8_t fragmentCount) {
+  if (fragments == nullptr || fragmentCount == 0 ||
+      frameState.txDescriptors == nullptr ||
       frameState.txDescriptorCount == 0 ||
-      frameState.txQueuedCount >= frameState.txDescriptorCount) {
+      fragmentCount > (frameState.txDescriptorCount - frameState.txQueuedCount))
     return false;
+
+  uint8_t index = frameState.txWriteIndex;
+  for (uint8_t i = 0; i < fragmentCount; ++i) {
+    const TransmitFragment &fragment = fragments[i];
+    if (fragment.buffer == nullptr || fragment.length == 0 ||
+        fragment.length > TxDescriptorLengthMask ||
+        !isWordAligned(fragment.buffer))
+      return false;
+
+    Descriptor &descriptor = frameState.txDescriptors[index];
+    if ((descriptor.word1 & TxDescriptorUsed) == 0)
+      return false;
+
+    index = nextDescriptorIndex(index, frameState.txDescriptorCount);
   }
 
-  Descriptor &descriptor =
-      frameState.txDescriptors[frameState.txWriteIndex];
-  if ((descriptor.word1 & TxDescriptorUsed) == 0) {
-    return false;
-  }
+  for (uint8_t i = 0; i < fragmentCount; ++i) {
+    Descriptor &descriptor = frameState.txDescriptors[frameState.txWriteIndex];
+    const uint32_t wrap = descriptor.word1 & TxDescriptorWrap;
+    const uint32_t lastBuffer =
+        (i == (fragmentCount - 1)) ? TxDescriptorLastBuffer : 0;
 
-  const uint32_t wrap = descriptor.word1 & TxDescriptorWrap;
-  descriptor.word0 = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(buffer));
-  descriptor.word1 = wrap | (static_cast<uint32_t>(length) &
-                             TxDescriptorLengthMask) |
-                     TxDescriptorLastBuffer;
-  frameState.txWriteIndex =
-      nextDescriptorIndex(frameState.txWriteIndex, frameState.txDescriptorCount);
-  ++frameState.txQueuedCount;
+    descriptor.word0 =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(fragments[i].buffer));
+    descriptor.word1 =
+        wrap |
+        (static_cast<uint32_t>(fragments[i].length) & TxDescriptorLengthMask) |
+        lastBuffer;
+
+    frameState.txWriteIndex = nextDescriptorIndex(frameState.txWriteIndex,
+                                                  frameState.txDescriptorCount);
+    ++frameState.txQueuedCount;
+  }
 
   gmacRegisters()->GMAC_NCR |= GMAC_NCR_TSTART_Msk;
   return true;
@@ -370,19 +390,40 @@ uint8_t gmac::reclaimTransmitDescriptors() {
 
   uint8_t reclaimed = 0;
   while (frameState.txQueuedCount > 0) {
-    Descriptor &descriptor =
-        frameState.txDescriptors[frameState.txCleanIndex];
-    if ((descriptor.word1 & TxDescriptorUsed) == 0) {
+    uint8_t index = frameState.txCleanIndex;
+    uint8_t frameDescriptorCount = 0;
+    bool frameComplete = false;
+
+    while (frameDescriptorCount < frameState.txQueuedCount) {
+      Descriptor &descriptor = frameState.txDescriptors[index];
+      if ((descriptor.word1 & TxDescriptorUsed) == 0) {
+        break;
+      }
+
+      ++frameDescriptorCount;
+      if ((descriptor.word1 & TxDescriptorLastBuffer) != 0) {
+        frameComplete = true;
+        break;
+      }
+
+      index = nextDescriptorIndex(index, frameState.txDescriptorCount);
+    }
+
+    if (!frameComplete) {
       break;
     }
 
-    const uint32_t wrap = descriptor.word1 & TxDescriptorWrap;
-    descriptor.word0 = 0;
-    descriptor.word1 = wrap | TxDescriptorUsed;
-    frameState.txCleanIndex = nextDescriptorIndex(frameState.txCleanIndex,
-                                                  frameState.txDescriptorCount);
-    --frameState.txQueuedCount;
-    ++reclaimed;
+    for (uint8_t i = 0; i < frameDescriptorCount; ++i) {
+      Descriptor &descriptor =
+          frameState.txDescriptors[frameState.txCleanIndex];
+      const uint32_t wrap = descriptor.word1 & TxDescriptorWrap;
+      descriptor.word0 = 0;
+      descriptor.word1 = wrap | TxDescriptorUsed;
+      frameState.txCleanIndex = nextDescriptorIndex(
+          frameState.txCleanIndex, frameState.txDescriptorCount);
+      --frameState.txQueuedCount;
+      ++reclaimed;
+    }
   }
 
   return reclaimed;

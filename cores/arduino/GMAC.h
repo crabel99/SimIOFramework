@@ -21,6 +21,11 @@ public:
     volatile uint32_t word1;
   };
 
+  struct TransmitFragment {
+    const uint8_t *buffer;
+    uint16_t length;
+  };
+
   static constexpr uint32_t RxDescriptorOwnership = 1u << 0;
   static constexpr uint32_t RxDescriptorWrap = 1u << 1;
   static constexpr uint32_t RxDescriptorLengthMask = 0x00001FFFu;
@@ -60,6 +65,8 @@ public:
   static void enableFrameIo();
   static void disableFrameIo();
   static bool queueTransmitBuffer(const uint8_t *buffer, uint16_t length);
+  static bool queueTransmitFrame(const TransmitFragment *fragments,
+                                 uint8_t fragmentCount);
   static uint8_t reclaimTransmitDescriptors();
   static bool peekReceivedFrame(uint8_t **buffer, uint16_t *length);
   static bool readReceivedFrame(uint8_t *buffer, uint16_t capacity,
