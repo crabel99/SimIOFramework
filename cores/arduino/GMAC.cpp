@@ -59,9 +59,8 @@ void exitCritical(uint32_t primask) {
 }
 
 void gmacPendSvService(uint8_t serviceId, void *) {
-  if (serviceId != gmac::pendSvServiceId()) {
+  if (serviceId != gmac::pendSvServiceId())
     return;
-  }
 
   gmac::EventCallback callback = nullptr;
   void *callbackContext = nullptr;
@@ -74,41 +73,38 @@ void gmacPendSvService(uint8_t serviceId, void *) {
   callbackContext = eventState.callbackContext;
   exitCritical(primask);
 
-  if ((events & gmac::EventTxComplete) != 0) {
+  if ((events & gmac::EventTxComplete) != 0)
     gmac::reclaimTransmitDescriptors();
-  }
 
-  if (callback != nullptr && events != gmac::EventNone) {
+  if (callback != nullptr && events != gmac::EventNone)
     callback(events, callbackContext);
-  }
 }
 
 bool ensurePendSvServiceRegistered() {
-  if (eventState.serviceRegistered) {
+  if (eventState.serviceRegistered)
     return true;
-  }
 
   const bool registered = PendSV::instance().registerService(
       gmac::pendSvServiceId(), gmacPendSvService);
-  if (registered) {
+  if (registered)
     eventState.serviceRegistered = true;
-  }
+
   return registered;
 }
 
 uint32_t mdcClockBits(uint32_t mckHz) {
-  if (mckHz <= 20000000UL) {
+  if (mckHz <= 20000000UL)
     return GMAC_NCFGR_CLK_MCK8;
-  }
-  if (mckHz <= 40000000UL) {
+
+  if (mckHz <= 40000000UL)
     return GMAC_NCFGR_CLK_MCK16;
-  }
-  if (mckHz <= 80000000UL) {
+
+  if (mckHz <= 80000000UL)
     return GMAC_NCFGR_CLK_MCK32;
-  }
-  if (mckHz <= 120000000UL) {
+
+  if (mckHz <= 120000000UL)
     return GMAC_NCFGR_CLK_MCK64;
-  }
+
   return GMAC_NCFGR_CLK_MCK96;
 }
 
@@ -117,9 +113,9 @@ bool waitManagementIdle() {
   const uint32_t startMs = millis();
 
   do {
-    if ((regs->GMAC_NSR & GMAC_NSR_IDLE_Msk) != 0) {
+    if ((regs->GMAC_NSR & GMAC_NSR_IDLE_Msk) != 0)
       return true;
-    }
+
     yield();
   } while ((millis() - startMs) < kMdioTimeoutMs);
 
@@ -129,19 +125,18 @@ bool waitManagementIdle() {
 gmac::EventMask eventsFromInterruptStatus(uint32_t status) {
   gmac::EventMask events = gmac::EventNone;
 
-  if ((status & (GMAC_ISR_RCOMP_Msk | GMAC_ISR_RXUBR_Msk)) != 0) {
+  if ((status & (GMAC_ISR_RCOMP_Msk | GMAC_ISR_RXUBR_Msk)) != 0)
     events |= gmac::EventRxReady;
-  }
-  if ((status & (GMAC_ISR_TCOMP_Msk | GMAC_ISR_TXUBR_Msk)) != 0) {
+
+  if ((status & (GMAC_ISR_TCOMP_Msk | GMAC_ISR_TXUBR_Msk)) != 0)
     events |= gmac::EventTxComplete;
-  }
-  if ((status & GMAC_ISR_MFS_Msk) != 0) {
+
+  if ((status & GMAC_ISR_MFS_Msk) != 0)
     events |= gmac::EventManagementComplete;
-  }
+
   if ((status & (GMAC_ISR_TUR_Msk | GMAC_ISR_RLEX_Msk | GMAC_ISR_TFC_Msk |
-                 GMAC_ISR_ROVR_Msk | GMAC_ISR_HRESP_Msk)) != 0) {
+                 GMAC_ISR_ROVR_Msk | GMAC_ISR_HRESP_Msk)) != 0)
     events |= gmac::EventError;
-  }
 
   return events;
 }
@@ -176,30 +171,27 @@ void initializeTxDescriptors(gmac::Descriptor *descriptors,
 
 uint8_t nextDescriptorIndex(uint8_t index, uint8_t descriptorCount) {
   ++index;
-  if (index >= descriptorCount) {
+  if (index >= descriptorCount)
     return 0;
-  }
+
   return index;
 }
 
 bool findReceivedFrame(RxFrameSpan *span) {
   if (span == nullptr || frameState.rxDescriptors == nullptr ||
-      frameState.rxDescriptorCount == 0) {
+      frameState.rxDescriptorCount == 0)
     return false;
-  }
 
   uint8_t index = frameState.rxReadIndex;
   gmac::Descriptor &firstDescriptor = frameState.rxDescriptors[index];
   if ((firstDescriptor.word0 & gmac::RxDescriptorOwnership) == 0 ||
-      (firstDescriptor.word1 & gmac::RxDescriptorStartOfFrame) == 0) {
+      (firstDescriptor.word1 & gmac::RxDescriptorStartOfFrame) == 0)
     return false;
-  }
 
   for (uint8_t count = 1; count <= frameState.rxDescriptorCount; ++count) {
     gmac::Descriptor &descriptor = frameState.rxDescriptors[index];
-    if ((descriptor.word0 & gmac::RxDescriptorOwnership) == 0) {
+    if ((descriptor.word0 & gmac::RxDescriptorOwnership) == 0)
       return false;
-    }
 
     const uint32_t status = descriptor.word1;
     if ((status & gmac::RxDescriptorEndOfFrame) != 0) {
@@ -214,6 +206,35 @@ bool findReceivedFrame(RxFrameSpan *span) {
   }
 
   return false;
+}
+
+bool findDiscardableRxSpan(RxFrameSpan *span) {
+  if (span == nullptr || frameState.rxDescriptors == nullptr ||
+      frameState.rxDescriptorCount == 0)
+    return false;
+
+  uint8_t index = frameState.rxReadIndex;
+  for (uint8_t count = 1; count <= frameState.rxDescriptorCount; ++count) {
+    gmac::Descriptor &descriptor = frameState.rxDescriptors[index];
+    if ((descriptor.word0 & gmac::RxDescriptorOwnership) == 0)
+      return false;
+
+    const uint32_t status = descriptor.word1;
+    if ((status & gmac::RxDescriptorEndOfFrame) != 0) {
+      span->startIndex = frameState.rxReadIndex;
+      span->descriptorCount = count;
+      span->length =
+          static_cast<uint16_t>(status & gmac::RxDescriptorLengthMask);
+      return true;
+    }
+
+    index = nextDescriptorIndex(index, frameState.rxDescriptorCount);
+  }
+
+  span->startIndex = frameState.rxReadIndex;
+  span->descriptorCount = frameState.rxDescriptorCount;
+  span->length = 0;
+  return true;
 }
 
 void releaseReceivedFrameSpan(const RxFrameSpan &span) {
@@ -510,13 +531,24 @@ bool gmac::releaseReceivedFrame() {
   return true;
 }
 
+bool gmac::discardReceivedFrame() {
+  if (frameState.rxDescriptors == nullptr || frameState.rxDescriptorCount == 0)
+    return false;
+
+  RxFrameSpan span;
+  if (!findDiscardableRxSpan(&span))
+    return false;
+
+  releaseReceivedFrameSpan(span);
+  return true;
+}
+
 bool gmac::registerEventCallback(EventCallback callback, void *context) {
-  if (callback == nullptr) {
+  if (callback == nullptr)
     return false;
-  }
-  if (!ensurePendSvServiceRegistered()) {
+
+  if (!ensurePendSvServiceRegistered())
     return false;
-  }
 
   const uint32_t primask = enterCritical();
   eventState.callback = callback;
@@ -545,9 +577,8 @@ gmac::EventMask gmac::pendingEvents() {
 }
 
 void gmac::scheduleEvent(EventMask events) {
-  if (events == EventNone || !ensurePendSvServiceRegistered()) {
+  if (events == EventNone || !ensurePendSvServiceRegistered())
     return;
-  }
 
   const uint32_t primask = enterCritical();
   eventState.pendingEvents |= events;
@@ -563,9 +594,8 @@ void gmac::handleInterrupt() {
 }
 
 void gmac::setMacAddress(const uint8_t mac[6]) {
-  if (mac == nullptr) {
+  if (mac == nullptr)
     return;
-  }
 
   gmac_registers_t *regs = gmacRegisters();
 
@@ -616,9 +646,8 @@ bool gmac::mdioRead(uint8_t phyAddress, uint8_t registerAddress,
 
 bool gmac::mdioWrite(uint8_t phyAddress, uint8_t registerAddress,
                      uint16_t value) {
-  if (phyAddress > 31 || registerAddress > 31) {
+  if (phyAddress > 31 || registerAddress > 31)
     return false;
-  }
 
   gmac_registers_t *regs = gmacRegisters();
 

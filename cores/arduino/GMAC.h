@@ -72,6 +72,7 @@ public:
   static bool readReceivedFrame(uint8_t *buffer, uint16_t capacity,
                                 uint16_t *length);
   static bool releaseReceivedFrame();
+  static bool discardReceivedFrame();
   static void setMacAddress(const uint8_t mac[6]);
   static void getMacAddress(uint8_t mac[6]);
   static bool registerEventCallback(EventCallback callback,
