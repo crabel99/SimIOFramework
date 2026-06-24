@@ -59,6 +59,7 @@ struct RxFrameSpan {
 GmacEventState eventState;
 GmacFrameState frameState;
 #if defined(UNIT_TEST)
+bool forceManagementBusy = false;
 bool forceTransmitBusy = false;
 #endif
 
@@ -187,6 +188,14 @@ bool waitManagementIdle() {
   } while ((millis() - startMs) < kMdioTimeoutMs);
 
   return false;
+}
+
+bool managementIdle() {
+#if defined(UNIT_TEST)
+  return !forceManagementBusy;
+#endif
+
+  return (gmacRegisters()->GMAC_NSR & GMAC_NSR_IDLE_Msk) != 0;
 }
 
 gmac::EventMask eventsFromInterruptStatus(uint32_t status) {
@@ -350,10 +359,10 @@ bool gmac::beginManagement(uint32_t mckHz) {
       (regs->GMAC_NCFGR & ~GMAC_NCFGR_CLK_Msk) | mdcClockBits(mckHz);
   regs->GMAC_NCR |= GMAC_NCR_MPE_Msk;
 
-  return waitManagementIdle();
+  return true;
 }
 
-bool gmac::isManagementIdle() { return waitManagementIdle(); }
+bool gmac::isManagementIdle() { return managementIdle(); }
 
 void gmac::configureLink(LinkSpeed speed, bool fullDuplex) {
   gmac_registers_t *regs = gmacRegisters();
@@ -908,6 +917,8 @@ void gmac::scheduleErrorForTest(const Status &status) {
   scheduleEventWithStatus(EventError, status);
 }
 
+void gmac::forceManagementBusyForTest(bool busy) { forceManagementBusy = busy; }
+
 void gmac::forceTransmitBusyForTest(bool busy) { forceTransmitBusy = busy; }
 #endif
 
@@ -985,6 +996,25 @@ bool gmac::mdioWrite(uint8_t phyAddress, uint8_t registerAddress,
   return waitManagementIdle();
 }
 
+bool gmac::mdioReadStart(uint8_t phyAddress, uint8_t registerAddress) {
+  if (phyAddress > 31 || registerAddress > 31 || !managementIdle())
+    return false;
+
+  gmac_registers_t *regs = gmacRegisters();
+  regs->GMAC_MAN = GMAC_MAN_CLTTO_Msk | GMAC_MAN_OP(kMdioReadOperation) |
+                   GMAC_MAN_PHYA(phyAddress) | GMAC_MAN_REGA(registerAddress) |
+                   GMAC_MAN_WTN(kMdioWriteTen);
+  return true;
+}
+
+bool gmac::mdioReadComplete(uint16_t *value) {
+  if (value == nullptr || !managementIdle())
+    return false;
+
+  *value = static_cast<uint16_t>(gmacRegisters()->GMAC_MAN & GMAC_MAN_DATA_Msk);
+  return true;
+}
+
 bool gmac::mdioWriteStart(uint8_t phyAddress, uint8_t registerAddress,
                           uint16_t value) {
   if (phyAddress > 31 || registerAddress > 31)
@@ -992,7 +1022,7 @@ bool gmac::mdioWriteStart(uint8_t phyAddress, uint8_t registerAddress,
   
   gmac_registers_t *regs = gmacRegisters();
 
-  if (!waitManagementIdle()) 
+  if (!managementIdle())
     return false;
   
   regs->GMAC_MAN = GMAC_MAN_CLTTO_Msk | GMAC_MAN_OP(kMdioWriteOperation) |

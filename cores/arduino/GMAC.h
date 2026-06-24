@@ -148,6 +148,7 @@ public:
   static void scheduleEvent(EventMask events);
 #if defined(UNIT_TEST)
   static void scheduleErrorForTest(const Status &status);
+  static void forceManagementBusyForTest(bool busy);
   static void forceTransmitBusyForTest(bool busy);
 #endif
   static void handleInterrupt();
@@ -155,6 +156,8 @@ public:
                        uint16_t *value);
   static bool mdioWrite(uint8_t phyAddress, uint8_t registerAddress,
                         uint16_t value);
+  static bool mdioReadStart(uint8_t phyAddress, uint8_t registerAddress);
+  static bool mdioReadComplete(uint16_t *value);
   static bool mdioWriteStart(uint8_t phyAddress, uint8_t registerAddress,
                              uint16_t value);
 };
