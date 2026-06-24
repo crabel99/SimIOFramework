@@ -3,6 +3,7 @@
 #ifdef ETHERNET_HARDWARE_AVAILABLE
 #include <Arduino.h>
 #include <PendSV.h>
+#include <string.h>
 
 namespace {
 constexpr uint32_t kMdioTimeoutMs = 10;
@@ -26,11 +27,18 @@ struct GmacFrameState {
   gmac::Descriptor *rxDescriptors = nullptr;
   uint8_t rxDescriptorCount = 0;
   uint8_t rxReadIndex = 0;
+  uint16_t rxBufferSize = 0;
   gmac::Descriptor *txDescriptors = nullptr;
   uint8_t txDescriptorCount = 0;
   uint8_t txWriteIndex = 0;
   uint8_t txCleanIndex = 0;
   uint8_t txQueuedCount = 0;
+};
+
+struct RxFrameSpan {
+  uint8_t startIndex = 0;
+  uint8_t descriptorCount = 0;
+  uint16_t length = 0;
 };
 
 GmacEventState eventState;
@@ -173,6 +181,52 @@ uint8_t nextDescriptorIndex(uint8_t index, uint8_t descriptorCount) {
   }
   return index;
 }
+
+bool findReceivedFrame(RxFrameSpan *span) {
+  if (span == nullptr || frameState.rxDescriptors == nullptr ||
+      frameState.rxDescriptorCount == 0) {
+    return false;
+  }
+
+  uint8_t index = frameState.rxReadIndex;
+  gmac::Descriptor &firstDescriptor = frameState.rxDescriptors[index];
+  if ((firstDescriptor.word0 & gmac::RxDescriptorOwnership) == 0 ||
+      (firstDescriptor.word1 & gmac::RxDescriptorStartOfFrame) == 0) {
+    return false;
+  }
+
+  for (uint8_t count = 1; count <= frameState.rxDescriptorCount; ++count) {
+    gmac::Descriptor &descriptor = frameState.rxDescriptors[index];
+    if ((descriptor.word0 & gmac::RxDescriptorOwnership) == 0) {
+      return false;
+    }
+
+    const uint32_t status = descriptor.word1;
+    if ((status & gmac::RxDescriptorEndOfFrame) != 0) {
+      span->startIndex = frameState.rxReadIndex;
+      span->descriptorCount = count;
+      span->length =
+          static_cast<uint16_t>(status & gmac::RxDescriptorLengthMask);
+      return true;
+    }
+
+    index = nextDescriptorIndex(index, frameState.rxDescriptorCount);
+  }
+
+  return false;
+}
+
+void releaseReceivedFrameSpan(const RxFrameSpan &span) {
+  uint8_t index = span.startIndex;
+  for (uint8_t i = 0; i < span.descriptorCount; ++i) {
+    gmac::Descriptor &descriptor = frameState.rxDescriptors[index];
+    descriptor.word0 &= ~gmac::RxDescriptorOwnership;
+    descriptor.word1 = 0;
+    index = nextDescriptorIndex(index, frameState.rxDescriptorCount);
+  }
+
+  frameState.rxReadIndex = index;
+}
 } // namespace
 
 bool gmac::available() { return true; }
@@ -247,6 +301,7 @@ bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
   frameState.rxDescriptors = rxDescriptors;
   frameState.rxDescriptorCount = rxDescriptorCount;
   frameState.rxReadIndex = 0;
+  frameState.rxBufferSize = rxBufferSize;
   frameState.txDescriptors = txDescriptors;
   frameState.txDescriptorCount = txDescriptorCount;
   frameState.txWriteIndex = 0;
@@ -340,21 +395,63 @@ bool gmac::peekReceivedFrame(uint8_t **buffer, uint16_t *length) {
     return false;
   }
 
-  Descriptor &descriptor =
-      frameState.rxDescriptors[frameState.rxReadIndex];
-  if ((descriptor.word0 & RxDescriptorOwnership) == 0) {
+  RxFrameSpan span;
+  if (!findReceivedFrame(&span) || span.descriptorCount != 1) {
+    return false;
+  }
+  if (span.length == 0 || span.length > frameState.rxBufferSize) {
     return false;
   }
 
-  const uint32_t status = descriptor.word1;
-  if ((status & (RxDescriptorStartOfFrame | RxDescriptorEndOfFrame)) !=
-      (RxDescriptorStartOfFrame | RxDescriptorEndOfFrame)) {
-    return false;
-  }
+  Descriptor &descriptor = frameState.rxDescriptors[span.startIndex];
 
   *buffer = reinterpret_cast<uint8_t *>(descriptor.word0 & GMAC_RBQB_Msk);
-  *length = static_cast<uint16_t>(status & RxDescriptorLengthMask);
+  *length = span.length;
   return true;
+}
+
+bool gmac::readReceivedFrame(uint8_t *buffer, uint16_t capacity,
+                             uint16_t *length) {
+  if (buffer == nullptr || length == nullptr || frameState.rxBufferSize == 0) {
+    return false;
+  }
+
+  RxFrameSpan span;
+  if (!findReceivedFrame(&span)) {
+    return false;
+  }
+
+  const uint32_t readableCapacity =
+      static_cast<uint32_t>(span.descriptorCount) * frameState.rxBufferSize;
+  if (span.length == 0 || span.length > readableCapacity) {
+    return false;
+  }
+
+  if (capacity < span.length) {
+    *length = span.length;
+    return false;
+  }
+
+  uint16_t remaining = span.length;
+  uint16_t offset = 0;
+  uint8_t index = span.startIndex;
+
+  for (uint8_t i = 0; i < span.descriptorCount && remaining > 0; ++i) {
+    Descriptor &descriptor = frameState.rxDescriptors[index];
+    const uint16_t chunkLength =
+        remaining < frameState.rxBufferSize ? remaining : frameState.rxBufferSize;
+    const uint8_t *source =
+        reinterpret_cast<const uint8_t *>(descriptor.word0 & GMAC_RBQB_Msk);
+
+    memcpy(buffer + offset, source, chunkLength);
+    offset += chunkLength;
+    remaining -= chunkLength;
+    index = nextDescriptorIndex(index, frameState.rxDescriptorCount);
+  }
+
+  *length = span.length;
+  releaseReceivedFrameSpan(span);
+  return remaining == 0;
 }
 
 bool gmac::releaseReceivedFrame() {
@@ -363,16 +460,12 @@ bool gmac::releaseReceivedFrame() {
     return false;
   }
 
-  Descriptor &descriptor =
-      frameState.rxDescriptors[frameState.rxReadIndex];
-  if ((descriptor.word0 & RxDescriptorOwnership) == 0) {
+  RxFrameSpan span;
+  if (!findReceivedFrame(&span)) {
     return false;
   }
 
-  descriptor.word0 &= ~RxDescriptorOwnership;
-  descriptor.word1 = 0;
-  frameState.rxReadIndex =
-      nextDescriptorIndex(frameState.rxReadIndex, frameState.rxDescriptorCount);
+  releaseReceivedFrameSpan(span);
   return true;
 }
 
