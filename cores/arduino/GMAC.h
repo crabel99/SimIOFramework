@@ -55,6 +55,8 @@ public:
   static void disableFrameIo();
   static bool queueTransmitBuffer(const uint8_t *buffer, uint16_t length);
   static uint8_t reclaimTransmitDescriptors();
+  static bool peekReceivedFrame(uint8_t **buffer, uint16_t *length);
+  static bool releaseReceivedFrame();
   static void setMacAddress(const uint8_t mac[6]);
   static void getMacAddress(uint8_t mac[6]);
   static bool registerEventCallback(EventCallback callback,

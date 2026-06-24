@@ -23,6 +23,9 @@ struct GmacEventState {
 };
 
 struct GmacFrameState {
+  gmac::Descriptor *rxDescriptors = nullptr;
+  uint8_t rxDescriptorCount = 0;
+  uint8_t rxReadIndex = 0;
   gmac::Descriptor *txDescriptors = nullptr;
   uint8_t txDescriptorCount = 0;
   uint8_t txWriteIndex = 0;
@@ -222,6 +225,9 @@ bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
   initializeRxDescriptors(rxDescriptors, rxDescriptorCount, rxBuffers,
                           rxBufferSize);
   initializeTxDescriptors(txDescriptors, txDescriptorCount);
+  frameState.rxDescriptors = rxDescriptors;
+  frameState.rxDescriptorCount = rxDescriptorCount;
+  frameState.rxReadIndex = 0;
   frameState.txDescriptors = txDescriptors;
   frameState.txDescriptorCount = txDescriptorCount;
   frameState.txWriteIndex = 0;
@@ -306,6 +312,49 @@ uint8_t gmac::reclaimTransmitDescriptors() {
   }
 
   return reclaimed;
+}
+
+bool gmac::peekReceivedFrame(uint8_t **buffer, uint16_t *length) {
+  if (buffer == nullptr || length == nullptr ||
+      frameState.rxDescriptors == nullptr ||
+      frameState.rxDescriptorCount == 0) {
+    return false;
+  }
+
+  Descriptor &descriptor =
+      frameState.rxDescriptors[frameState.rxReadIndex];
+  if ((descriptor.word0 & RxDescriptorOwnership) == 0) {
+    return false;
+  }
+
+  const uint32_t status = descriptor.word1;
+  if ((status & (RxDescriptorStartOfFrame | RxDescriptorEndOfFrame)) !=
+      (RxDescriptorStartOfFrame | RxDescriptorEndOfFrame)) {
+    return false;
+  }
+
+  *buffer = reinterpret_cast<uint8_t *>(descriptor.word0 & GMAC_RBQB_Msk);
+  *length = static_cast<uint16_t>(status & RxDescriptorLengthMask);
+  return true;
+}
+
+bool gmac::releaseReceivedFrame() {
+  if (frameState.rxDescriptors == nullptr ||
+      frameState.rxDescriptorCount == 0) {
+    return false;
+  }
+
+  Descriptor &descriptor =
+      frameState.rxDescriptors[frameState.rxReadIndex];
+  if ((descriptor.word0 & RxDescriptorOwnership) == 0) {
+    return false;
+  }
+
+  descriptor.word0 &= ~RxDescriptorOwnership;
+  descriptor.word1 = 0;
+  frameState.rxReadIndex =
+      nextDescriptorIndex(frameState.rxReadIndex, frameState.rxDescriptorCount);
+  return true;
 }
 
 bool gmac::registerEventCallback(EventCallback callback, void *context) {
