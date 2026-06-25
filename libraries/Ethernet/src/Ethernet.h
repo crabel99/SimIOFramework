@@ -44,6 +44,44 @@ enum EthernetLinkStatus {
 };
 
 /**
+ * @brief Runtime PHY link-refresh state.
+ *
+ * This state describes the bounded management flow that updates cached link
+ * status. It is intentionally separate from `EthernetLinkStatus`: link status
+ * is the resolved carrier cache, while link-refresh state describes the
+ * management operation currently in progress or the last terminal refresh
+ * outcome.
+ */
+enum EthernetLinkRefreshState {
+  /// No runtime link refresh has been requested or the state was reset.
+  LinkRefreshIdle = 0,
+  /// BMSR/link-status read has been queued or is active.
+  LinkRefreshReadingStatus,
+  /// Link is up, but auto-negotiation is still active.
+  LinkRefreshAutoNegotiationActive,
+  /// Link is up, but Clause-22 auto-negotiation is not available.
+  LinkRefreshAutoNegotiationUnsupported,
+  /// Vendor resolved-mode register read has been queued or is active.
+  LinkRefreshReadingVendorMode,
+  /// Local advertisement read has been queued or is active.
+  LinkRefreshReadingAdvertisement,
+  /// Link partner ability read has been queued or is active.
+  LinkRefreshReadingPartnerAbility,
+  /// Refresh completed and resolved link down.
+  LinkRefreshLinkDown,
+  /// Refresh completed and resolved link up speed/duplex.
+  LinkRefreshResolved,
+  /// Refresh completed with link up but unresolved speed/duplex.
+  LinkRefreshUnresolved,
+  /// Refresh completed and resolved link up through a vendor mode register.
+  LinkRefreshVendorModeResolved,
+  /// Refresh completed with link up but unresolved vendor mode.
+  LinkRefreshVendorModeUnresolved,
+  /// Refresh failed because a management operation failed or could not queue.
+  LinkRefreshFailed,
+};
+
+/**
  * @brief Low-level Ethernet hardware coordinator.
  *
  * Contract:
@@ -138,6 +176,14 @@ public:
    * @brief Return true when cached link status is `LinkON`.
    */
   bool carrierUp() const;
+
+  /**
+   * @brief Return the runtime PHY link-refresh state.
+   *
+   * This is intended for stack coordination and tests that need to distinguish
+   * pending management work from the cached resolved carrier state.
+   */
+  EthernetLinkRefreshState linkRefreshState() const;
 
   /**
    * @brief Select the PHY implementation used by `EthernetClass`.
@@ -347,6 +393,7 @@ private:
 
   MiimManager _miim;
   bool _linkRefreshPending;
+  EthernetLinkRefreshState _linkRefreshState;
   volatile bool _linkRefreshRequested;
   bool _phyInterruptAttached;
   uint32_t _phyInterruptPin;
@@ -356,10 +403,14 @@ private:
   bool updateCachedLink(EthernetLinkStatus status, EthernetPhyLinkSpeed speed,
                         EthernetPhyDuplex duplex);
   bool queueLinkStatusRead();
+  bool queueVendorModeRead();
   bool queueLinkAdvertisementRead();
   bool queueLinkPartnerAbilityRead();
   void handleGmacEvents(gmac::EventMask events);
   void handleLinkStatusRead(MiimManager::OperationHandle handle,
+                            MiimManager::OperationResult result,
+                            uint16_t value);
+  void handleVendorModeRead(MiimManager::OperationHandle handle,
                             MiimManager::OperationResult result,
                             uint16_t value);
   void handleLinkAdvertisementRead(MiimManager::OperationHandle handle,
@@ -370,6 +421,9 @@ private:
                                     uint16_t value);
   static void handleGmacEvents(gmac::EventMask events, void *context);
   static void handleLinkStatusRead(MiimManager::OperationHandle handle,
+                                   MiimManager::OperationResult result,
+                                   uint16_t value, void *context);
+  static void handleVendorModeRead(MiimManager::OperationHandle handle,
                                    MiimManager::OperationResult result,
                                    uint16_t value, void *context);
   static void handleLinkAdvertisementRead(MiimManager::OperationHandle handle,

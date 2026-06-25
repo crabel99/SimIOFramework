@@ -159,17 +159,20 @@ void scheduleEventWithStatus(gmac::EventMask events,
   PendSV::instance().setPending(gmac::pendSvServiceId());
 }
 
-uint32_t mdcClockBits(uint32_t mckHz) {
-  if (mckHz <= 20000000UL)
+uint32_t mdcClockBits(uint32_t mckHz, uint32_t maxMdcHz) {
+  const uint64_t hostClock = mckHz;
+  const uint64_t maxMdcClock = maxMdcHz;
+
+  if (hostClock <= maxMdcClock * 8u)
     return GMAC_NCFGR_CLK_MCK8;
 
-  if (mckHz <= 40000000UL)
+  if (hostClock <= maxMdcClock * 16u)
     return GMAC_NCFGR_CLK_MCK16;
 
-  if (mckHz <= 80000000UL)
+  if (hostClock <= maxMdcClock * 32u)
     return GMAC_NCFGR_CLK_MCK32;
 
-  if (mckHz <= 120000000UL)
+  if (hostClock <= maxMdcClock * 64u)
     return GMAC_NCFGR_CLK_MCK64;
 
   return GMAC_NCFGR_CLK_MCK96;
@@ -345,7 +348,14 @@ bool gmac::available() { return true; }
 
 int gmac::irqNumber() { return static_cast<int>(GMAC_IRQn); }
 
-bool gmac::beginManagement(uint32_t mckHz) {
+bool gmac::beginManagement(uint32_t mckHz, uint32_t maxMdcHz) {
+  if (maxMdcHz == 0)
+    return false;
+
+  if (static_cast<uint64_t>(mckHz) >
+      (static_cast<uint64_t>(maxMdcHz) * 96u))
+    return false;
+
   gmac_registers_t *regs = gmacRegisters();
 
 #if defined(MCLK_AHBMASK_GMAC_Msk)
@@ -364,7 +374,8 @@ bool gmac::beginManagement(uint32_t mckHz) {
 #endif
 
   regs->GMAC_NCFGR =
-      (regs->GMAC_NCFGR & ~GMAC_NCFGR_CLK_Msk) | mdcClockBits(mckHz);
+      (regs->GMAC_NCFGR & ~GMAC_NCFGR_CLK_Msk) |
+      mdcClockBits(mckHz, maxMdcHz);
   regs->GMAC_NCR |= GMAC_NCR_MPE_Msk;
 
   return true;

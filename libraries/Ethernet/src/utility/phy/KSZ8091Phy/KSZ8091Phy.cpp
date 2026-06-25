@@ -3,8 +3,6 @@
 #ifdef ETHERNET_HARDWARE_AVAILABLE
 
 namespace {
-constexpr uint16_t kPhyControl1LinkStatus = 1u << 8;
-constexpr uint16_t kPhyControl1OperationModeMask = 0x0007u;
 constexpr uint16_t kStrapOverridePmeEnable = 1u << 15;
 constexpr uint16_t kStrapOverridePhyAddress0Unique = 1u << 9;
 constexpr uint16_t kStrapOverrideRmiiBackToBack = 1u << 6;
@@ -90,13 +88,37 @@ bool KSZ8091Phy::isExpectedPhy() const {
   return phyId.oui == EXPECTED_OUI && phyId.model == EXPECTED_MODEL;
 }
 
-EthernetPhyLinkSpeed KSZ8091Phy::linkSpeed() const {
-  OperationMode mode = OperationModeReserved;
-
-  if (!readOperationMode(&mode)) {
-    return EthernetPhySpeedUnknown;
+bool KSZ8091Phy::decodeOperationMode(uint16_t phyControl1,
+                                     OperationMode *mode) {
+  if (mode == nullptr) {
+    return false;
   }
 
+  if ((phyControl1 & PHY_CONTROL_1_LINK_STATUS) == 0) {
+    *mode = OperationModeAutoNegotiating;
+    return true;
+  }
+
+  const uint16_t rawMode = phyControl1 & PHY_CONTROL_1_OPERATION_MODE_MASK;
+
+  switch (rawMode) {
+  case OperationModeAutoNegotiating:
+  case OperationMode10Half:
+  case OperationMode100Half:
+  case OperationMode10Full:
+  case OperationMode100Full:
+    *mode = static_cast<OperationMode>(rawMode);
+    break;
+  default:
+    *mode = OperationModeReserved;
+    break;
+  }
+
+  return true;
+}
+
+EthernetPhyLinkSpeed
+KSZ8091Phy::speedForOperationMode(OperationMode mode) {
   switch (mode) {
   case OperationMode10Half:
   case OperationMode10Full:
@@ -109,13 +131,7 @@ EthernetPhyLinkSpeed KSZ8091Phy::linkSpeed() const {
   }
 }
 
-EthernetPhyDuplex KSZ8091Phy::duplex() const {
-  OperationMode mode = OperationModeReserved;
-
-  if (!readOperationMode(&mode)) {
-    return EthernetPhyDuplexUnknown;
-  }
-
+EthernetPhyDuplex KSZ8091Phy::duplexForOperationMode(OperationMode mode) {
   switch (mode) {
   case OperationMode10Half:
   case OperationMode100Half:
@@ -126,6 +142,53 @@ EthernetPhyDuplex KSZ8091Phy::duplex() const {
   default:
     return EthernetPhyDuplexUnknown;
   }
+}
+
+bool KSZ8091Phy::resolvedModeRegister(uint8_t *registerAddress) const {
+  if (registerAddress == nullptr) {
+    return false;
+  }
+
+  *registerAddress = PHY_CONTROL_1_REGISTER;
+  return true;
+}
+
+bool KSZ8091Phy::resolveVendorLinkMode(uint16_t registerValue,
+                                       EthernetPhyLinkSpeed *speed,
+                                       EthernetPhyDuplex *duplex) const {
+  if (speed == nullptr || duplex == nullptr) {
+    return false;
+  }
+
+  OperationMode mode = OperationModeReserved;
+  if (!decodeOperationMode(registerValue, &mode)) {
+    return false;
+  }
+
+  *speed = speedForOperationMode(mode);
+  *duplex = duplexForOperationMode(mode);
+  return *speed != EthernetPhySpeedUnknown &&
+         *duplex != EthernetPhyDuplexUnknown;
+}
+
+EthernetPhyLinkSpeed KSZ8091Phy::linkSpeed() const {
+  OperationMode mode = OperationModeReserved;
+
+  if (!readOperationMode(&mode)) {
+    return EthernetPhySpeedUnknown;
+  }
+
+  return speedForOperationMode(mode);
+}
+
+EthernetPhyDuplex KSZ8091Phy::duplex() const {
+  OperationMode mode = OperationModeReserved;
+
+  if (!readOperationMode(&mode)) {
+    return EthernetPhyDuplexUnknown;
+  }
+
+  return duplexForOperationMode(mode);
 }
 
 bool KSZ8091Phy::configureInterrupts(uint16_t mask) {
@@ -175,27 +238,7 @@ bool KSZ8091Phy::readOperationMode(OperationMode *mode) const {
     return false;
   }
 
-  if ((control & kPhyControl1LinkStatus) == 0) {
-    *mode = OperationModeAutoNegotiating;
-    return true;
-  }
-
-  const uint16_t rawMode = control & kPhyControl1OperationModeMask;
-
-  switch (rawMode) {
-  case OperationModeAutoNegotiating:
-  case OperationMode10Half:
-  case OperationMode100Half:
-  case OperationMode10Full:
-  case OperationMode100Full:
-    *mode = static_cast<OperationMode>(rawMode);
-    break;
-  default:
-    *mode = OperationModeReserved;
-    break;
-  }
-
-  return true;
+  return decodeOperationMode(control, mode);
 }
 
 bool KSZ8091Phy::readStrapStatus(StrapStatus *status) const {

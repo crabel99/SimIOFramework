@@ -1,5 +1,18 @@
 #pragma once
 
+/**
+ * @file GMAC.h
+ * @brief SAME5x GMAC peripheral driver and raw MDIO controller primitives.
+ *
+ * This core driver owns the SAM E5x GMAC hardware block: MAC registers,
+ * descriptor rings, RX/TX DMA ownership, frame interrupts, PendSV event
+ * dispatch, MAC filtering, statistics, recovery, and the MDIO controller.
+ *
+ * It intentionally stops at the MAC/MDIO-controller boundary. External PHY
+ * policy, link negotiation, IP addressing, lwIP objects, TCP, UDP, TLS, and
+ * Arduino network client/server APIs belong to the Ethernet library layers.
+ */
+
 #include "PendSV.h"
 #include "sam.h"
 
@@ -11,26 +24,59 @@
 #endif /* GMAC_REGS */
 
 #ifdef ETHERNET_HARDWARE_AVAILABLE
+/**
+ * @brief SAME5x GMAC hardware driver.
+ *
+ * Contract:
+ * - Owns frame DMA descriptor rings and raw Ethernet frame movement.
+ * - Captures interrupt status quickly, schedules bounded PendSV work, and
+ *   reports coalesced events through a registered callback.
+ * - Separates RX/TX recovery events from ordinary completion events so the
+ *   Ethernet coordinator can clear queues or retry at the right layer.
+ * - Provides blocking MDIO helpers only for explicit setup/diagnostics and
+ *   non-blocking MDIO start/complete primitives for runtime management.
+ * - Does not interpret PHY register meaning or own network-stack state.
+ */
 class gmac {
 public:
   using EventMask = uint32_t;
+
+  /**
+   * @brief Deferred GMAC event callback.
+   *
+   * The callback runs from the PendSV service path, not directly from the GMAC
+   * ISR. Implementations must remain bounded and must not wait for future
+   * hardware state.
+   */
   using EventCallback = void (*)(EventMask events, void *context);
 
+  /**
+   * @brief GMAC DMA descriptor storage.
+   */
   struct Descriptor {
     volatile uint32_t word0;
     volatile uint32_t word1;
   };
 
+  /**
+   * @brief One immutable TX frame fragment.
+   */
   struct TransmitFragment {
     const uint8_t *buffer;
     uint16_t length;
   };
 
+  /**
+   * @brief Snapshot of GMAC receive/transmit status registers.
+   */
   struct Status {
     uint32_t receiveStatus;
     uint32_t transmitStatus;
   };
 
+  /**
+   * @brief Snapshot of GMAC hardware statistics counters.
+   */
   struct Statistics {
     uint64_t transmitOctets;
     uint32_t transmitFrames;
@@ -63,6 +109,9 @@ public:
     uint32_t receiveUdpChecksumErrors;
   };
 
+  /**
+   * @brief Receive filtering and frame-acceptance options.
+   */
   struct ReceiveOptions {
     bool checksumOffload = false;
     bool removeFrameCheckSequence = false;
@@ -102,8 +151,31 @@ public:
   inline static uintptr_t baseAddress() { return GMAC_PERIPH; }
   static int irqNumber();
   static constexpr uint8_t pendSvServiceId();
-  static bool beginManagement(uint32_t mckHz = F_CPU);
+  /**
+   * @brief Default maximum MDC clock rate for Clause-22 PHY management.
+   */
+  static constexpr uint32_t DefaultMaxMdcHz = 2500000UL;
+
+  /**
+   * @brief Configure GMAC management clocking for MDIO/MDC access.
+   *
+   * @param mckHz GMAC host clock frequency.
+   * @param maxMdcHz Maximum MDC clock rate accepted by the attached PHY.
+   *
+   * This is setup policy only. Runtime MIIM reads and writes must still use the
+   * non-blocking start/complete path through `MiimManager`.
+   */
+  static bool beginManagement(uint32_t mckHz = F_CPU,
+                              uint32_t maxMdcHz = DefaultMaxMdcHz);
+
+  /**
+   * @brief Return true when the GMAC management interface is idle.
+   */
   static bool isManagementIdle();
+
+  /**
+   * @brief Apply resolved link speed and duplex to the MAC.
+   */
   static void configureLink(LinkSpeed speed, bool fullDuplex);
   static void configureReceiveOptions(const ReceiveOptions &options);
   static void setPromiscuousMode(bool enabled);
@@ -152,12 +224,38 @@ public:
   static void forceTransmitBusyForTest(bool busy);
 #endif
   static void handleInterrupt();
+
+  /**
+   * @brief Blocking Clause-22 MDIO read for setup and diagnostics only.
+   *
+   * Runtime link management must use `mdioReadStart()` and
+   * `mdioReadComplete()` through `MiimManager` instead of this helper.
+   */
   static bool mdioRead(uint8_t phyAddress, uint8_t registerAddress,
                        uint16_t *value);
+
+  /**
+   * @brief Blocking Clause-22 MDIO write for setup and diagnostics only.
+   *
+   * Runtime link management must use `mdioWriteStart()` through `MiimManager`
+   * instead of this helper.
+   */
   static bool mdioWrite(uint8_t phyAddress, uint8_t registerAddress,
                         uint16_t value);
+
+  /**
+   * @brief Start a non-blocking Clause-22 MDIO read.
+   */
   static bool mdioReadStart(uint8_t phyAddress, uint8_t registerAddress);
+
+  /**
+   * @brief Complete a non-blocking Clause-22 MDIO read when management is idle.
+   */
   static bool mdioReadComplete(uint16_t *value);
+
+  /**
+   * @brief Start a non-blocking Clause-22 MDIO write.
+   */
   static bool mdioWriteStart(uint8_t phyAddress, uint8_t registerAddress,
                              uint16_t value);
 };

@@ -18,6 +18,10 @@ MiimManager::MiimManager()
       _queueWriteIndex(0), _queueCount(0), _activeOperationIndex(QueueDepth),
       _activeServicePasses(0), _nextHandle(1) {}
 
+bool MiimManager::setup(const Setup &setup) {
+  return gmac::beginManagement(setup.hostClockHz, setup.maxMdcHz);
+}
+
 void MiimManager::setPhyAddress(uint8_t address) {
   if (address <= MaxPhyAddress)
     _phyAddress = address;

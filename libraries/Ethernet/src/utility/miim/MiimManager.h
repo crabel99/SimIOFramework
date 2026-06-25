@@ -91,11 +91,37 @@ public:
                                      void *context);
 
   /**
+   * @brief MIIM controller setup policy.
+   *
+   * The GMAC owns the MDC divider bits, but the Ethernet management layer owns
+   * the policy inputs: the GMAC host clock and the maximum MDC clock accepted by
+   * the attached PHY. This setup path may touch hardware synchronously during
+   * Ethernet startup; queued runtime MIIM operations remain non-blocking.
+   */
+  struct Setup {
+    Setup(uint32_t hostClockHz = F_CPU,
+          uint32_t maxMdcHz = gmac::DefaultMaxMdcHz)
+        : hostClockHz(hostClockHz), maxMdcHz(maxMdcHz) {}
+
+    uint32_t hostClockHz;
+    uint32_t maxMdcHz;
+  };
+
+  /**
    * @brief Sentinel returned when an operation could not be queued.
    */
   static constexpr OperationHandle InvalidOperationHandle = 0;
 
   MiimManager();
+
+  /**
+   * @brief Configure the underlying GMAC MDIO controller.
+   *
+   * This method applies setup-time clock policy only. It does not reset queued
+   * operations, scan for PHYs, decode link state, or wait for runtime MDIO
+   * transactions to complete.
+   */
+  bool setup(const Setup &setup = Setup());
 
   /**
    * @brief Set the default PHY address recorded by the manager.

@@ -55,10 +55,6 @@ uint16_t encodeAutoNegotiationAbility(
 } // namespace
 
 bool EthernetPhy::begin() {
-  if (!gmac::beginManagement()) {
-    return false;
-  }
-
   if (_address == BROADCAST_ADDRESS) {
     return detect();
   }
@@ -104,8 +100,7 @@ bool EthernetPhy::updateBasicControl(uint16_t mask, bool enabled) {
 }
 
 bool EthernetPhy::reset() {
-  return gmac::mdioWriteStart(_address, PhyRegBmcon::addr,
-                              PhyRegBmcon::bit::Reset);
+  return writeRegister(PhyRegBmcon::addr, PhyRegBmcon::bit::Reset);
 }
 
 bool EthernetPhy::restartAutoNegotiation() {
@@ -482,6 +477,66 @@ bool EthernetPhy::readCapabilities(
   return true;
 }
 
+bool EthernetPhy::basicStatusReportsLinkUp(uint16_t basicStatus) {
+  return (basicStatus & PhyRegBmstat::bit::LinkStatus) != 0;
+}
+
+bool EthernetPhy::resolveAutoNegotiatedLink(
+    uint16_t localAdvertisement, uint16_t partnerAbility,
+    EthernetPhyLinkSpeed *speed, EthernetPhyDuplex *duplex) {
+  if (speed == nullptr || duplex == nullptr) {
+    return false;
+  }
+
+  const uint16_t common = localAdvertisement & partnerAbility;
+
+  if ((common & PhyRegAnad::bit::HundredBaseTXFull) != 0) {
+    *speed = EthernetPhySpeed100M;
+    *duplex = EthernetPhyFullDuplex;
+    return true;
+  }
+
+  if ((common & PhyRegAnad::bit::HundredBaseTXHalf) != 0) {
+    *speed = EthernetPhySpeed100M;
+    *duplex = EthernetPhyHalfDuplex;
+    return true;
+  }
+
+  if ((common & PhyRegAnad::bit::TenBaseTFull) != 0) {
+    *speed = EthernetPhySpeed10M;
+    *duplex = EthernetPhyFullDuplex;
+    return true;
+  }
+
+  if ((common & PhyRegAnad::bit::TenBaseTHalf) != 0) {
+    *speed = EthernetPhySpeed10M;
+    *duplex = EthernetPhyHalfDuplex;
+    return true;
+  }
+
+  *speed = EthernetPhySpeedUnknown;
+  *duplex = EthernetPhyDuplexUnknown;
+  return false;
+}
+
+bool EthernetPhy::resolvedModeRegister(uint8_t *registerAddress) const {
+  (void)registerAddress;
+  return false;
+}
+
+bool EthernetPhy::resolveVendorLinkMode(uint16_t registerValue,
+                                        EthernetPhyLinkSpeed *speed,
+                                        EthernetPhyDuplex *duplex) const {
+  (void)registerValue;
+  if (speed != nullptr) {
+    *speed = EthernetPhySpeedUnknown;
+  }
+  if (duplex != nullptr) {
+    *duplex = EthernetPhyDuplexUnknown;
+  }
+  return false;
+}
+
 bool EthernetPhy::linkUp() const {
   uint16_t status = 0;
 
@@ -489,7 +544,7 @@ bool EthernetPhy::linkUp() const {
     return false;
   }
 
-  return (status & PhyRegBmstat::bit::LinkStatus) != 0;
+  return basicStatusReportsLinkUp(status);
 }
 
 EthernetPhyLinkSpeed EthernetPhy::linkSpeed() const {

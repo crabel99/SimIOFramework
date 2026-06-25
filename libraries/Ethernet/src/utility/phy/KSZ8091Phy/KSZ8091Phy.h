@@ -1,16 +1,35 @@
 #pragma once
 
+/**
+ * @file KSZ8091Phy.h
+ * @brief Microchip/Micrel KSZ8091 vendor PHY extension.
+ *
+ * This file owns KSZ8091-specific register decode and policy hooks layered on
+ * top of the generic `EthernetPhy` Clause-22 behavior. It is the correct place
+ * for KSZ8091 interrupt status/ack, RMII strap/clock policy, MDIX, EEE, WOL,
+ * LinkMD diagnostics, and vendor resolved-mode reads.
+ */
+
 #include "../Phy.h"
 
 #ifdef ETHERNET_HARDWARE_AVAILABLE
 /**
- * Microchip/Micrel KSZ8091 PHY driver shell.
+ * @brief Microchip/Micrel KSZ8091 PHY driver.
  *
  * The SAM E54 Xplained Pro uses a KSZ8091RNACA PHY at MDIO address 0. This
  * child class demonstrates how board-specific PHY support plugs into
  * EthernetClass through the generic EthernetPhy parent. KSZ8091-specific
  * speed/duplex, interrupt, LED, strap, diagnostic, and EEE behavior should be
  * implemented here from the KSZ8091 datasheet rather than in EthernetPhy.
+ *
+ * Contract:
+ * - Verify the expected PHY ID before accepting the device.
+ * - Keep KSZ8091 vendor register operations in this class.
+ * - Provide synchronous configuration/diagnostic helpers only for explicit
+ *   setup, policy, and tests.
+ * - Runtime carrier/link changes should be surfaced through PHY interrupt
+ *   status plus the bounded Ethernet/MIIM link-refresh state machine, not by
+ *   polling these helpers from the RX/TX frame path.
  */
 class KSZ8091Phy : public EthernetPhy {
 public:
@@ -80,6 +99,8 @@ public:
   static constexpr uint8_t LINKMD_CONTROL_STATUS_REGISTER = 0x1D;
   static constexpr uint8_t PHY_CONTROL_1_REGISTER = 0x1E;
   static constexpr uint8_t PHY_CONTROL_2_REGISTER = 0x1F;
+  static constexpr uint16_t PHY_CONTROL_1_LINK_STATUS = 1u << 8;
+  static constexpr uint16_t PHY_CONTROL_1_OPERATION_MODE_MASK = 0x0007u;
   static constexpr uint8_t EEE_MMD_DEVICE_ADDRESS = 0x07;
   static constexpr uint8_t PMA_PMD_MMD_DEVICE_ADDRESS = 0x01;
   static constexpr uint8_t WOL_MMD_DEVICE_ADDRESS = 0x1F;
@@ -99,6 +120,30 @@ public:
   bool begin() override;
   bool configure() override;
   bool isExpectedPhy() const;
+
+  /**
+   * @brief Decode the KSZ8091 PHY Control 1 operation mode field.
+   *
+   * This is vendor-specific pure decode. `readOperationMode()` owns the MDIO
+   * register read; this helper owns interpretation of the KSZ8091 register
+   * layout so tests can enforce the vendor contract without live hardware.
+   */
+  static bool decodeOperationMode(uint16_t phyControl1, OperationMode *mode);
+
+  /**
+   * @brief Map a decoded KSZ8091 operation mode to generic link speed.
+   */
+  static EthernetPhyLinkSpeed speedForOperationMode(OperationMode mode);
+
+  /**
+   * @brief Map a decoded KSZ8091 operation mode to generic duplex.
+   */
+  static EthernetPhyDuplex duplexForOperationMode(OperationMode mode);
+
+  bool resolvedModeRegister(uint8_t *registerAddress) const override;
+  bool resolveVendorLinkMode(uint16_t registerValue,
+                             EthernetPhyLinkSpeed *speed,
+                             EthernetPhyDuplex *duplex) const override;
   EthernetPhyLinkSpeed linkSpeed() const override;
   EthernetPhyDuplex duplex() const override;
   bool configureInterrupts(uint16_t mask) override;
