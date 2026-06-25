@@ -88,6 +88,10 @@ bool KSZ8091Phy::isExpectedPhy() const {
   return phyId.oui == EXPECTED_OUI && phyId.model == EXPECTED_MODEL;
 }
 
+bool KSZ8091Phy::acceptsPhyId(const EthernetPhyId &phyId) const {
+  return phyId.oui == EXPECTED_OUI && phyId.model == EXPECTED_MODEL;
+}
+
 bool KSZ8091Phy::decodeOperationMode(uint16_t phyControl1,
                                      OperationMode *mode) {
   if (mode == nullptr) {

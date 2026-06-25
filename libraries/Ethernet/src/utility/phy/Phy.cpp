@@ -477,6 +477,10 @@ bool EthernetPhy::readCapabilities(
   return true;
 }
 
+bool EthernetPhy::acceptsPhyId(const EthernetPhyId &phyId) const {
+  return phyId.raw != 0 && phyId.raw != 0xFFFFFFFFUL;
+}
+
 bool EthernetPhy::basicStatusReportsLinkUp(uint16_t basicStatus) {
   return (basicStatus & PhyRegBmstat::bit::LinkStatus) != 0;
 }

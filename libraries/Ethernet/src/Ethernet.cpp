@@ -234,10 +234,11 @@ EthernetClass::EthernetClass()
       _linkSpeed(EthernetPhySpeedUnknown), _duplex(EthernetPhyDuplexUnknown),
       _linkChangeCallback(nullptr), _linkChangeCallbackContext(nullptr),
       _carrierCallback(nullptr), _carrierCallbackContext(nullptr), _miim(),
+      _phySetupPending(false), _phySetupState(PhySetupIdle),
       _linkRefreshPending(false), _linkRefreshState(LinkRefreshIdle),
       _linkRefreshRequested(false), _phyInterruptAttached(false),
       _phyInterruptPin(0), _phyInterruptMode(FALLING),
-      _linkAdvertisement(0) {}
+      _phyId1(0), _linkAdvertisement(0) {}
 
 EthernetClass::EthernetClass(const uint8_t mac[6])
     : _mac{0, 0, 0, 0, 0, 0}, _hasMac(false), _begun(false),
@@ -245,10 +246,11 @@ EthernetClass::EthernetClass(const uint8_t mac[6])
       _linkSpeed(EthernetPhySpeedUnknown), _duplex(EthernetPhyDuplexUnknown),
       _linkChangeCallback(nullptr), _linkChangeCallbackContext(nullptr),
       _carrierCallback(nullptr), _carrierCallbackContext(nullptr), _miim(),
+      _phySetupPending(false), _phySetupState(PhySetupIdle),
       _linkRefreshPending(false), _linkRefreshState(LinkRefreshIdle),
       _linkRefreshRequested(false), _phyInterruptAttached(false),
       _phyInterruptPin(0), _phyInterruptMode(FALLING),
-      _linkAdvertisement(0) {
+      _phyId1(0), _linkAdvertisement(0) {
   setMacAddress(mac);
 }
 
@@ -257,10 +259,11 @@ EthernetClass::EthernetClass(EthernetPhy &phy)
       _linkStatus(Unknown), _linkSpeed(EthernetPhySpeedUnknown),
       _duplex(EthernetPhyDuplexUnknown), _linkChangeCallback(nullptr),
       _linkChangeCallbackContext(nullptr), _carrierCallback(nullptr),
-      _carrierCallbackContext(nullptr), _miim(), _linkRefreshPending(false),
+      _carrierCallbackContext(nullptr), _miim(), _phySetupPending(false),
+      _phySetupState(PhySetupIdle), _linkRefreshPending(false),
       _linkRefreshState(LinkRefreshIdle), _linkRefreshRequested(false),
       _phyInterruptAttached(false), _phyInterruptPin(0),
-      _phyInterruptMode(FALLING), _linkAdvertisement(0) {
+      _phyInterruptMode(FALLING), _phyId1(0), _linkAdvertisement(0) {
   _miim.setPhyAddress(phy.address());
 }
 
@@ -269,10 +272,11 @@ EthernetClass::EthernetClass(const uint8_t mac[6], EthernetPhy &phy)
       _linkStatus(Unknown), _linkSpeed(EthernetPhySpeedUnknown),
       _duplex(EthernetPhyDuplexUnknown), _linkChangeCallback(nullptr),
       _linkChangeCallbackContext(nullptr), _carrierCallback(nullptr),
-      _carrierCallbackContext(nullptr), _miim(), _linkRefreshPending(false),
+      _carrierCallbackContext(nullptr), _miim(), _phySetupPending(false),
+      _phySetupState(PhySetupIdle), _linkRefreshPending(false),
       _linkRefreshState(LinkRefreshIdle), _linkRefreshRequested(false),
       _phyInterruptAttached(false), _phyInterruptPin(0),
-      _phyInterruptMode(FALLING), _linkAdvertisement(0) {
+      _phyInterruptMode(FALLING), _phyId1(0), _linkAdvertisement(0) {
   setMacAddress(mac);
   _miim.setPhyAddress(phy.address());
 }
@@ -295,11 +299,18 @@ EthernetLinkRefreshState EthernetClass::linkRefreshState() const {
   return _linkRefreshState;
 }
 
+EthernetPhySetupState EthernetClass::phySetupState() const {
+  return _phySetupState;
+}
+
 void EthernetClass::setPhy(EthernetPhy &phy) {
   _phy = &phy;
   _begun = false;
   _miim.reset();
   _miim.setPhyAddress(phy.address());
+  _phySetupPending = false;
+  _phySetupState = PhySetupIdle;
+  _phyId1 = 0;
   _linkRefreshPending = false;
   _linkRefreshState = LinkRefreshIdle;
   _linkRefreshRequested = false;
@@ -349,6 +360,21 @@ bool EthernetClass::requestLinkRefresh() {
 
   _linkRefreshPending = false;
   _linkRefreshState = LinkRefreshFailed;
+  return false;
+}
+
+bool EthernetClass::requestPhySetup() {
+  if (_phy == nullptr || _phySetupPending)
+    return false;
+
+  _phySetupPending = true;
+  _phySetupState = PhySetupReadingId1;
+  _phyId1 = 0;
+  if (queuePhyId1Read())
+    return true;
+
+  _phySetupPending = false;
+  _phySetupState = PhySetupFailed;
   return false;
 }
 
@@ -479,6 +505,26 @@ bool EthernetClass::updateCachedLink(EthernetLinkStatus status,
   return true;
 }
 
+bool EthernetClass::queuePhyId1Read() {
+  const bool queued =
+      _miim.read(_phy->address(), PHY_REG_PHYID1,
+                 EthernetClass::handlePhyId1Read, this) !=
+      MiimManager::InvalidOperationHandle;
+  if (queued)
+    _phySetupState = PhySetupReadingId1;
+  return queued;
+}
+
+bool EthernetClass::queuePhyId2Read() {
+  const bool queued =
+      _miim.read(_phy->address(), PHY_REG_PHYID2,
+                 EthernetClass::handlePhyId2Read, this) !=
+      MiimManager::InvalidOperationHandle;
+  if (queued)
+    _phySetupState = PhySetupReadingId2;
+  return queued;
+}
+
 bool EthernetClass::queueLinkStatusRead() {
   const bool queued =
       _miim.read(_phy->address(), static_cast<uint8_t>(PhyRegBmstat::addr),
@@ -544,6 +590,47 @@ void EthernetClass::handleGmacEvents(gmac::EventMask events) {
 
   if ((events & gmac::EventManagementComplete) != 0)
     service();
+}
+
+void EthernetClass::handlePhyId1Read(MiimManager::OperationHandle handle,
+                                     MiimManager::OperationResult result,
+                                     uint16_t value) {
+  _miim.release(handle);
+
+  if (result != MiimManager::ResultOk) {
+    _phySetupPending = false;
+    _phySetupState = PhySetupFailed;
+    return;
+  }
+
+  _phyId1 = value;
+  if (!queuePhyId2Read()) {
+    _phySetupPending = false;
+    _phySetupState = PhySetupFailed;
+  }
+}
+
+void EthernetClass::handlePhyId2Read(MiimManager::OperationHandle handle,
+                                     MiimManager::OperationResult result,
+                                     uint16_t value) {
+  _miim.release(handle);
+  _phySetupPending = false;
+
+  if (result != MiimManager::ResultOk) {
+    _phySetupState = PhySetupFailed;
+    return;
+  }
+
+  const uint32_t rawId = (static_cast<uint32_t>(_phyId1) << 16) | value;
+  EthernetPhyId phyId = {};
+  phyId.raw = rawId;
+  phyId.oui = (rawId >> 10) & 0x00FFFFFFu;
+  phyId.model = static_cast<uint8_t>((rawId >> 4) & 0x3Fu);
+  phyId.revision = static_cast<uint8_t>(rawId & 0x0Fu);
+
+  _phySetupState =
+      (_phy != nullptr && _phy->acceptsPhyId(phyId)) ? PhySetupVerified
+                                                     : PhySetupInvalidId;
 }
 
 void EthernetClass::handleLinkStatusRead(MiimManager::OperationHandle handle,
@@ -676,6 +763,22 @@ void EthernetClass::handleGmacEvents(gmac::EventMask events, void *context) {
     ethernet->handleGmacEvents(events);
 }
 
+void EthernetClass::handlePhyId1Read(MiimManager::OperationHandle handle,
+                                     MiimManager::OperationResult result,
+                                     uint16_t value, void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->handlePhyId1Read(handle, result, value);
+}
+
+void EthernetClass::handlePhyId2Read(MiimManager::OperationHandle handle,
+                                     MiimManager::OperationResult result,
+                                     uint16_t value, void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->handlePhyId2Read(handle, result, value);
+}
+
 void EthernetClass::handleLinkStatusRead(MiimManager::OperationHandle handle,
                                          MiimManager::OperationResult result,
                                          uint16_t value, void *context) {
@@ -767,6 +870,9 @@ int EthernetClass::begin() {
 
   _miim.reset();
   _miim.setPhyAddress(_phy->address());
+  _phySetupPending = false;
+  _phySetupState = PhySetupIdle;
+  _phyId1 = 0;
   _linkRefreshPending = false;
   _linkRefreshState = LinkRefreshIdle;
   _linkRefreshRequested = false;

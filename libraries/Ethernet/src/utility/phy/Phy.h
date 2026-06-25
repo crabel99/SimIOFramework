@@ -211,6 +211,15 @@ public:
   bool readCapabilities(EthernetPhyCapabilities *capabilities) const;
 
   /**
+   * @brief Return true when a decoded PHY ID is acceptable for this PHY object.
+   *
+   * Generic PHYs accept any nonzero, non-all-ones Clause-22 ID. Vendor PHYs
+   * should override this to enforce expected OUI/model matching without forcing
+   * runtime setup code to perform synchronous ID reads.
+   */
+  virtual bool acceptsPhyId(const EthernetPhyId &phyId) const;
+
+  /**
    * @brief Decode the Clause-22 basic status link bit.
    *
    * This helper exists so Ethernet coordination code does not need to know the

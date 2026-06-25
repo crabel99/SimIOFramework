@@ -120,6 +120,7 @@ public:
   bool begin() override;
   bool configure() override;
   bool isExpectedPhy() const;
+  bool acceptsPhyId(const EthernetPhyId &phyId) const override;
 
   /**
    * @brief Decode the KSZ8091 PHY Control 1 operation mode field.

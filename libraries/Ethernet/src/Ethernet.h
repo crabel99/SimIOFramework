@@ -44,6 +44,27 @@ enum EthernetLinkStatus {
 };
 
 /**
+ * @brief Runtime PHY setup/verification state.
+ *
+ * This state describes the bounded management flow that verifies the selected
+ * PHY address without calling synchronous PHY helpers from runtime service.
+ */
+enum EthernetPhySetupState {
+  /// No runtime PHY setup has been requested or the state was reset.
+  PhySetupIdle = 0,
+  /// PHY ID1 read has been queued or is active.
+  PhySetupReadingId1,
+  /// PHY ID2 read has been queued or is active.
+  PhySetupReadingId2,
+  /// PHY ID was read and accepted by the selected PHY object.
+  PhySetupVerified,
+  /// PHY ID was readable but rejected by the selected PHY object.
+  PhySetupInvalidId,
+  /// PHY setup failed because a management operation failed or could not queue.
+  PhySetupFailed,
+};
+
+/**
  * @brief Runtime PHY link-refresh state.
  *
  * This state describes the bounded management flow that updates cached link
@@ -186,6 +207,11 @@ public:
   EthernetLinkRefreshState linkRefreshState() const;
 
   /**
+   * @brief Return the runtime PHY setup state.
+   */
+  EthernetPhySetupState phySetupState() const;
+
+  /**
    * @brief Select the PHY implementation used by `EthernetClass`.
    *
    * The argument is stored by pointer. Pass a long-lived object; stack objects
@@ -225,6 +251,15 @@ public:
    * pending or the first MIIM operation could not be queued.
    */
   bool requestLinkRefresh();
+
+  /**
+   * @brief Queue asynchronous verification of the selected PHY address.
+   *
+   * The setup flow reads PHY ID1 and ID2 through `MiimManager`, then asks the
+   * selected PHY object whether the decoded ID is acceptable. It does not scan,
+   * reset, or configure the PHY in this slice.
+   */
+  bool requestPhySetup();
 
   /**
    * @brief Schedule a deferred link refresh from an interrupt.
@@ -392,21 +427,30 @@ private:
   void *_carrierCallbackContext;
 
   MiimManager _miim;
+  bool _phySetupPending;
+  EthernetPhySetupState _phySetupState;
   bool _linkRefreshPending;
   EthernetLinkRefreshState _linkRefreshState;
   volatile bool _linkRefreshRequested;
   bool _phyInterruptAttached;
   uint32_t _phyInterruptPin;
   uint32_t _phyInterruptMode;
+  uint16_t _phyId1;
   uint16_t _linkAdvertisement;
 
   bool updateCachedLink(EthernetLinkStatus status, EthernetPhyLinkSpeed speed,
                         EthernetPhyDuplex duplex);
+  bool queuePhyId1Read();
+  bool queuePhyId2Read();
   bool queueLinkStatusRead();
   bool queueVendorModeRead();
   bool queueLinkAdvertisementRead();
   bool queueLinkPartnerAbilityRead();
   void handleGmacEvents(gmac::EventMask events);
+  void handlePhyId1Read(MiimManager::OperationHandle handle,
+                        MiimManager::OperationResult result, uint16_t value);
+  void handlePhyId2Read(MiimManager::OperationHandle handle,
+                        MiimManager::OperationResult result, uint16_t value);
   void handleLinkStatusRead(MiimManager::OperationHandle handle,
                             MiimManager::OperationResult result,
                             uint16_t value);
@@ -420,6 +464,12 @@ private:
                                     MiimManager::OperationResult result,
                                     uint16_t value);
   static void handleGmacEvents(gmac::EventMask events, void *context);
+  static void handlePhyId1Read(MiimManager::OperationHandle handle,
+                               MiimManager::OperationResult result,
+                               uint16_t value, void *context);
+  static void handlePhyId2Read(MiimManager::OperationHandle handle,
+                               MiimManager::OperationResult result,
+                               uint16_t value, void *context);
   static void handleLinkStatusRead(MiimManager::OperationHandle handle,
                                    MiimManager::OperationResult result,
                                    uint16_t value, void *context);
