@@ -34,6 +34,17 @@ enum EthernetPhyDuplex {
 };
 
 /**
+ * @brief Generic PHY interrupt events surfaced to the Ethernet coordinator.
+ */
+enum EthernetPhyInterruptEvent : uint16_t {
+  EthernetPhyInterruptLinkUp = 1u << 0,
+  EthernetPhyInterruptLinkDown = 1u << 1,
+  EthernetPhyInterruptAutoNegotiationComplete = 1u << 2,
+  EthernetPhyInterruptRemoteFault = 1u << 3,
+  EthernetPhyInterruptError = 1u << 4,
+};
+
+/**
  * @brief Decoded PHY identifier from Clause-22 ID registers.
  */
 struct EthernetPhyId {
@@ -123,13 +134,25 @@ class EthernetPhy {
 public:
   static constexpr uint8_t BROADCAST_ADDRESS = 0xFF;
 
-  EthernetPhy(uint8_t address = 0) : _address(address) {}
+  using InterruptCallback = void (*)(void *context);
+
+  EthernetPhy(uint8_t address = 0)
+      : _address(address), _interruptCallback(nullptr),
+        _interruptCallbackContext(nullptr) {}
   virtual ~EthernetPhy() = default;
 
   /**
    * @brief Return the configured or detected PHY address.
    */
   uint8_t address() const { return _address; }
+
+  /**
+   * @brief Set the configured or detected PHY address.
+   *
+   * Accepts Clause-22 addresses 0..31 and `BROADCAST_ADDRESS`. Runtime
+   * discovery uses this after the bounded MIIM scan resolves the real address.
+   */
+  bool setAddress(uint8_t address);
 
   /**
    * @brief Verify or detect a PHY using already-configured management access.
@@ -260,6 +283,48 @@ public:
                                      EthernetPhyDuplex *duplex) const;
 
   /**
+   * @brief Return the vendor interrupt control/status register.
+   *
+   * Generic Clause-22 does not define a common interrupt register. Vendor PHYs
+   * override this so `EthernetClass` can queue async MIIM interrupt
+   * configuration and acknowledgement without knowing vendor register numbers.
+   */
+  virtual bool interruptControlStatusRegister(uint8_t *registerAddress) const;
+
+  /**
+   * @brief Encode generic interrupt events for the vendor register write path.
+   */
+  virtual bool encodeInterruptEnable(uint16_t events,
+                                     uint16_t *registerValue) const;
+
+  /**
+   * @brief Decode vendor interrupt status bits into generic interrupt events.
+   */
+  virtual bool decodeInterruptStatus(uint16_t registerValue,
+                                     uint16_t *events) const;
+
+  /**
+   * @brief Register the callback invoked by board-level PHY interrupt wiring.
+   *
+   * `EthernetClass` owns the MCU pin attachment. The selected PHY owns this
+   * callback endpoint so board interrupt notification flows through the PHY
+   * object before deferred MIIM work is scheduled.
+   */
+  void setInterruptCallback(InterruptCallback callback, void *context);
+
+  /**
+   * @brief Clear the registered PHY interrupt callback.
+   */
+  void clearInterruptCallback();
+
+  /**
+   * @brief Notify the selected PHY object that its interrupt pin fired.
+   *
+   * Safe for ISR use when the registered callback is ISR-safe.
+   */
+  void notifyInterruptFromIsr();
+
+  /**
    * @brief Synchronous generic link-status helper.
    *
    * Runtime link monitoring should prefer the bounded MIIM/link-refresh state
@@ -294,5 +359,7 @@ protected:
   bool updateBasicControl(uint16_t mask, bool enabled);
 
   uint8_t _address;
+  InterruptCallback _interruptCallback;
+  void *_interruptCallbackContext;
 };
 #endif /* ETHERNET_HARDWARE_AVAILABLE */

@@ -57,7 +57,7 @@ extern "C"
  *----------------------------------------------------------------------------*/
 
 // Number of pins defined in PinDescription array
-#define PINS_COUNT (37u)
+#define PINS_COUNT (50u)
 #define NUM_DIGITAL_PINS (20u)
 #define NUM_ANALOG_INPUTS (6u)
 #define NUM_ANALOG_OUTPUTS (1u)
@@ -117,6 +117,24 @@ extern "C"
 // Other pins
 #define PIN_ATN (30ul)
   static const uint8_t ATN = PIN_ATN;
+
+#define PIN_BTN0 (47ul)
+  static const uint8_t BTN0 = PIN_BTN0;
+
+#define PIN_PHY_INT (37ul)
+#define PIN_PHY_RESET (38ul)
+
+// Ethernet RMII/MDIO pins, from the SAM E54 Xplained Pro R11 schematic.
+#define PIN_GMAC_GRX0 (0ul)   // PA13_ETH_GRX0, shared with SerialUART RX pin
+#define PIN_GMAC_GRX1 (1ul)   // PA12_ETH_GRX1, shared with SerialUART TX pin
+#define PIN_GMAC_GTXCK (39ul) // PA14_ETH_GTXCK
+#define PIN_GMAC_GRXER (40ul) // PA15_ETH_GRXER
+#define PIN_GMAC_GTXEN (41ul) // PA17_ETH_GTXEN
+#define PIN_GMAC_GTX0 (42ul)  // PA18_ETH_GTX0
+#define PIN_GMAC_GTX1 (43ul)  // PA19_ETH_GTX1
+#define PIN_GMAC_GRXDV (44ul) // PC20_ETH_GRXDV
+#define PIN_GMAC_GMDC (45ul)  // PC11_ETH_GMDC
+#define PIN_GMAC_GMDIO (46ul) // PC12_ETH_GMDIO
 
 /*
  * Serial interfaces
@@ -186,9 +204,11 @@ extern "C"
 /*
  * USB
  */
-#define PIN_USB_HOST_ENABLE (27ul)
 #define PIN_USB_DM (28ul)
 #define PIN_USB_DP (29ul)
+#define PIN_USB_VBUS_DETECT (48ul)
+#define PIN_USB_ID (49ul)
+#define PIN_USB_HOST_ENABLE PIN_USB_ID
 
 /*
  * I2S Interfaces

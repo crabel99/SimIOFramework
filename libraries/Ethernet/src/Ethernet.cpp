@@ -236,9 +236,10 @@ EthernetClass::EthernetClass()
       _carrierCallback(nullptr), _carrierCallbackContext(nullptr), _miim(),
       _phySetupPending(false), _phySetupState(PhySetupIdle),
       _linkRefreshPending(false), _linkRefreshState(LinkRefreshIdle),
-      _linkRefreshRequested(false), _phyInterruptAttached(false),
-      _phyInterruptPin(0), _phyInterruptMode(FALLING),
-      _phyId1(0), _linkAdvertisement(0) {}
+      _linkRefreshRequested(false), _phyInterruptStatusRequested(false),
+      _phyInterruptStatusPending(false), _phyInterruptAttached(false),
+      _phyInterruptPin(0), _phyInterruptMode(FALLING), _phyId1(0),
+      _phyInterruptEvents(0), _linkAdvertisement(0) {}
 
 EthernetClass::EthernetClass(const uint8_t mac[6])
     : _mac{0, 0, 0, 0, 0, 0}, _hasMac(false), _begun(false),
@@ -248,9 +249,10 @@ EthernetClass::EthernetClass(const uint8_t mac[6])
       _carrierCallback(nullptr), _carrierCallbackContext(nullptr), _miim(),
       _phySetupPending(false), _phySetupState(PhySetupIdle),
       _linkRefreshPending(false), _linkRefreshState(LinkRefreshIdle),
-      _linkRefreshRequested(false), _phyInterruptAttached(false),
-      _phyInterruptPin(0), _phyInterruptMode(FALLING),
-      _phyId1(0), _linkAdvertisement(0) {
+      _linkRefreshRequested(false), _phyInterruptStatusRequested(false),
+      _phyInterruptStatusPending(false), _phyInterruptAttached(false),
+      _phyInterruptPin(0), _phyInterruptMode(FALLING), _phyId1(0),
+      _phyInterruptEvents(0), _linkAdvertisement(0) {
   setMacAddress(mac);
 }
 
@@ -262,8 +264,10 @@ EthernetClass::EthernetClass(EthernetPhy &phy)
       _carrierCallbackContext(nullptr), _miim(), _phySetupPending(false),
       _phySetupState(PhySetupIdle), _linkRefreshPending(false),
       _linkRefreshState(LinkRefreshIdle), _linkRefreshRequested(false),
+      _phyInterruptStatusRequested(false), _phyInterruptStatusPending(false),
       _phyInterruptAttached(false), _phyInterruptPin(0),
-      _phyInterruptMode(FALLING), _phyId1(0), _linkAdvertisement(0) {
+      _phyInterruptMode(FALLING), _phyId1(0), _phyInterruptEvents(0),
+      _linkAdvertisement(0) {
   _miim.setPhyAddress(phy.address());
 }
 
@@ -275,8 +279,10 @@ EthernetClass::EthernetClass(const uint8_t mac[6], EthernetPhy &phy)
       _carrierCallbackContext(nullptr), _miim(), _phySetupPending(false),
       _phySetupState(PhySetupIdle), _linkRefreshPending(false),
       _linkRefreshState(LinkRefreshIdle), _linkRefreshRequested(false),
+      _phyInterruptStatusRequested(false), _phyInterruptStatusPending(false),
       _phyInterruptAttached(false), _phyInterruptPin(0),
-      _phyInterruptMode(FALLING), _phyId1(0), _linkAdvertisement(0) {
+      _phyInterruptMode(FALLING), _phyId1(0), _phyInterruptEvents(0),
+      _linkAdvertisement(0) {
   setMacAddress(mac);
   _miim.setPhyAddress(phy.address());
 }
@@ -304,7 +310,13 @@ EthernetPhySetupState EthernetClass::phySetupState() const {
 }
 
 void EthernetClass::setPhy(EthernetPhy &phy) {
+  if (_phyInterruptAttached && _phy != nullptr)
+    _phy->clearInterruptCallback();
+
   _phy = &phy;
+  if (_phyInterruptAttached)
+    _phy->setInterruptCallback(EthernetClass::handlePhyInterruptCallback,
+                               this);
   _begun = false;
   _miim.reset();
   _miim.setPhyAddress(phy.address());
@@ -314,6 +326,9 @@ void EthernetClass::setPhy(EthernetPhy &phy) {
   _linkRefreshPending = false;
   _linkRefreshState = LinkRefreshIdle;
   _linkRefreshRequested = false;
+  _phyInterruptStatusRequested = false;
+  _phyInterruptStatusPending = false;
+  _phyInterruptEvents = 0;
   updateCachedLink(Unknown, EthernetPhySpeedUnknown, EthernetPhyDuplexUnknown);
 }
 
@@ -368,10 +383,16 @@ bool EthernetClass::requestPhySetup() {
     return false;
 
   _phySetupPending = true;
-  _phySetupState = PhySetupReadingId1;
   _phyId1 = 0;
-  if (queuePhyId1Read())
-    return true;
+  if (_phy->address() == EthernetPhy::BROADCAST_ADDRESS) {
+    _phySetupState = PhySetupScanning;
+    if (queuePhyScan())
+      return true;
+  } else {
+    _phySetupState = PhySetupReadingId1;
+    if (queuePhyId1Read())
+      return true;
+  }
 
   _phySetupPending = false;
   _phySetupState = PhySetupFailed;
@@ -379,28 +400,63 @@ bool EthernetClass::requestPhySetup() {
 }
 
 void EthernetClass::requestLinkRefreshFromIsr() {
-  _linkRefreshRequested = true;
+  uint8_t registerAddress = 0;
+  if (_phy != nullptr && _phy->interruptControlStatusRegister(&registerAddress)) {
+    _phyInterruptStatusRequested = true;
+  } else {
+    _linkRefreshRequested = true;
+  }
   gmac::scheduleEvent(gmac::EventManagementComplete);
 }
 
 bool EthernetClass::setPhyInterruptPin(uint32_t pin, uint32_t mode) {
   clearPhyInterruptPin();
+  if (_phy == nullptr)
+    return false;
 
+  uint8_t interruptRegister = 0;
+  const bool phyInterruptsSupported =
+      _phy->interruptControlStatusRegister(&interruptRegister);
+  const int32_t interruptNumber =
+      static_cast<int32_t>(digitalPinToInterrupt(pin));
+  if (interruptNumber == NOT_AN_INTERRUPT)
+    return false;
+
+  pinMode(pin, INPUT_PULLUP);
   phyInterruptOwner = this;
+  _phy->setInterruptCallback(EthernetClass::handlePhyInterruptCallback, this);
   _phyInterruptPin = pin;
   _phyInterruptMode = mode;
-  attachInterrupt(digitalPinToInterrupt(pin), EthernetClass::handlePhyInterrupt,
-                  mode);
+  attachInterrupt(static_cast<uint32_t>(interruptNumber),
+                  EthernetClass::handlePhyInterrupt, mode);
   _phyInterruptAttached = true;
+  if (phyInterruptsSupported && !_phySetupPending) {
+    if (_phySetupState == PhySetupVerified) {
+      if (queuePhyInterruptEnableWrite()) {
+        _phySetupPending = true;
+        gmac::scheduleEvent(gmac::EventManagementComplete);
+      }
+    } else if (_phySetupState == PhySetupIdle) {
+      if (requestPhySetup())
+        gmac::scheduleEvent(gmac::EventManagementComplete);
+    }
+  }
   return true;
 }
 
 void EthernetClass::clearPhyInterruptPin() {
-  if (_phyInterruptAttached)
-    detachInterrupt(digitalPinToInterrupt(_phyInterruptPin));
+  if (_phyInterruptAttached) {
+    const int32_t interruptNumber =
+        static_cast<int32_t>(digitalPinToInterrupt(_phyInterruptPin));
+    if (interruptNumber != NOT_AN_INTERRUPT)
+      detachInterrupt(static_cast<uint32_t>(interruptNumber));
+  }
 
   if (phyInterruptOwner == this)
     phyInterruptOwner = nullptr;
+
+  if (_phy != nullptr)
+    _phy->clearInterruptCallback();
 
   _phyInterruptAttached = false;
 }
@@ -525,6 +581,52 @@ bool EthernetClass::queuePhyId2Read() {
   return queued;
 }
 
+bool EthernetClass::queuePhyScan() {
+  const bool queued =
+      _miim.scan(PHY_REG_PHYID1, 0, 31, EthernetClass::handlePhyScanRead,
+                 this) != MiimManager::InvalidOperationHandle;
+  if (queued)
+    _phySetupState = PhySetupScanning;
+  return queued;
+}
+
+bool EthernetClass::queuePhyInterruptEnableWrite() {
+  uint8_t registerAddress = 0;
+  uint16_t registerValue = 0;
+  constexpr uint16_t events = EthernetPhyInterruptLinkUp |
+                              EthernetPhyInterruptLinkDown |
+                              EthernetPhyInterruptAutoNegotiationComplete;
+  if (_phy == nullptr ||
+      !_phy->interruptControlStatusRegister(&registerAddress) ||
+      !_phy->encodeInterruptEnable(events, &registerValue)) {
+    return false;
+  }
+
+  const bool queued =
+      _miim.write(_phy->address(), registerAddress, registerValue,
+                  EthernetClass::handlePhyInterruptEnableWrite, this) !=
+      MiimManager::InvalidOperationHandle;
+  if (queued)
+    _phySetupState = PhySetupConfiguringInterrupts;
+  return queued;
+}
+
+bool EthernetClass::queuePhyInterruptStatusRead() {
+  uint8_t registerAddress = 0;
+  if (_phy == nullptr ||
+      !_phy->interruptControlStatusRegister(&registerAddress)) {
+    return false;
+  }
+
+  const bool queued =
+      _miim.read(_phy->address(), registerAddress,
+                 EthernetClass::handlePhyInterruptStatusRead, this) !=
+      MiimManager::InvalidOperationHandle;
+  if (queued)
+    _phyInterruptStatusPending = true;
+  return queued;
+}
+
 bool EthernetClass::queueLinkStatusRead() {
   const bool queued =
       _miim.read(_phy->address(), static_cast<uint8_t>(PhyRegBmstat::addr),
@@ -583,6 +685,12 @@ void EthernetClass::handleGmacEvents(gmac::EventMask events) {
     exitCritical(primask);
   }
 
+  if (_phyInterruptStatusRequested && !_phyInterruptStatusPending) {
+    _phyInterruptStatusRequested = false;
+    if (!queuePhyInterruptStatusRead())
+      _linkRefreshRequested = true;
+  }
+
   if (_linkRefreshRequested && !_linkRefreshPending) {
     _linkRefreshRequested = false;
     requestLinkRefresh();
@@ -603,6 +711,34 @@ void EthernetClass::handlePhyId1Read(MiimManager::OperationHandle handle,
     return;
   }
 
+  _phyId1 = value;
+  if (!queuePhyId2Read()) {
+    _phySetupPending = false;
+    _phySetupState = PhySetupFailed;
+  }
+}
+
+void EthernetClass::handlePhyScanRead(MiimManager::OperationHandle handle,
+                                      MiimManager::OperationResult result,
+                                      uint16_t value) {
+  uint8_t discoveredAddress = EthernetPhy::BROADCAST_ADDRESS;
+  _miim.operationPhyAddress(handle, &discoveredAddress);
+  _miim.release(handle);
+
+  if (result == MiimManager::ResultNotFound) {
+    _phySetupPending = false;
+    _phySetupState = PhySetupScanNotFound;
+    return;
+  }
+
+  if (result != MiimManager::ResultOk || _phy == nullptr ||
+      !_phy->setAddress(discoveredAddress)) {
+    _phySetupPending = false;
+    _phySetupState = PhySetupFailed;
+    return;
+  }
+
+  _miim.setPhyAddress(discoveredAddress);
   _phyId1 = value;
   if (!queuePhyId2Read()) {
     _phySetupPending = false;
@@ -631,6 +767,41 @@ void EthernetClass::handlePhyId2Read(MiimManager::OperationHandle handle,
   _phySetupState =
       (_phy != nullptr && _phy->acceptsPhyId(phyId)) ? PhySetupVerified
                                                      : PhySetupInvalidId;
+  if (_phySetupState != PhySetupVerified)
+    return;
+
+  if (_phyInterruptAttached && queuePhyInterruptEnableWrite()) {
+    _phySetupPending = true;
+    return;
+  }
+}
+
+void EthernetClass::handlePhyInterruptEnableWrite(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value) {
+  (void)value;
+  _miim.release(handle);
+  _phySetupPending = false;
+  _phySetupState =
+      result == MiimManager::ResultOk ? PhySetupVerified : PhySetupFailed;
+}
+
+void EthernetClass::handlePhyInterruptStatusRead(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value) {
+  _miim.release(handle);
+  _phyInterruptStatusPending = false;
+  _phyInterruptEvents = 0;
+
+  if (result == MiimManager::ResultOk && _phy != nullptr) {
+    _phy->decodeInterruptStatus(value, &_phyInterruptEvents);
+  }
+
+  if (!_linkRefreshPending) {
+    requestLinkRefresh();
+  } else {
+    _linkRefreshRequested = true;
+  }
 }
 
 void EthernetClass::handleLinkStatusRead(MiimManager::OperationHandle handle,
@@ -771,12 +942,36 @@ void EthernetClass::handlePhyId1Read(MiimManager::OperationHandle handle,
     ethernet->handlePhyId1Read(handle, result, value);
 }
 
+void EthernetClass::handlePhyScanRead(MiimManager::OperationHandle handle,
+                                      MiimManager::OperationResult result,
+                                      uint16_t value, void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->handlePhyScanRead(handle, result, value);
+}
+
 void EthernetClass::handlePhyId2Read(MiimManager::OperationHandle handle,
                                      MiimManager::OperationResult result,
                                      uint16_t value, void *context) {
   EthernetClass *ethernet = static_cast<EthernetClass *>(context);
   if (ethernet != nullptr)
     ethernet->handlePhyId2Read(handle, result, value);
+}
+
+void EthernetClass::handlePhyInterruptEnableWrite(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value, void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->handlePhyInterruptEnableWrite(handle, result, value);
+}
+
+void EthernetClass::handlePhyInterruptStatusRead(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value, void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->handlePhyInterruptStatusRead(handle, result, value);
 }
 
 void EthernetClass::handleLinkStatusRead(MiimManager::OperationHandle handle,
@@ -812,8 +1007,14 @@ void EthernetClass::handleLinkPartnerAbilityRead(
 }
 
 void EthernetClass::handlePhyInterrupt() {
-  if (phyInterruptOwner != nullptr)
-    phyInterruptOwner->requestLinkRefreshFromIsr();
+  if (phyInterruptOwner != nullptr && phyInterruptOwner->_phy != nullptr)
+    phyInterruptOwner->_phy->notifyInterruptFromIsr();
+}
+
+void EthernetClass::handlePhyInterruptCallback(void *context) {
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet != nullptr)
+    ethernet->requestLinkRefreshFromIsr();
 }
 
 bool EthernetClass::frameAvailable(uint16_t *length) {

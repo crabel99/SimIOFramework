@@ -198,6 +198,16 @@ public:
                                   uint16_t *value = nullptr) const;
 
   /**
+   * @brief Inspect the PHY address associated with an operation.
+   *
+   * For scans, this is the current scan address while pending and the address
+   * that produced the completed scan result. This lets discovery code bind the
+   * selected PHY address without changing the callback ABI.
+   */
+  OperationResult operationPhyAddress(OperationHandle handle,
+                                      uint8_t *phyAddress) const;
+
+  /**
    * @brief Release a completed operation slot.
    *
    * Releasing a queued or active operation returns `ResultBusy`; use `abort()`

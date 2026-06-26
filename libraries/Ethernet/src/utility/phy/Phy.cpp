@@ -54,6 +54,14 @@ uint16_t encodeAutoNegotiationAbility(
 }
 } // namespace
 
+bool EthernetPhy::setAddress(uint8_t address) {
+  if (address != BROADCAST_ADDRESS && address > 31)
+    return false;
+
+  _address = address;
+  return true;
+}
+
 bool EthernetPhy::begin() {
   if (_address == BROADCAST_ADDRESS) {
     return detect();
@@ -539,6 +547,47 @@ bool EthernetPhy::resolveVendorLinkMode(uint16_t registerValue,
     *duplex = EthernetPhyDuplexUnknown;
   }
   return false;
+}
+
+bool EthernetPhy::interruptControlStatusRegister(
+    uint8_t *registerAddress) const {
+  (void)registerAddress;
+  return false;
+}
+
+bool EthernetPhy::encodeInterruptEnable(uint16_t events,
+                                        uint16_t *registerValue) const {
+  (void)events;
+  if (registerValue != nullptr) {
+    *registerValue = 0;
+  }
+  return false;
+}
+
+bool EthernetPhy::decodeInterruptStatus(uint16_t registerValue,
+                                        uint16_t *events) const {
+  (void)registerValue;
+  if (events != nullptr) {
+    *events = 0;
+  }
+  return false;
+}
+
+void EthernetPhy::setInterruptCallback(InterruptCallback callback,
+                                       void *context) {
+  _interruptCallback = callback;
+  _interruptCallbackContext = context;
+}
+
+void EthernetPhy::clearInterruptCallback() {
+  _interruptCallback = nullptr;
+  _interruptCallbackContext = nullptr;
+}
+
+void EthernetPhy::notifyInterruptFromIsr() {
+  if (_interruptCallback != nullptr) {
+    _interruptCallback(_interruptCallbackContext);
+  }
 }
 
 bool EthernetPhy::linkUp() const {

@@ -175,6 +175,75 @@ bool KSZ8091Phy::resolveVendorLinkMode(uint16_t registerValue,
          *duplex != EthernetPhyDuplexUnknown;
 }
 
+bool KSZ8091Phy::interruptControlStatusRegister(
+    uint8_t *registerAddress) const {
+  if (registerAddress == nullptr) {
+    return false;
+  }
+
+  *registerAddress = INTERRUPT_CONTROL_STATUS_REGISTER;
+  return true;
+}
+
+bool KSZ8091Phy::encodeInterruptEnable(uint16_t events,
+                                       uint16_t *registerValue) const {
+  if (registerValue == nullptr) {
+    return false;
+  }
+
+  uint16_t mask = 0;
+  if ((events & EthernetPhyInterruptLinkUp) != 0) {
+    mask |= InterruptLinkUp;
+  }
+  if ((events & EthernetPhyInterruptLinkDown) != 0) {
+    mask |= InterruptLinkDown;
+  }
+  if ((events & EthernetPhyInterruptAutoNegotiationComplete) != 0) {
+    mask |= InterruptLinkPartnerAcknowledge;
+  }
+  if ((events & EthernetPhyInterruptRemoteFault) != 0) {
+    mask |= InterruptRemoteFault;
+  }
+  if ((events & EthernetPhyInterruptError) != 0) {
+    mask |= InterruptParallelDetectFault | InterruptReceiveError |
+            InterruptJabber;
+  }
+
+  *registerValue =
+      static_cast<uint16_t>((mask & kInterruptStatusMask)
+                            << kInterruptEnableShift);
+  return mask != 0;
+}
+
+bool KSZ8091Phy::decodeInterruptStatus(uint16_t registerValue,
+                                       uint16_t *events) const {
+  if (events == nullptr) {
+    return false;
+  }
+
+  const uint16_t status = registerValue & kInterruptStatusMask;
+  uint16_t decoded = 0;
+  if ((status & InterruptLinkUp) != 0) {
+    decoded |= EthernetPhyInterruptLinkUp;
+  }
+  if ((status & InterruptLinkDown) != 0) {
+    decoded |= EthernetPhyInterruptLinkDown;
+  }
+  if ((status & InterruptLinkPartnerAcknowledge) != 0) {
+    decoded |= EthernetPhyInterruptAutoNegotiationComplete;
+  }
+  if ((status & InterruptRemoteFault) != 0) {
+    decoded |= EthernetPhyInterruptRemoteFault;
+  }
+  if ((status & (InterruptParallelDetectFault | InterruptReceiveError |
+                 InterruptJabber)) != 0) {
+    decoded |= EthernetPhyInterruptError;
+  }
+
+  *events = decoded;
+  return true;
+}
+
 EthernetPhyLinkSpeed KSZ8091Phy::linkSpeed() const {
   OperationMode mode = OperationModeReserved;
 

@@ -145,6 +145,11 @@ public:
   bool resolveVendorLinkMode(uint16_t registerValue,
                              EthernetPhyLinkSpeed *speed,
                              EthernetPhyDuplex *duplex) const override;
+  bool interruptControlStatusRegister(uint8_t *registerAddress) const override;
+  bool encodeInterruptEnable(uint16_t events,
+                             uint16_t *registerValue) const override;
+  bool decodeInterruptStatus(uint16_t registerValue,
+                             uint16_t *events) const override;
   EthernetPhyLinkSpeed linkSpeed() const override;
   EthernetPhyDuplex duplex() const override;
   bool configureInterrupts(uint16_t mask) override;

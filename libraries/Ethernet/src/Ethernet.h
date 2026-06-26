@@ -52,14 +52,20 @@ enum EthernetLinkStatus {
 enum EthernetPhySetupState {
   /// No runtime PHY setup has been requested or the state was reset.
   PhySetupIdle = 0,
+  /// PHY address scan has been queued or is active.
+  PhySetupScanning,
   /// PHY ID1 read has been queued or is active.
   PhySetupReadingId1,
   /// PHY ID2 read has been queued or is active.
   PhySetupReadingId2,
+  /// PHY interrupt mask write has been queued or is active.
+  PhySetupConfiguringInterrupts,
   /// PHY ID was read and accepted by the selected PHY object.
   PhySetupVerified,
   /// PHY ID was readable but rejected by the selected PHY object.
   PhySetupInvalidId,
+  /// Address scan completed without finding a readable PHY ID1 register.
+  PhySetupScanNotFound,
   /// PHY setup failed because a management operation failed or could not queue.
   PhySetupFailed,
 };
@@ -255,9 +261,10 @@ public:
   /**
    * @brief Queue asynchronous verification of the selected PHY address.
    *
-   * The setup flow reads PHY ID1 and ID2 through `MiimManager`, then asks the
-   * selected PHY object whether the decoded ID is acceptable. It does not scan,
-   * reset, or configure the PHY in this slice.
+   * If the selected PHY uses `EthernetPhy::BROADCAST_ADDRESS`, setup first
+   * scans Clause-22 addresses 0..31 for a readable PHY ID1 register and binds
+   * the discovered address to the PHY object. It then reads PHY ID2 and asks
+   * the selected PHY object whether the decoded ID is acceptable.
    */
   bool requestPhySetup();
 
@@ -432,16 +439,22 @@ private:
   bool _linkRefreshPending;
   EthernetLinkRefreshState _linkRefreshState;
   volatile bool _linkRefreshRequested;
+  volatile bool _phyInterruptStatusRequested;
+  bool _phyInterruptStatusPending;
   bool _phyInterruptAttached;
   uint32_t _phyInterruptPin;
   uint32_t _phyInterruptMode;
   uint16_t _phyId1;
+  uint16_t _phyInterruptEvents;
   uint16_t _linkAdvertisement;
 
   bool updateCachedLink(EthernetLinkStatus status, EthernetPhyLinkSpeed speed,
                         EthernetPhyDuplex duplex);
   bool queuePhyId1Read();
   bool queuePhyId2Read();
+  bool queuePhyScan();
+  bool queuePhyInterruptEnableWrite();
+  bool queuePhyInterruptStatusRead();
   bool queueLinkStatusRead();
   bool queueVendorModeRead();
   bool queueLinkAdvertisementRead();
@@ -449,8 +462,16 @@ private:
   void handleGmacEvents(gmac::EventMask events);
   void handlePhyId1Read(MiimManager::OperationHandle handle,
                         MiimManager::OperationResult result, uint16_t value);
+  void handlePhyScanRead(MiimManager::OperationHandle handle,
+                         MiimManager::OperationResult result, uint16_t value);
   void handlePhyId2Read(MiimManager::OperationHandle handle,
                         MiimManager::OperationResult result, uint16_t value);
+  void handlePhyInterruptEnableWrite(MiimManager::OperationHandle handle,
+                                     MiimManager::OperationResult result,
+                                     uint16_t value);
+  void handlePhyInterruptStatusRead(MiimManager::OperationHandle handle,
+                                    MiimManager::OperationResult result,
+                                    uint16_t value);
   void handleLinkStatusRead(MiimManager::OperationHandle handle,
                             MiimManager::OperationResult result,
                             uint16_t value);
@@ -467,9 +488,18 @@ private:
   static void handlePhyId1Read(MiimManager::OperationHandle handle,
                                MiimManager::OperationResult result,
                                uint16_t value, void *context);
+  static void handlePhyScanRead(MiimManager::OperationHandle handle,
+                                MiimManager::OperationResult result,
+                                uint16_t value, void *context);
   static void handlePhyId2Read(MiimManager::OperationHandle handle,
                                MiimManager::OperationResult result,
                                uint16_t value, void *context);
+  static void handlePhyInterruptEnableWrite(
+      MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+      uint16_t value, void *context);
+  static void handlePhyInterruptStatusRead(
+      MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+      uint16_t value, void *context);
   static void handleLinkStatusRead(MiimManager::OperationHandle handle,
                                    MiimManager::OperationResult result,
                                    uint16_t value, void *context);
@@ -483,6 +513,7 @@ private:
                                            MiimManager::OperationResult result,
                                            uint16_t value, void *context);
   static void handlePhyInterrupt();
+  static void handlePhyInterruptCallback(void *context);
 };
 
 extern EthernetClass Ethernet;

@@ -92,6 +92,19 @@ MiimManager::operationResult(OperationHandle handle, uint16_t *value) const {
   return operation.result;
 }
 
+MiimManager::OperationResult
+MiimManager::operationPhyAddress(OperationHandle handle,
+                                 uint8_t *phyAddress) const {
+  const int8_t index = findOperation(handle);
+  if (index < 0)
+    return ResultInvalidHandle;
+
+  if (phyAddress != nullptr)
+    *phyAddress = _operations[index].phyAddress;
+
+  return _operations[index].result;
+}
+
 MiimManager::OperationResult MiimManager::release(OperationHandle handle) {
   const int8_t index = findOperation(handle);
   if (index < 0)
