@@ -177,6 +177,12 @@ public:
   EthernetClass(const uint8_t mac[6], EthernetPhy &phy);
 
   /**
+   * @brief Release interrupt and deferred-service registrations owned by this
+   *        coordinator.
+   */
+  ~EthernetClass();
+
+  /**
    * @brief Return whether the SAME5x GMAC hardware is available.
    */
   EthernetHardwareStatus hardwareStatus() const;
@@ -449,12 +455,14 @@ private:
   uint16_t _linkAdvertisement;
 
   bool ensurePhyPendSvServiceRegistered();
+  void clearPhyInterruptPin(bool disablePhyInterrupts);
   bool updateCachedLink(EthernetLinkStatus status, EthernetPhyLinkSpeed speed,
                         EthernetPhyDuplex duplex);
   bool queuePhyId1Read();
   bool queuePhyId2Read();
   bool queuePhyScan();
   bool queuePhyInterruptEnableWrite();
+  bool queuePhyInterruptDisableWrite();
   bool queuePhyInterruptStatusRead();
   bool queueLinkStatusRead();
   bool queueVendorModeRead();

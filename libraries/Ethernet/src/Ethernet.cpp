@@ -287,6 +287,11 @@ EthernetClass::EthernetClass(const uint8_t mac[6], EthernetPhy &phy)
   _miim.setPhyAddress(phy.address());
 }
 
+EthernetClass::~EthernetClass() {
+  clearPhyInterruptPin(false);
+  PendSV::instance().clearService(PendSVChannels::Phy);
+}
+
 EthernetHardwareStatus EthernetClass::hardwareStatus() const {
   return gmac::available() ? EthernetGmac : EthernetNoHardware;
 }
@@ -410,7 +415,7 @@ void EthernetClass::requestLinkRefreshFromIsr() {
 }
 
 bool EthernetClass::setPhyInterruptPin(uint32_t pin, uint32_t mode) {
-  clearPhyInterruptPin();
+  clearPhyInterruptPin(false);
   if (_phy == nullptr)
     return false;
 
@@ -448,6 +453,10 @@ bool EthernetClass::setPhyInterruptPin(uint32_t pin, uint32_t mode) {
 }
 
 void EthernetClass::clearPhyInterruptPin() {
+  clearPhyInterruptPin(true);
+}
+
+void EthernetClass::clearPhyInterruptPin(bool disablePhyInterrupts) {
   if (_phyInterruptAttached) {
     const int32_t interruptNumber =
         static_cast<int32_t>(digitalPinToInterrupt(_phyInterruptPin));
@@ -460,6 +469,13 @@ void EthernetClass::clearPhyInterruptPin() {
 
   if (_phy != nullptr)
     _phy->clearInterruptCallback();
+
+  if (disablePhyInterrupts && _phyInterruptAttached &&
+      _phySetupState == PhySetupVerified && !_phySetupPending &&
+      queuePhyInterruptDisableWrite()) {
+    _phySetupPending = true;
+    gmac::scheduleEvent(gmac::EventManagementComplete);
+  }
 
   _phyInterruptAttached = false;
 }
@@ -613,6 +629,22 @@ bool EthernetClass::queuePhyInterruptEnableWrite() {
 
   const bool queued =
       _miim.write(_phy->address(), registerAddress, registerValue,
+                  EthernetClass::handlePhyInterruptEnableWrite, this) !=
+      MiimManager::InvalidOperationHandle;
+  if (queued)
+    _phySetupState = PhySetupConfiguringInterrupts;
+  return queued;
+}
+
+bool EthernetClass::queuePhyInterruptDisableWrite() {
+  uint8_t registerAddress = 0;
+  if (_phy == nullptr ||
+      !_phy->interruptControlStatusRegister(&registerAddress)) {
+    return false;
+  }
+
+  const bool queued =
+      _miim.write(_phy->address(), registerAddress, 0,
                   EthernetClass::handlePhyInterruptEnableWrite, this) !=
       MiimManager::InvalidOperationHandle;
   if (queued)
