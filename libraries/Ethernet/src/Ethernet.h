@@ -272,7 +272,7 @@ public:
    * @brief Schedule a deferred link refresh from an interrupt.
    *
    * Safe for the PHY interrupt path; actual MIIM work happens later through the
-   * GMAC/PendSV event path.
+   * PHY PendSV service and GMAC management-complete events.
    */
   void requestLinkRefreshFromIsr();
 
@@ -448,6 +448,7 @@ private:
   uint16_t _phyInterruptEvents;
   uint16_t _linkAdvertisement;
 
+  bool ensurePhyPendSvServiceRegistered();
   bool updateCachedLink(EthernetLinkStatus status, EthernetPhyLinkSpeed speed,
                         EthernetPhyDuplex duplex);
   bool queuePhyId1Read();
@@ -472,6 +473,10 @@ private:
   void handlePhyInterruptStatusRead(MiimManager::OperationHandle handle,
                                     MiimManager::OperationResult result,
                                     uint16_t value);
+  bool handlePhyInterruptEvents(uint16_t events);
+  bool handlePhyLinkDownInterrupt();
+  bool handlePhyLinkUpInterrupt();
+  bool handlePhyAutoNegotiationCompleteInterrupt();
   void handleLinkStatusRead(MiimManager::OperationHandle handle,
                             MiimManager::OperationResult result,
                             uint16_t value);
@@ -512,6 +517,7 @@ private:
   static void handleLinkPartnerAbilityRead(MiimManager::OperationHandle handle,
                                            MiimManager::OperationResult result,
                                            uint16_t value, void *context);
+  static void handlePhyPendSv(uint8_t serviceId, void *context);
   static void handlePhyInterrupt();
   static void handlePhyInterruptCallback(void *context);
 };

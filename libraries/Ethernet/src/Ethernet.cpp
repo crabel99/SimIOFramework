@@ -406,7 +406,7 @@ void EthernetClass::requestLinkRefreshFromIsr() {
   } else {
     _linkRefreshRequested = true;
   }
-  gmac::scheduleEvent(gmac::EventManagementComplete);
+  PendSV::instance().setPending(PendSVChannels::Phy);
 }
 
 bool EthernetClass::setPhyInterruptPin(uint32_t pin, uint32_t mode) {
@@ -420,6 +420,9 @@ bool EthernetClass::setPhyInterruptPin(uint32_t pin, uint32_t mode) {
   const int32_t interruptNumber =
       static_cast<int32_t>(digitalPinToInterrupt(pin));
   if (interruptNumber == NOT_AN_INTERRUPT)
+    return false;
+
+  if (!ensurePhyPendSvServiceRegistered())
     return false;
 
   pinMode(pin, INPUT_PULLUP);
@@ -463,6 +466,12 @@ void EthernetClass::clearPhyInterruptPin() {
 
 bool EthernetClass::service() {
   return _miim.service();
+}
+
+bool EthernetClass::ensurePhyPendSvServiceRegistered() {
+  return PendSV::instance().registerService(PendSVChannels::Phy,
+                                            EthernetClass::handlePhyPendSv,
+                                            this);
 }
 
 void EthernetClass::configureReceiveOptions(
@@ -685,17 +694,6 @@ void EthernetClass::handleGmacEvents(gmac::EventMask events) {
     exitCritical(primask);
   }
 
-  if (_phyInterruptStatusRequested && !_phyInterruptStatusPending) {
-    _phyInterruptStatusRequested = false;
-    if (!queuePhyInterruptStatusRead())
-      _linkRefreshRequested = true;
-  }
-
-  if (_linkRefreshRequested && !_linkRefreshPending) {
-    _linkRefreshRequested = false;
-    requestLinkRefresh();
-  }
-
   if ((events & gmac::EventManagementComplete) != 0)
     service();
 }
@@ -792,16 +790,57 @@ void EthernetClass::handlePhyInterruptStatusRead(
   _miim.release(handle);
   _phyInterruptStatusPending = false;
   _phyInterruptEvents = 0;
+  bool handled = false;
 
   if (result == MiimManager::ResultOk && _phy != nullptr) {
-    _phy->decodeInterruptStatus(value, &_phyInterruptEvents);
+    handled = _phy->decodeInterruptStatus(value, &_phyInterruptEvents) &&
+              handlePhyInterruptEvents(_phyInterruptEvents);
   }
 
-  if (!_linkRefreshPending) {
+  if (!handled && !_linkRefreshPending) {
     requestLinkRefresh();
-  } else {
+  } else if (!handled) {
     _linkRefreshRequested = true;
   }
+}
+
+bool EthernetClass::handlePhyInterruptEvents(uint16_t events) {
+  bool handled = false;
+
+  if ((events & EthernetPhyInterruptLinkDown) != 0)
+    handled = handlePhyLinkDownInterrupt() || handled;
+
+  if ((events & EthernetPhyInterruptLinkUp) != 0)
+    handled = handlePhyLinkUpInterrupt() || handled;
+
+  if ((events & EthernetPhyInterruptAutoNegotiationComplete) != 0)
+    handled = handlePhyAutoNegotiationCompleteInterrupt() || handled;
+
+  return handled;
+}
+
+bool EthernetClass::handlePhyLinkDownInterrupt() {
+  _linkRefreshPending = false;
+  _linkRefreshRequested = false;
+  _linkRefreshState = LinkRefreshLinkDown;
+  updateCachedLink(LinkOFF, EthernetPhySpeedUnknown, EthernetPhyDuplexUnknown);
+  return true;
+}
+
+bool EthernetClass::handlePhyLinkUpInterrupt() {
+  if (!_linkRefreshPending)
+    return requestLinkRefresh();
+
+  _linkRefreshRequested = true;
+  return true;
+}
+
+bool EthernetClass::handlePhyAutoNegotiationCompleteInterrupt() {
+  if (!_linkRefreshPending)
+    return requestLinkRefresh();
+
+  _linkRefreshRequested = true;
+  return true;
 }
 
 void EthernetClass::handleLinkStatusRead(MiimManager::OperationHandle handle,
@@ -1006,6 +1045,27 @@ void EthernetClass::handleLinkPartnerAbilityRead(
     ethernet->handleLinkPartnerAbilityRead(handle, result, value);
 }
 
+void EthernetClass::handlePhyPendSv(uint8_t serviceId, void *context) {
+  (void)serviceId;
+  EthernetClass *ethernet = static_cast<EthernetClass *>(context);
+  if (ethernet == nullptr)
+    return;
+
+  if (ethernet->_phyInterruptStatusRequested &&
+      !ethernet->_phyInterruptStatusPending) {
+    ethernet->_phyInterruptStatusRequested = false;
+    if (!ethernet->queuePhyInterruptStatusRead())
+      ethernet->_linkRefreshRequested = true;
+  }
+
+  if (ethernet->_linkRefreshRequested && !ethernet->_linkRefreshPending) {
+    ethernet->_linkRefreshRequested = false;
+    ethernet->requestLinkRefresh();
+  }
+
+  ethernet->service();
+}
+
 void EthernetClass::handlePhyInterrupt() {
   if (phyInterruptOwner != nullptr && phyInterruptOwner->_phy != nullptr)
     phyInterruptOwner->_phy->notifyInterruptFromIsr();
@@ -1082,6 +1142,9 @@ int EthernetClass::begin() {
     return 0;
 
   if (!gmac::registerEventCallback(EthernetClass::handleGmacEvents, this))
+    return 0;
+
+  if (!ensurePhyPendSvServiceRegistered())
     return 0;
 
   gmac::enableFrameIo();
