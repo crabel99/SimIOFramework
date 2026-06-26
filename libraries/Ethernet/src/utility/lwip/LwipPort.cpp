@@ -63,6 +63,62 @@ bool EthernetLwipPort::carrierUp() const {
   return _netif != nullptr && _netif->carrierUp();
 }
 
+EthernetSocket *EthernetLwipPort::acquireClientSocket() { return nullptr; }
+
+EthernetSocket *EthernetLwipPort::acquireSecureClientSocket() {
+  return nullptr;
+}
+
+void EthernetLwipPort::releaseSocket(EthernetSocket *) {}
+
+bool EthernetLwipPort::tlsAvailable() const { return false; }
+
+bool EthernetLwipPort::beginServer(uint16_t) { return false; }
+
+void EthernetLwipPort::stopServer(uint16_t) {}
+
+EthernetSocket *EthernetLwipPort::acceptClientSocket(uint16_t) {
+  return nullptr;
+}
+
+size_t EthernetLwipPort::writeServer(uint16_t, uint8_t) { return 0; }
+
+size_t EthernetLwipPort::writeServer(uint16_t, const uint8_t *, size_t) {
+  return 0;
+}
+
+uint8_t EthernetLwipPort::beginUdp(uint16_t) { return 0; }
+
+uint8_t EthernetLwipPort::beginUdpMulticast(IPAddress, uint16_t) { return 0; }
+
+void EthernetLwipPort::stopUdp() {}
+
+int EthernetLwipPort::beginUdpPacket(IPAddress, uint16_t) { return 0; }
+
+int EthernetLwipPort::beginUdpPacket(const char *, uint16_t) { return 0; }
+
+int EthernetLwipPort::endUdpPacket() { return 0; }
+
+size_t EthernetLwipPort::writeUdp(uint8_t) { return 0; }
+
+size_t EthernetLwipPort::writeUdp(const uint8_t *, size_t) { return 0; }
+
+int EthernetLwipPort::parseUdpPacket() { return 0; }
+
+int EthernetLwipPort::availableUdp() { return 0; }
+
+int EthernetLwipPort::readUdp() { return -1; }
+
+int EthernetLwipPort::readUdp(uint8_t *, size_t) { return 0; }
+
+int EthernetLwipPort::peekUdp() { return -1; }
+
+void EthernetLwipPort::flushUdp() {}
+
+IPAddress EthernetLwipPort::remoteUdpIP() { return IPAddress(); }
+
+uint16_t EthernetLwipPort::remoteUdpPort() { return 0; }
+
 EthernetLwipErr
 EthernetLwipPort::mapOutputResult(EthernetNetifOutputResult result) {
   switch (result) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <utility/netif/Netif.h>
+#include <utility/transport/TransportProvider.h>
 
 enum EthernetLwipErr {
   EthernetLwipErrOk = 0,
@@ -10,7 +11,7 @@ enum EthernetLwipErr {
   EthernetLwipErrWouldBlock,
 };
 
-class EthernetLwipPort {
+class EthernetLwipPort : public TransportProvider {
 public:
   using InputCallback = EthernetLwipErr (*)(EthernetPacket *packet,
                                             void *context);
@@ -36,6 +37,35 @@ public:
   bool carrierUp() const;
 
   static EthernetLwipErr mapOutputResult(EthernetNetifOutputResult result);
+
+  EthernetSocket *acquireClientSocket() override;
+  EthernetSocket *acquireSecureClientSocket() override;
+  void releaseSocket(EthernetSocket *socket) override;
+  bool tlsAvailable() const override;
+
+  bool beginServer(uint16_t port) override;
+  void stopServer(uint16_t port) override;
+  EthernetSocket *acceptClientSocket(uint16_t port) override;
+  size_t writeServer(uint16_t port, uint8_t value) override;
+  size_t writeServer(uint16_t port, const uint8_t *buffer,
+                     size_t size) override;
+
+  uint8_t beginUdp(uint16_t port) override;
+  uint8_t beginUdpMulticast(IPAddress ip, uint16_t port) override;
+  void stopUdp() override;
+  int beginUdpPacket(IPAddress ip, uint16_t port) override;
+  int beginUdpPacket(const char *host, uint16_t port) override;
+  int endUdpPacket() override;
+  size_t writeUdp(uint8_t value) override;
+  size_t writeUdp(const uint8_t *buffer, size_t size) override;
+  int parseUdpPacket() override;
+  int availableUdp() override;
+  int readUdp() override;
+  int readUdp(uint8_t *buffer, size_t size) override;
+  int peekUdp() override;
+  void flushUdp() override;
+  IPAddress remoteUdpIP() override;
+  uint16_t remoteUdpPort() override;
 
 private:
   EthernetNetif *_netif;
