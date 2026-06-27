@@ -5,10 +5,14 @@ EthernetUDP::EthernetUDP() : _provider(nullptr) {}
 EthernetUDP::EthernetUDP(TransportProvider &provider) : _provider(&provider) {}
 
 void EthernetUDP::setProvider(TransportProvider &provider) {
+  stop();
   _provider = &provider;
 }
 
-void EthernetUDP::clearProvider() { _provider = nullptr; }
+void EthernetUDP::clearProvider() {
+  stop();
+  _provider = nullptr;
+}
 
 uint8_t EthernetUDP::begin(uint16_t port) {
   if (_provider == nullptr)

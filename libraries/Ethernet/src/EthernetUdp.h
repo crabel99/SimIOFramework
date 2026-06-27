@@ -16,7 +16,14 @@ public:
   EthernetUDP();
   explicit EthernetUDP(TransportProvider &provider);
 
+  /**
+   * @brief Replace the provider after stopping the current UDP endpoint.
+   */
   void setProvider(TransportProvider &provider);
+
+  /**
+   * @brief Stop the current UDP endpoint and fail closed.
+   */
   void clearProvider();
 
   /**
@@ -28,6 +35,10 @@ public:
 
   /**
    * @brief Delegate one outbound UDP packet lifecycle to the provider.
+   *
+   * The provider owns packet buffering, DNS policy, multicast membership, and
+   * receive state. This facade validates Arduino API inputs and fails closed
+   * when no provider is attached.
    */
   int beginPacket(IPAddress ip, uint16_t port) override;
   int beginPacket(const char *host, uint16_t port) override;

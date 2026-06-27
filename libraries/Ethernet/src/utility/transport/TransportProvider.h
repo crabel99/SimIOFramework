@@ -11,6 +11,12 @@
  * provider owns protocol-control blocks, listener state, UDP packet state, DNS
  * resolution, and TLS-capable socket creation. Neither side may reach down into
  * GMAC descriptors, PHY state, MIIM operations, or hardware registers.
+ *
+ * All operations must be bounded and fail closed. Provider-acquired TCP/TLS
+ * sockets remain provider-owned and are released by the public facade through
+ * `releaseSocket()`. Server listeners are independent from accepted clients:
+ * stopping a listener must not invalidate an accepted client socket that has
+ * already been handed to `EthernetClient`.
  */
 #pragma once
 
@@ -36,6 +42,9 @@ public:
 
   /**
    * @brief Delegate Arduino stream operations to the provider-owned socket.
+   *
+   * Stream calls must return a fail-closed value when disconnected or invalid
+   * rather than blocking for carrier, connection progress, or receive data.
    */
   virtual size_t write(uint8_t value) = 0;
   virtual size_t write(const uint8_t *buffer, size_t size) = 0;
@@ -66,6 +75,9 @@ public:
 
   /**
    * @brief Server/listener operations keyed by Arduino server port.
+   *
+   * Accepted sockets are returned to public `EthernetClient` objects, which own
+   * release responsibility after acceptance.
    */
   virtual bool beginServer(uint16_t port) = 0;
   virtual void stopServer(uint16_t port) = 0;
@@ -76,6 +88,11 @@ public:
 
   /**
    * @brief UDP endpoint and packet operations.
+   *
+   * The provider owns UDP endpoint binding, multicast membership, outbound
+   * packet buffering, receive buffering, and remote endpoint state. Packet
+   * writes must be bounded by the backend buffer and report the accepted byte
+   * count without overrunning.
    */
   virtual uint8_t beginUdp(uint16_t port) = 0;
   virtual uint8_t beginUdpMulticast(IPAddress ip, uint16_t port) = 0;

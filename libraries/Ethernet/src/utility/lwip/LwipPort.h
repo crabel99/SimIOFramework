@@ -19,16 +19,7 @@
 #include <utility/network/NetworkConfig.h>
 #include <utility/transport/TransportProvider.h>
 
-#if defined(__has_include)
-#if __has_include(<lwip/netif.h>)
-#define SIMIO_ETHERNET_HAS_LWIP_CORE 1
 #include <lwip/netif.h>
-#endif
-#endif
-
-#ifndef SIMIO_ETHERNET_HAS_LWIP_CORE
-#define SIMIO_ETHERNET_HAS_LWIP_CORE 0
-#endif
 
 enum EthernetLwipErr {
   EthernetLwipErrOk = 0,
@@ -42,6 +33,13 @@ class LwipUdpBackend {
 public:
   virtual ~LwipUdpBackend() = default;
 
+  /**
+   * @brief Bind, send, receive, and release one provider-owned UDP endpoint.
+   *
+   * Implementations own the UDP PCB/socket state. Calls must be bounded and
+   * fail closed when the endpoint is not active, the packet is invalid, or DNS
+   * cannot complete immediately.
+   */
   virtual uint8_t begin(uint16_t port) = 0;
   virtual uint8_t beginMulticast(IPAddress ip, uint16_t port) = 0;
   virtual void stop() = 0;
@@ -103,14 +101,45 @@ public:
   void setLinkChangeCallback(LinkChangeCallback callback,
                              void *context = nullptr);
   void clearLinkChangeCallback();
+
+  /**
+   * @brief Store and, when started, apply DHCP/static lwIP addressing.
+   *
+   * DHCP application starts lwIP's DHCP client and returns immediately; callers
+   * observe lease progress through `dhcpActive()`, `dhcpAddressSupplied()`, and
+   * `addressAssigned()`.
+   */
   bool configureNetwork(const NetworkConfig &config);
+
+  /**
+   * @brief Return true when DHCP mode has attached an active lwIP DHCP client.
+   */
   bool dhcpActive() const;
+
+  /**
+   * @brief Return true when the active DHCP client has supplied an address.
+   */
   bool dhcpAddressSupplied() const;
+
+  /**
+   * @brief Return true when lwIP has a non-zero local IPv4 address.
+   */
   bool addressAssigned() const;
+
+  /**
+   * @brief Return current lwIP IPv4 status values or zero when unavailable.
+   */
   IPAddress localIP() const;
   IPAddress gatewayIP() const;
   IPAddress subnetMask() const;
   IPAddress dnsServerIP() const;
+
+  /**
+   * @brief Attach concrete TCP and UDP backend implementations.
+   *
+   * Changing a backend releases owned client/listener/endpoint state so public
+   * objects fail closed instead of retaining stale provider handles.
+   */
   void setTcpBackend(LwipTcpSocketBackend &backend);
   void clearTcpBackend();
   void setUdpBackend(LwipUdpBackend &backend);
@@ -136,6 +165,9 @@ public:
   void releaseSocket(EthernetSocket *socket) override;
   bool tlsAvailable() const override;
 
+  /**
+   * @brief TCP listener operations delegated to the attached TCP backend.
+   */
   bool beginServer(uint16_t port) override;
   void stopServer(uint16_t port) override;
   EthernetSocket *acceptClientSocket(uint16_t port) override;
@@ -143,6 +175,9 @@ public:
   size_t writeServer(uint16_t port, const uint8_t *buffer,
                      size_t size) override;
 
+  /**
+   * @brief UDP endpoint and packet operations delegated to the UDP backend.
+   */
   uint8_t beginUdp(uint16_t port) override;
   uint8_t beginUdpMulticast(IPAddress ip, uint16_t port) override;
   void stopUdp() override;
@@ -173,18 +208,12 @@ private:
   LwipTcpSocket _secureClientSocket;
   LwipTcpSocket _acceptedSocket;
   LwipUdpBackend *_udpBackend = nullptr;
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
-  struct netif _lwipNetif;
-  bool _lwipInitialized = false;
-  bool _lwipNetifAdded = false;
   uint8_t _outputBuffer[1536];
-#endif
 
   bool handleInput(EthernetPacket *packet);
   void handleLinkChange(bool carrierUp, EthernetFrameLinkStatus status,
                         EthernetFrameLinkSpeed speed,
                         EthernetFrameDuplex duplex);
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
   bool beginLwipNetif();
   void endLwipNetif();
   bool applyNetworkConfigToLwip();
@@ -192,7 +221,6 @@ private:
   EthernetLwipErr outputPbuf(struct pbuf *p);
   static err_t lwipNetifInit(struct netif *netif);
   static err_t lwipLinkOutput(struct netif *netif, struct pbuf *p);
-#endif
   static bool inputThunk(EthernetPacket *packet, void *context);
   static void linkThunk(bool carrierUp, EthernetFrameLinkStatus status,
                         EthernetFrameLinkSpeed speed,

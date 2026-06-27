@@ -32,10 +32,15 @@ public:
    *
    * The call fails closed when no socket/provider exists, carrier is down, or
    * the provider cannot connect. Provider-acquired sockets are released on
-   * failed connect attempts.
+   * failed connect attempts. `stop()`, destruction, and move assignment release
+   * provider-owned sockets exactly once.
    */
   int connect(IPAddress ip, uint16_t port) override;
   int connect(const char *host, uint16_t port) override;
+
+  /**
+   * @brief Delegate stream operations only while the socket reports connected.
+   */
   size_t write(uint8_t value) override;
   size_t write(const uint8_t *buffer, size_t size) override;
   int available() override;
@@ -43,6 +48,10 @@ public:
   int read(uint8_t *buffer, size_t size) override;
   int peek() override;
   void flush() override;
+
+  /**
+   * @brief Stop the socket and release provider-owned handles.
+   */
   void stop() override;
   uint8_t connected() override;
   operator bool() override;

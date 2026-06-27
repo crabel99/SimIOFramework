@@ -1,37 +1,16 @@
-#include "LwipSocketBackend.h"
+#include "LwipTransportBackend.h"
 
 #include <string.h>
 
-#if defined(SIMIO_ETHERNET_ENABLE_LWIP_SOCKETS) &&                                \
-    SIMIO_ETHERNET_ENABLE_LWIP_SOCKETS && defined(__has_include)
-#if __has_include(<lwip/sockets.h>)
-#define SIMIO_ETHERNET_HAS_LWIP_SOCKETS 1
-#endif
-#endif
-
-#ifndef SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-#define SIMIO_ETHERNET_HAS_LWIP_SOCKETS 0
-#endif
-
-#if SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-#include <errno.h>
-#include <lwip/inet.h>
-#include <lwip/netdb.h>
-#include <lwip/sockets.h>
-#endif
-
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
 #include <lwip/dns.h>
 #include <lwip/igmp.h>
 #include <lwip/ip_addr.h>
 #include <lwip/pbuf.h>
 #include <lwip/tcp.h>
 #include <lwip/udp.h>
-#endif
 
 namespace {
 
-constexpr int kInvalidSocket = -1;
 constexpr size_t kTcpBufferSize = 1536;
 constexpr size_t kUdpBufferSize = 1536;
 
@@ -53,67 +32,6 @@ IPAddress hostOrderAddressToIp(uint32_t address) {
                    static_cast<uint8_t>(address & 0xff));
 }
 
-#if SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-bool isWouldBlockError() {
-  return errno == EWOULDBLOCK || errno == EAGAIN || errno == EINPROGRESS;
-}
-
-bool setNonBlocking(int fd) {
-#if defined(FIONBIO)
-  int nonBlocking = 1;
-  return lwip_ioctl(fd, FIONBIO, &nonBlocking) == 0;
-#else
-  (void)fd;
-  return false;
-#endif
-}
-
-sockaddr_in makeSocketAddress(IPAddress ip, uint16_t port) {
-  sockaddr_in address;
-  memset(&address, 0, sizeof(address));
-  address.sin_family = AF_INET;
-  address.sin_port = lwip_htons(port);
-  address.sin_addr.s_addr = lwip_htonl(ipToHostOrderAddress(ip));
-  return address;
-}
-
-IPAddress socketAddressToIp(const sockaddr_in &address) {
-  return hostOrderAddressToIp(lwip_ntohl(address.sin_addr.s_addr));
-}
-
-uint16_t socketAddressToPort(const sockaddr_in &address) {
-  return lwip_ntohs(address.sin_port);
-}
-
-bool resolveHost(const char *host, uint16_t port, sockaddr_in &address) {
-  if (host == nullptr || host[0] == '\0')
-    return false;
-
-  addrinfo hints;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_STREAM;
-
-  char service[6];
-  snprintf(service, sizeof(service), "%u", static_cast<unsigned>(port));
-
-  addrinfo *result = nullptr;
-  if (lwip_getaddrinfo(host, service, &hints, &result) != 0 || result == nullptr)
-    return false;
-
-  bool resolved = false;
-  if (result->ai_addr != nullptr &&
-      result->ai_addrlen >= static_cast<socklen_t>(sizeof(sockaddr_in))) {
-    memcpy(&address, result->ai_addr, sizeof(sockaddr_in));
-    resolved = true;
-  }
-
-  lwip_freeaddrinfo(result);
-  return resolved;
-}
-#endif
-
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
 ip_addr_t makeRawIpAddress(IPAddress ip) {
   ip_addr_t address;
   IP_ADDR4(&address, ip[0], ip[1], ip[2], ip[3]);
@@ -144,15 +62,11 @@ bool resolveRawHostImmediate(const char *host, ip_addr_t &address) {
 
   return dns_gethostbyname(host, &address, ignoreDnsResult, nullptr) == ERR_OK;
 }
-#endif
 
 } // namespace
 
-struct LwipSocketBackend::TcpHandle {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+struct LwipTransportBackend::TcpHandle {
   tcp_pcb *pcb = nullptr;
-#endif
-  int fd = kInvalidSocket;
   bool acquired = false;
   bool connected = false;
   bool connecting = false;
@@ -161,11 +75,8 @@ struct LwipSocketBackend::TcpHandle {
   size_t rxIndex = 0;
 };
 
-struct LwipSocketBackend::UdpState {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+struct LwipTransportBackend::UdpState {
   udp_pcb *pcb = nullptr;
-#endif
-  int fd = kInvalidSocket;
   bool started = false;
   bool packetOpen = false;
   uint8_t tx[kUdpBufferSize];
@@ -178,7 +89,7 @@ struct LwipSocketBackend::UdpState {
 };
 
 namespace {
-void resetTcpReceiveBuffer(LwipSocketBackend::TcpHandle *state) {
+void resetTcpReceiveBuffer(LwipTransportBackend::TcpHandle *state) {
   if (state == nullptr)
     return;
 
@@ -187,7 +98,6 @@ void resetTcpReceiveBuffer(LwipSocketBackend::TcpHandle *state) {
 }
 } // namespace
 
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
 namespace {
 void detachTcpCallbacks(tcp_pcb *pcb) {
   if (pcb == nullptr)
@@ -200,7 +110,7 @@ void detachTcpCallbacks(tcp_pcb *pcb) {
 }
 
 err_t receiveTcpData(void *arg, tcp_pcb *pcb, pbuf *packet, err_t err) {
-  auto *state = static_cast<LwipSocketBackend::TcpHandle *>(arg);
+  auto *state = static_cast<LwipTransportBackend::TcpHandle *>(arg);
   if (state == nullptr || pcb == nullptr)
     return ERR_ARG;
 
@@ -234,12 +144,11 @@ err_t receiveTcpData(void *arg, tcp_pcb *pcb, pbuf *packet, err_t err) {
 
 void handleTcpError(void *arg, err_t err) {
   (void)err;
-  auto *state = static_cast<LwipSocketBackend::TcpHandle *>(arg);
+  auto *state = static_cast<LwipTransportBackend::TcpHandle *>(arg);
   if (state == nullptr)
     return;
 
   state->pcb = nullptr;
-  state->fd = kInvalidSocket;
   state->acquired = false;
   state->connected = false;
   state->connecting = false;
@@ -247,7 +156,7 @@ void handleTcpError(void *arg, err_t err) {
 }
 
 err_t tcpConnected(void *arg, tcp_pcb *pcb, err_t err) {
-  auto *state = static_cast<LwipSocketBackend::TcpHandle *>(arg);
+  auto *state = static_cast<LwipTransportBackend::TcpHandle *>(arg);
   if (state == nullptr || pcb == nullptr)
     return ERR_ARG;
 
@@ -256,7 +165,7 @@ err_t tcpConnected(void *arg, tcp_pcb *pcb, err_t err) {
   return err == ERR_OK ? ERR_OK : err;
 }
 
-void armTcpCallbacks(LwipSocketBackend::TcpHandle *state, tcp_pcb *pcb) {
+void armTcpCallbacks(LwipTransportBackend::TcpHandle *state, tcp_pcb *pcb) {
   if (state == nullptr || pcb == nullptr)
     return;
 
@@ -266,7 +175,7 @@ void armTcpCallbacks(LwipSocketBackend::TcpHandle *state, tcp_pcb *pcb) {
 }
 
 err_t acceptTcpConnection(void *arg, tcp_pcb *newPcb, err_t err) {
-  auto *state = static_cast<LwipSocketBackend::TcpHandle *>(arg);
+  auto *state = static_cast<LwipTransportBackend::TcpHandle *>(arg);
   if (state == nullptr || newPcb == nullptr || err != ERR_OK)
     return ERR_VAL;
 
@@ -276,7 +185,6 @@ err_t acceptTcpConnection(void *arg, tcp_pcb *newPcb, err_t err) {
   }
 
   state->pcb = newPcb;
-  state->fd = kInvalidSocket;
   state->acquired = false;
   state->connected = true;
   state->connecting = false;
@@ -289,7 +197,7 @@ err_t acceptTcpConnection(void *arg, tcp_pcb *newPcb, err_t err) {
 void receiveUdpPacket(void *arg, udp_pcb *pcb, pbuf *packet,
                       const ip_addr_t *address, u16_t port) {
   (void)pcb;
-  auto *state = static_cast<LwipSocketBackend::UdpState *>(arg);
+  auto *state = static_cast<LwipTransportBackend::UdpState *>(arg);
   if (state == nullptr || packet == nullptr) {
     if (packet != nullptr)
       pbuf_free(packet);
@@ -307,14 +215,13 @@ void receiveUdpPacket(void *arg, udp_pcb *pcb, pbuf *packet,
   pbuf_free(packet);
 }
 } // namespace
-#endif
 
-LwipSocketBackend::LwipSocketBackend()
+LwipTransportBackend::LwipTransportBackend()
     : _client(new TcpHandle), _secure(new TcpHandle),
       _accepted(new TcpHandle), _udp(new UdpState), _serverPcb(nullptr),
-      _serverFd(kInvalidSocket), _serverPort(0) {}
+      _serverPort(0) {}
 
-LwipSocketBackend::~LwipSocketBackend() {
+LwipTransportBackend::~LwipTransportBackend() {
   stopServer(_serverPort);
   stop();
   closeTcpHandle(_client);
@@ -326,12 +233,7 @@ LwipSocketBackend::~LwipSocketBackend() {
   delete _udp;
 }
 
-bool LwipSocketBackend::socketsAvailable() const {
-  return SIMIO_ETHERNET_HAS_LWIP_SOCKETS != 0;
-}
-
-void *LwipSocketBackend::acquireClientSocket() {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+void *LwipTransportBackend::acquireClientSocket() {
   if (_client == nullptr || _client->acquired)
     return nullptr;
 
@@ -343,34 +245,17 @@ void *LwipSocketBackend::acquireClientSocket() {
   armTcpCallbacks(_client, _client->pcb);
   _client->acquired = true;
   return _client;
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  if (_client == nullptr || _client->acquired)
-    return nullptr;
-
-  closeTcpHandle(_client);
-  _client->fd = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (_client->fd < 0 || !setNonBlocking(_client->fd)) {
-    closeTcpHandle(_client);
-    return nullptr;
-  }
-
-  _client->acquired = true;
-  return _client;
-#else
-  return nullptr;
-#endif
 }
 
-void *LwipSocketBackend::acquireSecureClientSocket() { return nullptr; }
+void *LwipTransportBackend::acquireSecureClientSocket() { return nullptr; }
 
-void LwipSocketBackend::releaseSocket(void *handle) {
+void LwipTransportBackend::releaseSocket(void *handle) {
   closeTcpHandle(asTcpHandle(handle));
 }
 
-bool LwipSocketBackend::tlsAvailable() const { return false; }
+bool LwipTransportBackend::tlsAvailable() const { return false; }
 
-bool LwipSocketBackend::beginServer(uint16_t port) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+bool LwipTransportBackend::beginServer(uint16_t port) {
   stopServer(_serverPort);
 
   tcp_pcb *pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
@@ -397,37 +282,10 @@ bool LwipSocketBackend::beginServer(uint16_t port) {
   _serverPcb = listenPcb;
   _serverPort = port;
   return true;
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  stopServer(_serverPort);
-
-  _serverFd = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (_serverFd < 0 || !setNonBlocking(_serverFd)) {
-    stopServer(port);
-    return false;
-  }
-
-  int reuse = 1;
-  lwip_setsockopt(_serverFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-
-  sockaddr_in address = makeSocketAddress(IPAddress(0, 0, 0, 0), port);
-  if (lwip_bind(_serverFd, reinterpret_cast<sockaddr *>(&address),
-                sizeof(address)) != 0 ||
-      lwip_listen(_serverFd, 1) != 0) {
-    stopServer(port);
-    return false;
-  }
-
-  _serverPort = port;
-  return true;
-#else
-  (void)port;
-  return false;
-#endif
 }
 
-void LwipSocketBackend::stopServer(uint16_t port) {
+void LwipTransportBackend::stopServer(uint16_t port) {
   (void)port;
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
   if (_serverPcb != nullptr) {
     auto *pcb = static_cast<tcp_pcb *>(_serverPcb);
     tcp_arg(pcb, nullptr);
@@ -435,56 +293,26 @@ void LwipSocketBackend::stopServer(uint16_t port) {
     if (tcp_close(pcb) != ERR_OK)
       tcp_abort(pcb);
   }
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  if (_serverFd >= 0)
-    lwip_close(_serverFd);
-#endif
   _serverPcb = nullptr;
-  _serverFd = kInvalidSocket;
   _serverPort = 0;
-  closeTcpHandle(_accepted);
+  if (_accepted != nullptr && !_accepted->acquired)
+    closeTcpHandle(_accepted);
 }
 
-void *LwipSocketBackend::acceptClientSocket(uint16_t port) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+void *LwipTransportBackend::acceptClientSocket(uint16_t port) {
   if (_accepted == nullptr || _accepted->acquired || _accepted->pcb == nullptr ||
       port != _serverPort)
     return nullptr;
 
   _accepted->acquired = true;
   return _accepted;
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  if (_accepted == nullptr || _accepted->acquired || _serverFd < 0 ||
-      port != _serverPort)
-    return nullptr;
-
-  sockaddr_in address;
-  socklen_t addressLength = sizeof(address);
-  int fd = lwip_accept(_serverFd, reinterpret_cast<sockaddr *>(&address),
-                       &addressLength);
-  if (fd < 0)
-    return nullptr;
-
-  if (!setNonBlocking(fd)) {
-    lwip_close(fd);
-    return nullptr;
-  }
-
-  _accepted->fd = fd;
-  _accepted->acquired = true;
-  _accepted->connected = true;
-  return _accepted;
-#else
-  (void)port;
-  return nullptr;
-#endif
 }
 
-size_t LwipSocketBackend::writeServer(uint16_t port, uint8_t value) {
+size_t LwipTransportBackend::writeServer(uint16_t port, uint8_t value) {
   return writeServer(port, &value, 1);
 }
 
-size_t LwipSocketBackend::writeServer(uint16_t port, const uint8_t *buffer,
+size_t LwipTransportBackend::writeServer(uint16_t port, const uint8_t *buffer,
                                       size_t size) {
   if (port != _serverPort)
     return 0;
@@ -492,20 +320,15 @@ size_t LwipSocketBackend::writeServer(uint16_t port, const uint8_t *buffer,
   return writeServerToAccepted(buffer, size);
 }
 
-bool LwipSocketBackend::carrierUp(void *handle) const {
+bool LwipTransportBackend::carrierUp(void *handle) const {
   TcpHandle *tcp = asTcpHandle(handle);
   if (tcp == nullptr)
     return false;
 
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
   return tcp->pcb != nullptr;
-#else
-  return true;
-#endif
 }
 
-int LwipSocketBackend::connect(void *handle, IPAddress ip, uint16_t port) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+int LwipTransportBackend::connect(void *handle, IPAddress ip, uint16_t port) {
   TcpHandle *tcp = asTcpHandle(handle);
   if (tcp == nullptr || tcp->pcb == nullptr)
     return 0;
@@ -518,69 +341,22 @@ int LwipSocketBackend::connect(void *handle, IPAddress ip, uint16_t port) {
 
   tcp->connecting = true;
   return 1;
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  TcpHandle *tcp = asTcpHandle(handle);
-  if (tcp == nullptr || tcp->fd < 0)
-    return 0;
-
-  sockaddr_in address = makeSocketAddress(ip, port);
-  if (lwip_connect(tcp->fd, reinterpret_cast<sockaddr *>(&address),
-                   sizeof(address)) == 0 ||
-      isWouldBlockError()) {
-    tcp->connected = true;
-    return 1;
-  }
-
-  closeTcpHandle(tcp);
-  return 0;
-#else
-  (void)handle;
-  (void)ip;
-  (void)port;
-  return 0;
-#endif
 }
 
-int LwipSocketBackend::connect(void *handle, const char *host, uint16_t port) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+int LwipTransportBackend::connect(void *handle, const char *host, uint16_t port) {
   ip_addr_t address;
   if (!resolveRawHostImmediate(host, address))
     return 0;
 
   return connect(handle, rawIpAddressToIp(&address), port);
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  sockaddr_in address;
-  if (!resolveHost(host, port, address))
-    return 0;
-
-  TcpHandle *tcp = asTcpHandle(handle);
-  if (tcp == nullptr || tcp->fd < 0)
-    return 0;
-
-  if (lwip_connect(tcp->fd, reinterpret_cast<sockaddr *>(&address),
-                   sizeof(address)) == 0 ||
-      isWouldBlockError()) {
-    tcp->connected = true;
-    return 1;
-  }
-
-  closeTcpHandle(tcp);
-  return 0;
-#else
-  (void)handle;
-  (void)host;
-  (void)port;
-  return 0;
-#endif
 }
 
-size_t LwipSocketBackend::write(void *handle, uint8_t value) {
+size_t LwipTransportBackend::write(void *handle, uint8_t value) {
   return write(handle, &value, 1);
 }
 
-size_t LwipSocketBackend::write(void *handle, const uint8_t *buffer,
+size_t LwipTransportBackend::write(void *handle, const uint8_t *buffer,
                                 size_t size) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
   TcpHandle *tcp = asTcpHandle(handle);
   if (tcp == nullptr || tcp->pcb == nullptr || !tcp->connected ||
       buffer == nullptr || size == 0)
@@ -599,58 +375,23 @@ size_t LwipSocketBackend::write(void *handle, const uint8_t *buffer,
     return 0;
 
   return size;
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  TcpHandle *tcp = asTcpHandle(handle);
-  if (tcp == nullptr || tcp->fd < 0 || buffer == nullptr || size == 0)
-    return 0;
-
-  int written = lwip_send(tcp->fd, buffer, size, 0);
-  if (written <= 0)
-    return 0;
-
-  return static_cast<size_t>(written);
-#else
-  (void)handle;
-  (void)buffer;
-  (void)size;
-  return 0;
-#endif
 }
 
-int LwipSocketBackend::available(void *handle) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+int LwipTransportBackend::available(void *handle) {
   TcpHandle *tcp = asTcpHandle(handle);
   if (tcp == nullptr || tcp->rxIndex >= tcp->rxLength)
     return 0;
 
   return static_cast<int>(tcp->rxLength - tcp->rxIndex);
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  TcpHandle *tcp = asTcpHandle(handle);
-  if (tcp == nullptr || tcp->fd < 0)
-    return 0;
-
-#if defined(FIONREAD)
-  int count = 0;
-  if (lwip_ioctl(tcp->fd, FIONREAD, &count) == 0)
-    return count;
-#endif
-  uint8_t value = 0;
-  int result = lwip_recv(tcp->fd, &value, 1, MSG_PEEK);
-  return result > 0 ? result : 0;
-#else
-  (void)handle;
-  return 0;
-#endif
 }
 
-int LwipSocketBackend::read(void *handle) {
+int LwipTransportBackend::read(void *handle) {
   uint8_t value = 0;
   int result = read(handle, &value, 1);
   return result == 1 ? value : -1;
 }
 
-int LwipSocketBackend::read(void *handle, uint8_t *buffer, size_t size) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+int LwipTransportBackend::read(void *handle, uint8_t *buffer, size_t size) {
   TcpHandle *tcp = asTcpHandle(handle);
   if (tcp == nullptr || buffer == nullptr || size == 0 ||
       tcp->rxIndex >= tcp->rxLength)
@@ -666,81 +407,31 @@ int LwipSocketBackend::read(void *handle, uint8_t *buffer, size_t size) {
     resetTcpReceiveBuffer(tcp);
 
   return static_cast<int>(bytesToRead);
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  TcpHandle *tcp = asTcpHandle(handle);
-  if (tcp == nullptr || tcp->fd < 0 || buffer == nullptr || size == 0)
-    return 0;
-
-  int result = lwip_recv(tcp->fd, buffer, size, 0);
-  if (result == 0)
-    tcp->connected = false;
-  return result > 0 ? result : 0;
-#else
-  (void)handle;
-  (void)buffer;
-  (void)size;
-  return 0;
-#endif
 }
 
-int LwipSocketBackend::peek(void *handle) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+int LwipTransportBackend::peek(void *handle) {
   TcpHandle *tcp = asTcpHandle(handle);
   if (tcp == nullptr || tcp->rxIndex >= tcp->rxLength)
     return -1;
 
   return tcp->rx[tcp->rxIndex];
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  TcpHandle *tcp = asTcpHandle(handle);
-  if (tcp == nullptr || tcp->fd < 0)
-    return -1;
-
-  uint8_t value = 0;
-  int result = lwip_recv(tcp->fd, &value, 1, MSG_PEEK);
-  return result == 1 ? value : -1;
-#else
-  (void)handle;
-  return -1;
-#endif
 }
 
-void LwipSocketBackend::flush(void *handle) { (void)handle; }
+void LwipTransportBackend::flush(void *handle) { (void)handle; }
 
-void LwipSocketBackend::stop(void *handle) {
+void LwipTransportBackend::stop(void *handle) {
   closeTcpHandle(asTcpHandle(handle));
 }
 
-uint8_t LwipSocketBackend::connected(void *handle) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+uint8_t LwipTransportBackend::connected(void *handle) {
   TcpHandle *tcp = asTcpHandle(handle);
   if (tcp == nullptr || tcp->pcb == nullptr)
     return 0;
 
   return tcp->connected || tcp->connecting ? 1 : 0;
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  TcpHandle *tcp = asTcpHandle(handle);
-  if (tcp == nullptr || tcp->fd < 0 || !tcp->connected)
-    return 0;
-
-  int error = 0;
-  socklen_t errorLength = sizeof(error);
-  if (lwip_getsockopt(tcp->fd, SOL_SOCKET, SO_ERROR, &error, &errorLength) != 0)
-    return 0;
-
-  if (error != 0) {
-    tcp->connected = false;
-    return 0;
-  }
-
-  return 1;
-#else
-  (void)handle;
-  return 0;
-#endif
 }
 
-uint8_t LwipSocketBackend::begin(uint16_t port) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+uint8_t LwipTransportBackend::begin(uint16_t port) {
   if (_udp == nullptr)
     return 0;
 
@@ -761,14 +452,9 @@ uint8_t LwipSocketBackend::begin(uint16_t port) {
   udp_recv(_udp->pcb, receiveUdpPacket, _udp);
   _udp->started = true;
   return 1;
-#else
-  (void)port;
-  return 0;
-#endif
 }
 
-uint8_t LwipSocketBackend::beginMulticast(IPAddress ip, uint16_t port) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+uint8_t LwipTransportBackend::beginMulticast(IPAddress ip, uint16_t port) {
   uint8_t started = begin(port);
   if (!started)
     return 0;
@@ -783,30 +469,17 @@ uint8_t LwipSocketBackend::beginMulticast(IPAddress ip, uint16_t port) {
   (void)ip;
 #endif
   return 1;
-#else
-  (void)ip;
-  (void)port;
-  return 0;
-#endif
 }
 
-void LwipSocketBackend::stop() {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+void LwipTransportBackend::stop() {
   if (_udp != nullptr && _udp->pcb != nullptr) {
     udp_recv(_udp->pcb, nullptr, nullptr);
     udp_remove(_udp->pcb);
   }
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  if (_udp != nullptr && _udp->fd >= 0)
-    lwip_close(_udp->fd);
-#endif
   if (_udp == nullptr)
     return;
 
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
   _udp->pcb = nullptr;
-#endif
-  _udp->fd = kInvalidSocket;
   _udp->started = false;
   _udp->packetOpen = false;
   _udp->txLength = 0;
@@ -816,7 +489,7 @@ void LwipSocketBackend::stop() {
   _udp->rxRemote = {0, 0};
 }
 
-int LwipSocketBackend::beginPacket(IPAddress ip, uint16_t port) {
+int LwipTransportBackend::beginPacket(IPAddress ip, uint16_t port) {
   if (_udp == nullptr || !_udp->started)
     return 0;
 
@@ -826,28 +499,15 @@ int LwipSocketBackend::beginPacket(IPAddress ip, uint16_t port) {
   return 1;
 }
 
-int LwipSocketBackend::beginPacket(const char *host, uint16_t port) {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+int LwipTransportBackend::beginPacket(const char *host, uint16_t port) {
   ip_addr_t address;
   if (!resolveRawHostImmediate(host, address))
     return 0;
 
   return beginPacket(rawIpAddressToIp(&address), port);
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  sockaddr_in address;
-  if (!resolveHost(host, port, address))
-    return 0;
-
-  return beginPacket(socketAddressToIp(address), socketAddressToPort(address));
-#else
-  (void)host;
-  (void)port;
-  return 0;
-#endif
 }
 
-int LwipSocketBackend::endPacket() {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+int LwipTransportBackend::endPacket() {
   if (_udp == nullptr || !_udp->started || !_udp->packetOpen ||
       _udp->pcb == nullptr)
     return 0;
@@ -868,27 +528,11 @@ int LwipSocketBackend::endPacket() {
   _udp->packetOpen = false;
   _udp->txLength = 0;
   return result == ERR_OK ? 1 : 0;
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  if (_udp == nullptr || !_udp->started || !_udp->packetOpen)
-    return 0;
-
-  sockaddr_in address =
-      makeSocketAddress(hostOrderAddressToIp(_udp->txRemote.address),
-                        _udp->txRemote.port);
-  int sent = lwip_sendto(_udp->fd, _udp->tx, _udp->txLength, 0,
-                         reinterpret_cast<sockaddr *>(&address),
-                         sizeof(address));
-  _udp->packetOpen = false;
-  _udp->txLength = 0;
-  return sent >= 0 ? 1 : 0;
-#else
-  return 0;
-#endif
 }
 
-size_t LwipSocketBackend::write(uint8_t value) { return write(&value, 1); }
+size_t LwipTransportBackend::write(uint8_t value) { return write(&value, 1); }
 
-size_t LwipSocketBackend::write(const uint8_t *buffer, size_t size) {
+size_t LwipTransportBackend::write(const uint8_t *buffer, size_t size) {
   if (_udp == nullptr || !_udp->started || !_udp->packetOpen ||
       buffer == nullptr || size == 0)
     return 0;
@@ -902,46 +546,25 @@ size_t LwipSocketBackend::write(const uint8_t *buffer, size_t size) {
   return size;
 }
 
-int LwipSocketBackend::parsePacket() {
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
+int LwipTransportBackend::parsePacket() {
   return available();
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  if (_udp == nullptr || !_udp->started)
-    return 0;
-
-  sockaddr_in address;
-  socklen_t addressLength = sizeof(address);
-  int received = lwip_recvfrom(_udp->fd, _udp->rx, kUdpBufferSize, 0,
-                               reinterpret_cast<sockaddr *>(&address),
-                               &addressLength);
-  if (received <= 0)
-    return 0;
-
-  _udp->rxLength = static_cast<size_t>(received);
-  _udp->rxIndex = 0;
-  _udp->rxRemote = {ipToHostOrderAddress(socketAddressToIp(address)),
-                    socketAddressToPort(address)};
-  return received;
-#else
-  return 0;
-#endif
 }
 
-int LwipSocketBackend::available() {
+int LwipTransportBackend::available() {
   if (_udp == nullptr || !_udp->started || _udp->rxIndex >= _udp->rxLength)
     return 0;
 
   return static_cast<int>(_udp->rxLength - _udp->rxIndex);
 }
 
-int LwipSocketBackend::read() {
+int LwipTransportBackend::read() {
   if (available() <= 0)
     return -1;
 
   return _udp->rx[_udp->rxIndex++];
 }
 
-int LwipSocketBackend::read(uint8_t *buffer, size_t size) {
+int LwipTransportBackend::read(uint8_t *buffer, size_t size) {
   if (buffer == nullptr || size == 0 || available() <= 0)
     return 0;
 
@@ -954,32 +577,32 @@ int LwipSocketBackend::read(uint8_t *buffer, size_t size) {
   return static_cast<int>(bytesToRead);
 }
 
-int LwipSocketBackend::peek() {
+int LwipTransportBackend::peek() {
   if (available() <= 0)
     return -1;
 
   return _udp->rx[_udp->rxIndex];
 }
 
-void LwipSocketBackend::flush() {
+void LwipTransportBackend::flush() {
   if (_udp == nullptr)
     return;
 
   _udp->rxIndex = _udp->rxLength;
 }
 
-IPAddress LwipSocketBackend::remoteIP() {
+IPAddress LwipTransportBackend::remoteIP() {
   if (_udp == nullptr)
     return IPAddress();
 
   return hostOrderAddressToIp(_udp->rxRemote.address);
 }
 
-uint16_t LwipSocketBackend::remotePort() {
+uint16_t LwipTransportBackend::remotePort() {
   return _udp == nullptr ? 0 : _udp->rxRemote.port;
 }
 
-LwipSocketBackend::TcpHandle *LwipSocketBackend::asTcpHandle(void *handle) const {
+LwipTransportBackend::TcpHandle *LwipTransportBackend::asTcpHandle(void *handle) const {
   if (handle == _client)
     return _client;
   if (handle == _secure)
@@ -990,11 +613,10 @@ LwipSocketBackend::TcpHandle *LwipSocketBackend::asTcpHandle(void *handle) const
   return nullptr;
 }
 
-void LwipSocketBackend::closeTcpHandle(TcpHandle *handle) {
+void LwipTransportBackend::closeTcpHandle(TcpHandle *handle) {
   if (handle == nullptr)
     return;
 
-#if SIMIO_ETHERNET_HAS_LWIP_CORE
   if (handle->pcb != nullptr) {
     tcp_pcb *pcb = handle->pcb;
     detachTcpCallbacks(pcb);
@@ -1002,18 +624,13 @@ void LwipSocketBackend::closeTcpHandle(TcpHandle *handle) {
       tcp_abort(pcb);
   }
   handle->pcb = nullptr;
-#elif SIMIO_ETHERNET_HAS_LWIP_SOCKETS
-  if (handle->fd >= 0)
-    lwip_close(handle->fd);
-#endif
-  handle->fd = kInvalidSocket;
   handle->acquired = false;
   handle->connected = false;
   handle->connecting = false;
   resetTcpReceiveBuffer(handle);
 }
 
-size_t LwipSocketBackend::writeServerToAccepted(const uint8_t *buffer,
+size_t LwipTransportBackend::writeServerToAccepted(const uint8_t *buffer,
                                                 size_t size) {
   return write(_accepted, buffer, size);
 }
