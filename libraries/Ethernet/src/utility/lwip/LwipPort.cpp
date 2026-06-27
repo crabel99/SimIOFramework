@@ -34,6 +34,8 @@ void EthernetLwipPort::end() {
   _clientSocket.detach();
   _secureClientSocket.detach();
   _acceptedSocket.detach();
+  if (_udpBackend != nullptr)
+    _udpBackend->stop();
 
   _netif->clearInputCallback();
   _netif->clearLinkChangeCallback();
@@ -90,6 +92,18 @@ void EthernetLwipPort::clearTcpBackend() {
   _secureClientSocket.detach();
   _acceptedSocket.detach();
   _tcpBackend = nullptr;
+}
+
+void EthernetLwipPort::setUdpBackend(LwipUdpBackend &backend) {
+  clearUdpBackend();
+  _udpBackend = &backend;
+}
+
+void EthernetLwipPort::clearUdpBackend() {
+  if (_udpBackend != nullptr)
+    _udpBackend->stop();
+
+  _udpBackend = nullptr;
 }
 
 EthernetLwipErr EthernetLwipPort::output(const uint8_t *frame,
@@ -195,37 +209,113 @@ size_t EthernetLwipPort::writeServer(uint16_t port, const uint8_t *buffer,
   return _tcpBackend->writeServer(port, buffer, size);
 }
 
-uint8_t EthernetLwipPort::beginUdp(uint16_t) { return 0; }
+uint8_t EthernetLwipPort::beginUdp(uint16_t port) {
+  if (!_started || _udpBackend == nullptr)
+    return 0;
 
-uint8_t EthernetLwipPort::beginUdpMulticast(IPAddress, uint16_t) { return 0; }
+  return _udpBackend->begin(port);
+}
 
-void EthernetLwipPort::stopUdp() {}
+uint8_t EthernetLwipPort::beginUdpMulticast(IPAddress ip, uint16_t port) {
+  if (!_started || _udpBackend == nullptr)
+    return 0;
 
-int EthernetLwipPort::beginUdpPacket(IPAddress, uint16_t) { return 0; }
+  return _udpBackend->beginMulticast(ip, port);
+}
 
-int EthernetLwipPort::beginUdpPacket(const char *, uint16_t) { return 0; }
+void EthernetLwipPort::stopUdp() {
+  if (_udpBackend != nullptr)
+    _udpBackend->stop();
+}
 
-int EthernetLwipPort::endUdpPacket() { return 0; }
+int EthernetLwipPort::beginUdpPacket(IPAddress ip, uint16_t port) {
+  if (!_started || _udpBackend == nullptr)
+    return 0;
 
-size_t EthernetLwipPort::writeUdp(uint8_t) { return 0; }
+  return _udpBackend->beginPacket(ip, port);
+}
 
-size_t EthernetLwipPort::writeUdp(const uint8_t *, size_t) { return 0; }
+int EthernetLwipPort::beginUdpPacket(const char *host, uint16_t port) {
+  if (!_started || _udpBackend == nullptr || host == nullptr || host[0] == '\0')
+    return 0;
 
-int EthernetLwipPort::parseUdpPacket() { return 0; }
+  return _udpBackend->beginPacket(host, port);
+}
 
-int EthernetLwipPort::availableUdp() { return 0; }
+int EthernetLwipPort::endUdpPacket() {
+  if (!_started || _udpBackend == nullptr)
+    return 0;
 
-int EthernetLwipPort::readUdp() { return -1; }
+  return _udpBackend->endPacket();
+}
 
-int EthernetLwipPort::readUdp(uint8_t *, size_t) { return 0; }
+size_t EthernetLwipPort::writeUdp(uint8_t value) {
+  if (!_started || _udpBackend == nullptr)
+    return 0;
 
-int EthernetLwipPort::peekUdp() { return -1; }
+  return _udpBackend->write(value);
+}
 
-void EthernetLwipPort::flushUdp() {}
+size_t EthernetLwipPort::writeUdp(const uint8_t *buffer, size_t size) {
+  if (!_started || _udpBackend == nullptr || buffer == nullptr || size == 0)
+    return 0;
 
-IPAddress EthernetLwipPort::remoteUdpIP() { return IPAddress(); }
+  return _udpBackend->write(buffer, size);
+}
 
-uint16_t EthernetLwipPort::remoteUdpPort() { return 0; }
+int EthernetLwipPort::parseUdpPacket() {
+  if (!_started || _udpBackend == nullptr)
+    return 0;
+
+  return _udpBackend->parsePacket();
+}
+
+int EthernetLwipPort::availableUdp() {
+  if (!_started || _udpBackend == nullptr)
+    return 0;
+
+  return _udpBackend->available();
+}
+
+int EthernetLwipPort::readUdp() {
+  if (!_started || _udpBackend == nullptr)
+    return -1;
+
+  return _udpBackend->read();
+}
+
+int EthernetLwipPort::readUdp(uint8_t *buffer, size_t size) {
+  if (!_started || _udpBackend == nullptr || buffer == nullptr || size == 0)
+    return 0;
+
+  return _udpBackend->read(buffer, size);
+}
+
+int EthernetLwipPort::peekUdp() {
+  if (!_started || _udpBackend == nullptr)
+    return -1;
+
+  return _udpBackend->peek();
+}
+
+void EthernetLwipPort::flushUdp() {
+  if (_started && _udpBackend != nullptr)
+    _udpBackend->flush();
+}
+
+IPAddress EthernetLwipPort::remoteUdpIP() {
+  if (!_started || _udpBackend == nullptr)
+    return IPAddress();
+
+  return _udpBackend->remoteIP();
+}
+
+uint16_t EthernetLwipPort::remoteUdpPort() {
+  if (!_started || _udpBackend == nullptr)
+    return 0;
+
+  return _udpBackend->remotePort();
+}
 
 EthernetLwipErr
 EthernetLwipPort::mapOutputResult(EthernetNetifOutputResult result) {

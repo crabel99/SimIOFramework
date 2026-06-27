@@ -26,6 +26,28 @@ enum EthernetLwipErr {
   EthernetLwipErrWouldBlock,
 };
 
+class LwipUdpBackend {
+public:
+  virtual ~LwipUdpBackend() = default;
+
+  virtual uint8_t begin(uint16_t port) = 0;
+  virtual uint8_t beginMulticast(IPAddress ip, uint16_t port) = 0;
+  virtual void stop() = 0;
+  virtual int beginPacket(IPAddress ip, uint16_t port) = 0;
+  virtual int beginPacket(const char *host, uint16_t port) = 0;
+  virtual int endPacket() = 0;
+  virtual size_t write(uint8_t value) = 0;
+  virtual size_t write(const uint8_t *buffer, size_t size) = 0;
+  virtual int parsePacket() = 0;
+  virtual int available() = 0;
+  virtual int read() = 0;
+  virtual int read(uint8_t *buffer, size_t size) = 0;
+  virtual int peek() = 0;
+  virtual void flush() = 0;
+  virtual IPAddress remoteIP() = 0;
+  virtual uint16_t remotePort() = 0;
+};
+
 class EthernetLwipPort : public TransportProvider {
 public:
   /**
@@ -70,6 +92,8 @@ public:
   void clearLinkChangeCallback();
   void setTcpBackend(LwipTcpSocketBackend &backend);
   void clearTcpBackend();
+  void setUdpBackend(LwipUdpBackend &backend);
+  void clearUdpBackend();
 
   /**
    * @brief Send one raw Ethernet frame through the netif and map the result.
@@ -126,6 +150,7 @@ private:
   LwipTcpSocket _clientSocket;
   LwipTcpSocket _secureClientSocket;
   LwipTcpSocket _acceptedSocket;
+  LwipUdpBackend *_udpBackend = nullptr;
 
   bool handleInput(EthernetPacket *packet);
   void handleLinkChange(bool carrierUp, EthernetFrameLinkStatus status,
