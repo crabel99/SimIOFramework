@@ -14,6 +14,7 @@
  */
 #pragma once
 
+#include <utility/lwip/LwipTcpSocket.h>
 #include <utility/netif/Netif.h>
 #include <utility/transport/TransportProvider.h>
 
@@ -67,6 +68,8 @@ public:
   void setLinkChangeCallback(LinkChangeCallback callback,
                              void *context = nullptr);
   void clearLinkChangeCallback();
+  void setTcpBackend(LwipTcpSocketBackend &backend);
+  void clearTcpBackend();
 
   /**
    * @brief Send one raw Ethernet frame through the netif and map the result.
@@ -119,6 +122,9 @@ private:
   LinkChangeCallback _linkChangeCallback = nullptr;
   void *_linkChangeContext = nullptr;
   bool _started = false;
+  LwipTcpSocketBackend *_tcpBackend = nullptr;
+  LwipTcpSocket _clientSocket;
+  LwipTcpSocket _secureClientSocket;
 
   bool handleInput(EthernetPacket *packet);
   void handleLinkChange(bool carrierUp, EthernetFrameLinkStatus status,

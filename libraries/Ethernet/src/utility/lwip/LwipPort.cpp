@@ -23,6 +23,15 @@ void EthernetLwipPort::end() {
   if (_netif == nullptr)
     return;
 
+  if (_tcpBackend != nullptr) {
+    if (_clientSocket.attached())
+      _tcpBackend->releaseSocket(_clientSocket.handle());
+    if (_secureClientSocket.attached())
+      _tcpBackend->releaseSocket(_secureClientSocket.handle());
+  }
+  _clientSocket.detach();
+  _secureClientSocket.detach();
+
   _netif->clearInputCallback();
   _netif->clearLinkChangeCallback();
   _netif->clearPacketAllocator();
@@ -59,6 +68,24 @@ void EthernetLwipPort::clearLinkChangeCallback() {
   _linkChangeContext = nullptr;
 }
 
+void EthernetLwipPort::setTcpBackend(LwipTcpSocketBackend &backend) {
+  clearTcpBackend();
+  _tcpBackend = &backend;
+}
+
+void EthernetLwipPort::clearTcpBackend() {
+  if (_tcpBackend != nullptr) {
+    if (_clientSocket.attached())
+      _tcpBackend->releaseSocket(_clientSocket.handle());
+    if (_secureClientSocket.attached())
+      _tcpBackend->releaseSocket(_secureClientSocket.handle());
+  }
+
+  _clientSocket.detach();
+  _secureClientSocket.detach();
+  _tcpBackend = nullptr;
+}
+
 EthernetLwipErr EthernetLwipPort::output(const uint8_t *frame,
                                          uint16_t length) {
   if (!_started || _netif == nullptr)
@@ -71,15 +98,47 @@ bool EthernetLwipPort::carrierUp() const {
   return _started && _netif != nullptr && _netif->carrierUp();
 }
 
-EthernetSocket *EthernetLwipPort::acquireClientSocket() { return nullptr; }
+EthernetSocket *EthernetLwipPort::acquireClientSocket() {
+  if (!_started || _tcpBackend == nullptr || _clientSocket.attached())
+    return nullptr;
 
-EthernetSocket *EthernetLwipPort::acquireSecureClientSocket() {
-  return nullptr;
+  void *handle = _tcpBackend->acquireClientSocket();
+  if (handle == nullptr)
+    return nullptr;
+
+  _clientSocket.attach(*_tcpBackend, handle);
+  return &_clientSocket;
 }
 
-void EthernetLwipPort::releaseSocket(EthernetSocket *) {}
+EthernetSocket *EthernetLwipPort::acquireSecureClientSocket() {
+  if (!_started || _tcpBackend == nullptr || !_tcpBackend->tlsAvailable() ||
+      _secureClientSocket.attached())
+    return nullptr;
 
-bool EthernetLwipPort::tlsAvailable() const { return false; }
+  void *handle = _tcpBackend->acquireSecureClientSocket();
+  if (handle == nullptr)
+    return nullptr;
+
+  _secureClientSocket.attach(*_tcpBackend, handle);
+  return &_secureClientSocket;
+}
+
+void EthernetLwipPort::releaseSocket(EthernetSocket *socket) {
+  if (_tcpBackend == nullptr || socket == nullptr)
+    return;
+
+  if (socket == &_clientSocket && _clientSocket.attached()) {
+    _tcpBackend->releaseSocket(_clientSocket.handle());
+    _clientSocket.detach();
+  } else if (socket == &_secureClientSocket && _secureClientSocket.attached()) {
+    _tcpBackend->releaseSocket(_secureClientSocket.handle());
+    _secureClientSocket.detach();
+  }
+}
+
+bool EthernetLwipPort::tlsAvailable() const {
+  return _started && _tcpBackend != nullptr && _tcpBackend->tlsAvailable();
+}
 
 bool EthernetLwipPort::beginServer(uint16_t) { return false; }
 
