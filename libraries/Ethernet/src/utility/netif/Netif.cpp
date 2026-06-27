@@ -124,7 +124,23 @@ void EthernetNetif::handleLinkChange(EthernetFrameLinkStatus status,
 }
 
 void EthernetNetif::handleCarrierChange(bool carrierUp) {
+  const bool oldCarrier = _carrierUp;
+  const EthernetFrameLinkStatus oldStatus = _linkStatus;
+  const EthernetFrameLinkSpeed oldSpeed = _linkSpeed;
+  const EthernetFrameDuplex oldDuplex = _duplex;
+
   _carrierUp = carrierUp;
+  if (_driver != nullptr) {
+    _linkStatus = _driver->linkStatus();
+    _linkSpeed = _driver->linkSpeed();
+    _duplex = _driver->duplex();
+  }
+
+  if (oldCarrier == _carrierUp && oldStatus == _linkStatus &&
+      oldSpeed == _linkSpeed && oldDuplex == _duplex)
+    return;
+
+  notifyLinkChange();
 }
 
 void EthernetNetif::frameThunk(const uint8_t *frame, uint16_t length,
