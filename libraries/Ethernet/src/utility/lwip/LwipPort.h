@@ -125,6 +125,7 @@ private:
   LwipTcpSocketBackend *_tcpBackend = nullptr;
   LwipTcpSocket _clientSocket;
   LwipTcpSocket _secureClientSocket;
+  LwipTcpSocket _acceptedSocket;
 
   bool handleInput(EthernetPacket *packet);
   void handleLinkChange(bool carrierUp, EthernetFrameLinkStatus status,

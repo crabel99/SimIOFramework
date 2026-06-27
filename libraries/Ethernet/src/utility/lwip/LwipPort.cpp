@@ -28,9 +28,12 @@ void EthernetLwipPort::end() {
       _tcpBackend->releaseSocket(_clientSocket.handle());
     if (_secureClientSocket.attached())
       _tcpBackend->releaseSocket(_secureClientSocket.handle());
+    if (_acceptedSocket.attached())
+      _tcpBackend->releaseSocket(_acceptedSocket.handle());
   }
   _clientSocket.detach();
   _secureClientSocket.detach();
+  _acceptedSocket.detach();
 
   _netif->clearInputCallback();
   _netif->clearLinkChangeCallback();
@@ -79,10 +82,13 @@ void EthernetLwipPort::clearTcpBackend() {
       _tcpBackend->releaseSocket(_clientSocket.handle());
     if (_secureClientSocket.attached())
       _tcpBackend->releaseSocket(_secureClientSocket.handle());
+    if (_acceptedSocket.attached())
+      _tcpBackend->releaseSocket(_acceptedSocket.handle());
   }
 
   _clientSocket.detach();
   _secureClientSocket.detach();
+  _acceptedSocket.detach();
   _tcpBackend = nullptr;
 }
 
@@ -133,6 +139,9 @@ void EthernetLwipPort::releaseSocket(EthernetSocket *socket) {
   } else if (socket == &_secureClientSocket && _secureClientSocket.attached()) {
     _tcpBackend->releaseSocket(_secureClientSocket.handle());
     _secureClientSocket.detach();
+  } else if (socket == &_acceptedSocket && _acceptedSocket.attached()) {
+    _tcpBackend->releaseSocket(_acceptedSocket.handle());
+    _acceptedSocket.detach();
   }
 }
 
@@ -140,18 +149,50 @@ bool EthernetLwipPort::tlsAvailable() const {
   return _started && _tcpBackend != nullptr && _tcpBackend->tlsAvailable();
 }
 
-bool EthernetLwipPort::beginServer(uint16_t) { return false; }
+bool EthernetLwipPort::beginServer(uint16_t port) {
+  if (!_started || _tcpBackend == nullptr)
+    return false;
 
-void EthernetLwipPort::stopServer(uint16_t) {}
-
-EthernetSocket *EthernetLwipPort::acceptClientSocket(uint16_t) {
-  return nullptr;
+  return _tcpBackend->beginServer(port);
 }
 
-size_t EthernetLwipPort::writeServer(uint16_t, uint8_t) { return 0; }
+void EthernetLwipPort::stopServer(uint16_t port) {
+  if (_tcpBackend == nullptr)
+    return;
 
-size_t EthernetLwipPort::writeServer(uint16_t, const uint8_t *, size_t) {
-  return 0;
+  if (_acceptedSocket.attached()) {
+    _tcpBackend->releaseSocket(_acceptedSocket.handle());
+    _acceptedSocket.detach();
+  }
+
+  _tcpBackend->stopServer(port);
+}
+
+EthernetSocket *EthernetLwipPort::acceptClientSocket(uint16_t port) {
+  if (!_started || _tcpBackend == nullptr || _acceptedSocket.attached())
+    return nullptr;
+
+  void *handle = _tcpBackend->acceptClientSocket(port);
+  if (handle == nullptr)
+    return nullptr;
+
+  _acceptedSocket.attach(*_tcpBackend, handle);
+  return &_acceptedSocket;
+}
+
+size_t EthernetLwipPort::writeServer(uint16_t port, uint8_t value) {
+  if (!_started || _tcpBackend == nullptr)
+    return 0;
+
+  return _tcpBackend->writeServer(port, value);
+}
+
+size_t EthernetLwipPort::writeServer(uint16_t port, const uint8_t *buffer,
+                                     size_t size) {
+  if (!_started || _tcpBackend == nullptr || buffer == nullptr || size == 0)
+    return 0;
+
+  return _tcpBackend->writeServer(port, buffer, size);
 }
 
 uint8_t EthernetLwipPort::beginUdp(uint16_t) { return 0; }

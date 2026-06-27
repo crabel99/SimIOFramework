@@ -20,6 +20,13 @@ public:
   virtual void releaseSocket(void *handle) = 0;
   virtual bool tlsAvailable() const = 0;
 
+  virtual bool beginServer(uint16_t port) = 0;
+  virtual void stopServer(uint16_t port) = 0;
+  virtual void *acceptClientSocket(uint16_t port) = 0;
+  virtual size_t writeServer(uint16_t port, uint8_t value) = 0;
+  virtual size_t writeServer(uint16_t port, const uint8_t *buffer,
+                             size_t size) = 0;
+
   virtual bool carrierUp(void *handle) const = 0;
   virtual int connect(void *handle, IPAddress ip, uint16_t port) = 0;
   virtual int connect(void *handle, const char *host, uint16_t port) = 0;
