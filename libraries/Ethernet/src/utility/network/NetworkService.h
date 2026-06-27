@@ -31,8 +31,8 @@ public:
 private:
   EthernetPacketAllocator *_packetAllocator;
   EthernetNetif _netif;
-  EthernetLwipPort _lwipPort;
   LwipSocketBackend _socketBackend;
+  EthernetLwipPort _lwipPort;
   NetworkConfig _networkConfig;
   bool _started;
 };

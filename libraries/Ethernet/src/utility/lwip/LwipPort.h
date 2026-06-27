@@ -18,6 +18,17 @@
 #include <utility/netif/Netif.h>
 #include <utility/transport/TransportProvider.h>
 
+#if defined(__has_include)
+#if __has_include(<lwip/netif.h>)
+#define SIMIO_ETHERNET_HAS_LWIP_CORE 1
+#include <lwip/netif.h>
+#endif
+#endif
+
+#ifndef SIMIO_ETHERNET_HAS_LWIP_CORE
+#define SIMIO_ETHERNET_HAS_LWIP_CORE 0
+#endif
+
 enum EthernetLwipErr {
   EthernetLwipErrOk = 0,
   EthernetLwipErrMem,
@@ -69,6 +80,7 @@ public:
                                       void *context);
 
   explicit EthernetLwipPort(EthernetNetif &netif);
+  ~EthernetLwipPort();
 
   /**
    * @brief Wire packet allocation and callbacks into the netif.
@@ -151,11 +163,25 @@ private:
   LwipTcpSocket _secureClientSocket;
   LwipTcpSocket _acceptedSocket;
   LwipUdpBackend *_udpBackend = nullptr;
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  struct netif _lwipNetif;
+  bool _lwipInitialized = false;
+  bool _lwipNetifAdded = false;
+  uint8_t _outputBuffer[1536];
+#endif
 
   bool handleInput(EthernetPacket *packet);
   void handleLinkChange(bool carrierUp, EthernetFrameLinkStatus status,
                         EthernetFrameLinkSpeed speed,
                         EthernetFrameDuplex duplex);
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  bool beginLwipNetif();
+  void endLwipNetif();
+  bool inputPacketToLwip(EthernetPacket *packet);
+  EthernetLwipErr outputPbuf(struct pbuf *p);
+  static err_t lwipNetifInit(struct netif *netif);
+  static err_t lwipLinkOutput(struct netif *netif, struct pbuf *p);
+#endif
   static bool inputThunk(EthernetPacket *packet, void *context);
   static void linkThunk(bool carrierUp, EthernetFrameLinkStatus status,
                         EthernetFrameLinkSpeed speed,

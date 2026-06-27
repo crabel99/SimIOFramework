@@ -2,7 +2,8 @@
 
 #include <string.h>
 
-#if defined(__has_include)
+#if defined(SIMIO_ETHERNET_ENABLE_LWIP_SOCKETS) &&                                \
+    SIMIO_ETHERNET_ENABLE_LWIP_SOCKETS && defined(__has_include)
 #if __has_include(<lwip/sockets.h>)
 #define SIMIO_ETHERNET_HAS_LWIP_SOCKETS 1
 #endif

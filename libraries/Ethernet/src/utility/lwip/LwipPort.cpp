@@ -1,10 +1,37 @@
 #include "LwipPort.h"
 
+#include <string.h>
+
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+#include <lwip/dhcp.h>
+#include <lwip/init.h>
+#include <lwip/ip4_addr.h>
+#include <lwip/pbuf.h>
+#include <lwip/timeouts.h>
+#include <netif/etharp.h>
+#include <netif/ethernet.h>
+#endif
+
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+namespace {
+struct netif globalLwipNetif;
+bool globalLwipInitialized = false;
+bool globalLwipNetifAdded = false;
+} // namespace
+#endif
+
 EthernetLwipPort::EthernetLwipPort(EthernetNetif &netif) : _netif(&netif) {}
+
+EthernetLwipPort::~EthernetLwipPort() { end(); }
 
 bool EthernetLwipPort::begin(EthernetPacketAllocator &allocator) {
   if (_netif == nullptr)
     return false;
+
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  if (!beginLwipNetif())
+    return false;
+#endif
 
   _netif->setPacketAllocator(allocator);
   _netif->setInputCallback(inputThunk, this);
@@ -14,6 +41,9 @@ bool EthernetLwipPort::begin(EthernetPacketAllocator &allocator) {
     _netif->clearInputCallback();
     _netif->clearLinkChangeCallback();
     _netif->clearPacketAllocator();
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+    endLwipNetif();
+#endif
   }
 
   return _started;
@@ -41,6 +71,9 @@ void EthernetLwipPort::end() {
   _netif->clearLinkChangeCallback();
   _netif->clearPacketAllocator();
   _netif->end();
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  endLwipNetif();
+#endif
   _started = false;
 }
 
@@ -48,7 +81,11 @@ bool EthernetLwipPort::service() {
   if (!_started || _netif == nullptr)
     return false;
 
-  return _netif->service();
+  const bool progressed = _netif->service();
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  sys_check_timeouts();
+#endif
+  return progressed;
 }
 
 void EthernetLwipPort::setInputCallback(InputCallback callback,
@@ -335,8 +372,13 @@ EthernetLwipPort::mapOutputResult(EthernetNetifOutputResult result) {
 }
 
 bool EthernetLwipPort::handleInput(EthernetPacket *packet) {
-  if (_inputCallback == nullptr)
+  if (_inputCallback == nullptr) {
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+    return inputPacketToLwip(packet);
+#else
     return false;
+#endif
+  }
 
   return _inputCallback(packet, _inputContext) == EthernetLwipErrOk;
 }
@@ -347,7 +389,131 @@ void EthernetLwipPort::handleLinkChange(bool carrierUp,
                                         EthernetFrameDuplex duplex) {
   if (_linkChangeCallback != nullptr)
     _linkChangeCallback(carrierUp, status, speed, duplex, _linkChangeContext);
+
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  if (globalLwipNetifAdded && globalLwipNetif.state == this) {
+    if (carrierUp)
+      netif_set_link_up(&globalLwipNetif);
+    else
+      netif_set_link_down(&globalLwipNetif);
+  }
+#endif
 }
+
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+bool EthernetLwipPort::beginLwipNetif() {
+  if (!globalLwipInitialized) {
+    lwip_init();
+    globalLwipInitialized = true;
+  }
+
+  if (globalLwipNetifAdded) {
+    globalLwipNetif.state = this;
+    return true;
+  }
+
+  ip4_addr_t ipaddr;
+  ip4_addr_t netmask;
+  ip4_addr_t gateway;
+  ip4_addr_set_zero(&ipaddr);
+  ip4_addr_set_zero(&netmask);
+  ip4_addr_set_zero(&gateway);
+
+  memset(&globalLwipNetif, 0, sizeof(globalLwipNetif));
+  if (netif_add(&globalLwipNetif, &ipaddr, &netmask, &gateway, this,
+                lwipNetifInit, ethernet_input) == nullptr)
+    return false;
+
+  netif_set_default(&globalLwipNetif);
+  netif_set_up(&globalLwipNetif);
+  if (_netif != nullptr && _netif->carrierUp())
+    netif_set_link_up(&globalLwipNetif);
+  else
+    netif_set_link_down(&globalLwipNetif);
+
+  globalLwipNetifAdded = true;
+  return true;
+}
+
+void EthernetLwipPort::endLwipNetif() {
+  if (!globalLwipNetifAdded || globalLwipNetif.state != this)
+    return;
+
+  netif_set_link_down(&globalLwipNetif);
+  globalLwipNetif.state = nullptr;
+}
+
+bool EthernetLwipPort::inputPacketToLwip(EthernetPacket *packet) {
+  if (!globalLwipNetifAdded || globalLwipNetif.state != this ||
+      packet == nullptr || packet->data() == nullptr || packet->length() == 0)
+    return false;
+
+  struct pbuf *p = pbuf_alloc(PBUF_RAW, packet->length(), PBUF_POOL);
+  if (p == nullptr)
+    return false;
+
+  const err_t takeResult = pbuf_take(p, packet->data(), packet->length());
+  packet->release();
+  if (takeResult != ERR_OK) {
+    pbuf_free(p);
+    return true;
+  }
+
+  if (globalLwipNetif.input(p, &globalLwipNetif) != ERR_OK)
+    pbuf_free(p);
+
+  return true;
+}
+
+EthernetLwipErr EthernetLwipPort::outputPbuf(struct pbuf *p) {
+  if (p == nullptr || p->tot_len == 0 || p->tot_len > sizeof(_outputBuffer))
+    return EthernetLwipErrVal;
+
+  pbuf_copy_partial(p, _outputBuffer, p->tot_len, 0);
+  return output(_outputBuffer, p->tot_len);
+}
+
+err_t EthernetLwipPort::lwipNetifInit(struct netif *netif) {
+  if (netif == nullptr)
+    return ERR_ARG;
+
+  netif->name[0] = 's';
+  netif->name[1] = 'e';
+  netif->output = etharp_output;
+  netif->linkoutput = lwipLinkOutput;
+  netif->mtu = 1500;
+  netif->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP |
+                 NETIF_FLAG_ETHERNET | NETIF_FLAG_IGMP;
+  netif->hwaddr_len = ETH_HWADDR_LEN;
+  netif->hwaddr[0] = 0x02;
+  netif->hwaddr[1] = 0x00;
+  netif->hwaddr[2] = 0x00;
+  netif->hwaddr[3] = 0x00;
+  netif->hwaddr[4] = 0x00;
+  netif->hwaddr[5] = 0x01;
+  return ERR_OK;
+}
+
+err_t EthernetLwipPort::lwipLinkOutput(struct netif *netif, struct pbuf *p) {
+  if (netif == nullptr || netif->state == nullptr)
+    return ERR_ARG;
+
+  EthernetLwipPort *port = static_cast<EthernetLwipPort *>(netif->state);
+  switch (port->outputPbuf(p)) {
+  case EthernetLwipErrOk:
+    return ERR_OK;
+  case EthernetLwipErrMem:
+    return ERR_MEM;
+  case EthernetLwipErrVal:
+    return ERR_VAL;
+  case EthernetLwipErrWouldBlock:
+    return ERR_WOULDBLOCK;
+  case EthernetLwipErrUse:
+  default:
+    return ERR_USE;
+  }
+}
+#endif
 
 bool EthernetLwipPort::inputThunk(EthernetPacket *packet, void *context) {
   if (context == nullptr)
