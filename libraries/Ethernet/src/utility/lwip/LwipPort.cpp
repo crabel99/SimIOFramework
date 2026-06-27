@@ -470,16 +470,6 @@ bool EthernetLwipPort::beginLwipNetif() {
     globalLwipInitialized = true;
   }
 
-  if (globalLwipNetifAdded) {
-    globalLwipNetif.state = this;
-    netif_set_up(&globalLwipNetif);
-    if (_netif != nullptr && _netif->carrierUp())
-      netif_set_link_up(&globalLwipNetif);
-    else
-      netif_set_link_down(&globalLwipNetif);
-    return applyNetworkConfigToLwip();
-  }
-
   ip4_addr_t ipaddr;
   ip4_addr_t netmask;
   ip4_addr_t gateway;
@@ -511,7 +501,10 @@ void EthernetLwipPort::endLwipNetif() {
     return;
 
   netif_set_link_down(&globalLwipNetif);
+  netif_set_down(&globalLwipNetif);
+  netif_remove(&globalLwipNetif);
   globalLwipNetif.state = nullptr;
+  globalLwipNetifAdded = false;
 }
 
 bool EthernetLwipPort::applyNetworkConfigToLwip() {
