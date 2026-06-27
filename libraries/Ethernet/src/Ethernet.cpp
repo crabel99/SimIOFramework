@@ -306,6 +306,8 @@ bool EthernetClass::requestLinkRefresh() {
   return _phyLink.requestLinkRefresh();
 }
 
+bool EthernetClass::requestPhyReset() { return _phyLink.requestPhyReset(); }
+
 bool EthernetClass::requestPhySetup() {
   return _phyLink.requestPhySetup();
 }

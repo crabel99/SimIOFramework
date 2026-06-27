@@ -128,6 +128,9 @@ struct EthernetPhyExtendedStatus {
  *   synchronous helpers.
  * - Vendor subclasses own chip-specific ID matching, interrupt status/ack,
  *   strap/clock/MDIX/EEE/WOL/diagnostic quirks, and vendor register decode.
+ *   Vendor interrupt support layers onto the generic callback path by
+ *   overriding interrupt register, mask encode, and status decode hooks; it
+ *   must not replace the MAC/PHY coordinator or perform MDIO from the ISR.
  * - MAC speed/duplex application belongs to `EthernetClass`, not this class.
  */
 class EthernetPhy {

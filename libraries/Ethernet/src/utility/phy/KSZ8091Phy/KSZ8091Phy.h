@@ -30,6 +30,10 @@
  * - Runtime carrier/link changes should be surfaced through PHY interrupt
  *   status plus the bounded Ethernet/MIIM link-refresh state machine, not by
  *   polling these helpers from the RX/TX frame path.
+ * - Interrupt support is layered onto the generic PHY interrupt contract:
+ *   KSZ8091 supplies the vendor register address, generic-event mask encoding,
+ *   and status decode, while `PhyLinkManager` owns the deferred MIIM read and
+ *   event dispatch.
  */
 class KSZ8091Phy : public EthernetPhy {
 public:

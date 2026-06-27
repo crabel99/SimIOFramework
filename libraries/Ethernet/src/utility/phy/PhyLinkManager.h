@@ -9,6 +9,20 @@
  * cached link/carrier state, PHY interrupt dispatch, and GMAC speed/duplex
  * reconfiguration. It does not own Ethernet frames, MAC address programming,
  * sockets, IP addressing, or lwIP packet lifetimes.
+ *
+ * Runtime link management requires a board-wired PHY interrupt pin. The
+ * manager does not contain a hidden polling fallback; boards without a PHY IRQ
+ * must request explicit bounded refreshes from application/service code until
+ * a separate polling monitor is designed.
+ *
+ * Link-status refresh follows the Harmony ETHPHY correctness pattern for
+ * Clause-22 BMSR's latched-low link bit: a refreshed read that reports link
+ * down is confirmed with one additional BMSR read before cached carrier state
+ * is changed to down.
+ *
+ * PHY software reset is explicit. `requestPhyReset()` queues a bounded BMCR
+ * reset write and invalidates cached link state on completion; setup
+ * verification does not reset the external PHY implicitly.
  */
 
 #include <GMAC.h>
@@ -27,9 +41,11 @@ enum EthernetLinkStatus {
 
 enum EthernetPhySetupState {
   PhySetupIdle = 0,
+  PhySetupResetting,
   PhySetupScanning,
   PhySetupReadingId1,
   PhySetupReadingId2,
+  PhySetupClearingInterruptStatus,
   PhySetupConfiguringInterrupts,
   PhySetupVerified,
   PhySetupInvalidId,
@@ -77,6 +93,7 @@ public:
   bool begin();
   bool updateLinkConfiguration();
   bool requestLinkRefresh();
+  bool requestPhyReset();
   bool requestPhySetup();
   void requestLinkRefreshFromIsr();
   bool setPhyInterruptPin(uint32_t pin, uint32_t mode);
@@ -103,6 +120,7 @@ private:
   EthernetPhySetupState _phySetupState;
   bool _linkRefreshPending;
   EthernetLinkRefreshState _linkRefreshState;
+  bool _linkStatusConfirmingDown;
   volatile bool _linkRefreshRequested;
   volatile bool _phyInterruptStatusRequested;
   bool _phyInterruptStatusPending;
@@ -119,7 +137,9 @@ private:
                         EthernetPhyDuplex duplex);
   bool queuePhyId1Read();
   bool queuePhyId2Read();
+  bool queuePhyResetWrite();
   bool queuePhyScan();
+  bool queuePhyInterruptClearRead();
   bool queuePhyInterruptEnableWrite();
   bool queuePhyInterruptDisableWrite();
   bool queuePhyInterruptStatusRead();
@@ -133,6 +153,12 @@ private:
                          MiimManager::OperationResult result, uint16_t value);
   void handlePhyId2Read(MiimManager::OperationHandle handle,
                         MiimManager::OperationResult result, uint16_t value);
+  void handlePhyResetWrite(MiimManager::OperationHandle handle,
+                           MiimManager::OperationResult result,
+                           uint16_t value);
+  void handlePhyInterruptClearRead(MiimManager::OperationHandle handle,
+                                   MiimManager::OperationResult result,
+                                   uint16_t value);
   void handlePhyInterruptEnableWrite(MiimManager::OperationHandle handle,
                                      MiimManager::OperationResult result,
                                      uint16_t value);
@@ -164,6 +190,12 @@ private:
   static void handlePhyId2Read(MiimManager::OperationHandle handle,
                                MiimManager::OperationResult result,
                                uint16_t value, void *context);
+  static void handlePhyResetWrite(MiimManager::OperationHandle handle,
+                                  MiimManager::OperationResult result,
+                                  uint16_t value, void *context);
+  static void handlePhyInterruptClearRead(
+      MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+      uint16_t value, void *context);
   static void handlePhyInterruptEnableWrite(
       MiimManager::OperationHandle handle, MiimManager::OperationResult result,
       uint16_t value, void *context);

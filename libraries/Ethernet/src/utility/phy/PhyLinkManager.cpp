@@ -21,10 +21,11 @@ PhyLinkManager::PhyLinkManager(EthernetPhy &phy)
       _carrierCallback(nullptr), _carrierCallbackContext(nullptr), _miim(),
       _phySetupPending(false), _phySetupState(PhySetupIdle),
       _linkRefreshPending(false), _linkRefreshState(LinkRefreshIdle),
-      _linkRefreshRequested(false), _phyInterruptStatusRequested(false),
-      _phyInterruptStatusPending(false), _phyInterruptAttached(false),
-      _phyInterruptPin(0), _phyInterruptMode(FALLING), _phyId1(0),
-      _phyInterruptEvents(0), _linkAdvertisement(0) {
+      _linkStatusConfirmingDown(false), _linkRefreshRequested(false),
+      _phyInterruptStatusRequested(false), _phyInterruptStatusPending(false),
+      _phyInterruptAttached(false), _phyInterruptPin(0),
+      _phyInterruptMode(FALLING), _phyId1(0), _phyInterruptEvents(0),
+      _linkAdvertisement(0) {
   _miim.setPhyAddress(phy.address());
 }
 
@@ -64,6 +65,7 @@ void PhyLinkManager::setPhy(EthernetPhy &phy) {
   _phyId1 = 0;
   _linkRefreshPending = false;
   _linkRefreshState = LinkRefreshIdle;
+  _linkStatusConfirmingDown = false;
   _linkRefreshRequested = false;
   _phyInterruptStatusRequested = false;
   _phyInterruptStatusPending = false;
@@ -84,6 +86,7 @@ bool PhyLinkManager::begin() {
   _phyId1 = 0;
   _linkRefreshPending = false;
   _linkRefreshState = LinkRefreshIdle;
+  _linkStatusConfirmingDown = false;
   _linkRefreshRequested = false;
   _phyInterruptStatusRequested = false;
   _phyInterruptStatusPending = false;
@@ -108,11 +111,28 @@ bool PhyLinkManager::requestLinkRefresh() {
 
   _linkRefreshPending = true;
   _linkRefreshState = LinkRefreshReadingStatus;
+  _linkStatusConfirmingDown = false;
   if (queueLinkStatusRead())
     return true;
 
   _linkRefreshPending = false;
   _linkRefreshState = LinkRefreshFailed;
+  _linkStatusConfirmingDown = false;
+  return false;
+}
+
+bool PhyLinkManager::requestPhyReset() {
+  if (_phy == nullptr || _phySetupPending || _linkRefreshPending ||
+      _phyInterruptStatusPending)
+    return false;
+
+  _phySetupPending = true;
+  _phySetupState = PhySetupResetting;
+  if (queuePhyResetWrite())
+    return true;
+
+  _phySetupPending = false;
+  _phySetupState = PhySetupFailed;
   return false;
 }
 
@@ -173,7 +193,7 @@ bool PhyLinkManager::setPhyInterruptPin(uint32_t pin, uint32_t mode) {
   _phyInterruptAttached = true;
   if (phyInterruptsSupported && !_phySetupPending) {
     if (_phySetupState == PhySetupVerified) {
-      if (queuePhyInterruptEnableWrite()) {
+      if (queuePhyInterruptClearRead()) {
         _phySetupPending = true;
         gmac::scheduleEvent(gmac::EventManagementComplete);
       }
@@ -200,6 +220,9 @@ void PhyLinkManager::clearPhyInterruptPin(bool disablePhyInterrupts) {
 
   if (_phy != nullptr)
     _phy->clearInterruptCallback();
+
+  _phyInterruptStatusRequested = false;
+  _linkRefreshRequested = false;
 
   if (disablePhyInterrupts && _phyInterruptAttached &&
       _phySetupState == PhySetupVerified && !_phySetupPending &&
@@ -287,12 +310,39 @@ bool PhyLinkManager::queuePhyId2Read() {
   return queued;
 }
 
+bool PhyLinkManager::queuePhyResetWrite() {
+  const bool queued =
+      _miim.write(_phy->address(), static_cast<uint8_t>(PhyRegBmcon::addr),
+                  PhyRegBmcon::bit::Reset,
+                  PhyLinkManager::handlePhyResetWrite, this) !=
+      MiimManager::InvalidOperationHandle;
+  if (queued)
+    _phySetupState = PhySetupResetting;
+  return queued;
+}
+
 bool PhyLinkManager::queuePhyScan() {
   const bool queued =
       _miim.scan(PHY_REG_PHYID1, 0, 31, PhyLinkManager::handlePhyScanRead,
                  this) != MiimManager::InvalidOperationHandle;
   if (queued)
     _phySetupState = PhySetupScanning;
+  return queued;
+}
+
+bool PhyLinkManager::queuePhyInterruptClearRead() {
+  uint8_t registerAddress = 0;
+  if (_phy == nullptr ||
+      !_phy->interruptControlStatusRegister(&registerAddress)) {
+    return false;
+  }
+
+  const bool queued =
+      _miim.read(_phy->address(), registerAddress,
+                 PhyLinkManager::handlePhyInterruptClearRead, this) !=
+      MiimManager::InvalidOperationHandle;
+  if (queued)
+    _phySetupState = PhySetupClearingInterruptStatus;
   return queued;
 }
 
@@ -464,9 +514,44 @@ void PhyLinkManager::handlePhyId2Read(MiimManager::OperationHandle handle,
   if (_phySetupState != PhySetupVerified)
     return;
 
-  if (_phyInterruptAttached && queuePhyInterruptEnableWrite()) {
+  if (_phyInterruptAttached && queuePhyInterruptClearRead()) {
     _phySetupPending = true;
     return;
+  }
+}
+
+void PhyLinkManager::handlePhyResetWrite(MiimManager::OperationHandle handle,
+                                         MiimManager::OperationResult result,
+                                         uint16_t value) {
+  (void)value;
+  _miim.release(handle);
+  _phySetupPending = false;
+
+  if (result != MiimManager::ResultOk) {
+    _phySetupState = PhySetupFailed;
+    updateCachedLink(Unknown, EthernetPhySpeedUnknown,
+                     EthernetPhyDuplexUnknown);
+    return;
+  }
+
+  _phySetupState = PhySetupIdle;
+  _linkRefreshPending = false;
+  _linkRefreshRequested = false;
+  _linkStatusConfirmingDown = false;
+  _linkRefreshState = LinkRefreshIdle;
+  updateCachedLink(Unknown, EthernetPhySpeedUnknown,
+                   EthernetPhyDuplexUnknown);
+}
+
+void PhyLinkManager::handlePhyInterruptClearRead(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value) {
+  (void)value;
+  _miim.release(handle);
+
+  if (result != MiimManager::ResultOk || !queuePhyInterruptEnableWrite()) {
+    _phySetupPending = false;
+    _phySetupState = PhySetupFailed;
   }
 }
 
@@ -518,6 +603,7 @@ bool PhyLinkManager::handlePhyInterruptEvents(uint16_t events) {
 bool PhyLinkManager::handlePhyLinkDownInterrupt() {
   _linkRefreshPending = false;
   _linkRefreshRequested = false;
+  _linkStatusConfirmingDown = false;
   _linkRefreshState = LinkRefreshLinkDown;
   updateCachedLink(LinkOFF, EthernetPhySpeedUnknown, EthernetPhyDuplexUnknown);
   return true;
@@ -546,6 +632,7 @@ void PhyLinkManager::handleLinkStatusRead(MiimManager::OperationHandle handle,
 
   if (result != MiimManager::ResultOk) {
     _linkRefreshPending = false;
+    _linkStatusConfirmingDown = false;
     _linkRefreshState = LinkRefreshFailed;
     updateCachedLink(Unknown, EthernetPhySpeedUnknown,
                      EthernetPhyDuplexUnknown);
@@ -553,7 +640,14 @@ void PhyLinkManager::handleLinkStatusRead(MiimManager::OperationHandle handle,
   }
 
   if (!EthernetPhy::basicStatusReportsLinkUp(value)) {
+    if (!_linkStatusConfirmingDown) {
+      _linkStatusConfirmingDown = true;
+      if (queueLinkStatusRead())
+        return;
+    }
+
     _linkRefreshPending = false;
+    _linkStatusConfirmingDown = false;
     _linkRefreshState = LinkRefreshLinkDown;
     updateCachedLink(LinkOFF, EthernetPhySpeedUnknown,
                      EthernetPhyDuplexUnknown);
@@ -561,6 +655,7 @@ void PhyLinkManager::handleLinkStatusRead(MiimManager::OperationHandle handle,
   }
 
   if ((value & PhyRegBmstat::bit::AutoNegotiationAbility) == 0) {
+    _linkStatusConfirmingDown = false;
     if (queueVendorModeRead()) {
       return;
     }
@@ -574,14 +669,17 @@ void PhyLinkManager::handleLinkStatusRead(MiimManager::OperationHandle handle,
 
   if ((value & PhyRegBmstat::bit::AutoNegotiationComplete) == 0) {
     _linkRefreshPending = false;
+    _linkStatusConfirmingDown = false;
     _linkRefreshState = LinkRefreshAutoNegotiationActive;
     updateCachedLink(Unknown, EthernetPhySpeedUnknown,
                      EthernetPhyDuplexUnknown);
     return;
   }
 
+  _linkStatusConfirmingDown = false;
   if (!queueLinkAdvertisementRead()) {
     _linkRefreshPending = false;
+    _linkStatusConfirmingDown = false;
     _linkRefreshState = LinkRefreshFailed;
     updateCachedLink(LinkON, EthernetPhySpeedUnknown,
                      EthernetPhyDuplexUnknown);
@@ -685,6 +783,22 @@ void PhyLinkManager::handlePhyId2Read(MiimManager::OperationHandle handle,
   PhyLinkManager *manager = static_cast<PhyLinkManager *>(context);
   if (manager != nullptr)
     manager->handlePhyId2Read(handle, result, value);
+}
+
+void PhyLinkManager::handlePhyResetWrite(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value, void *context) {
+  PhyLinkManager *manager = static_cast<PhyLinkManager *>(context);
+  if (manager != nullptr)
+    manager->handlePhyResetWrite(handle, result, value);
+}
+
+void PhyLinkManager::handlePhyInterruptClearRead(
+    MiimManager::OperationHandle handle, MiimManager::OperationResult result,
+    uint16_t value, void *context) {
+  PhyLinkManager *manager = static_cast<PhyLinkManager *>(context);
+  if (manager != nullptr)
+    manager->handlePhyInterruptClearRead(handle, result, value);
 }
 
 void PhyLinkManager::handlePhyInterruptEnableWrite(

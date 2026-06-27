@@ -38,11 +38,15 @@ enum EthernetHardwareStatus {
  * - Frame APIs are non-blocking: they return queued/available/failure state
  *   immediately and never wait for descriptor or PHY state to change.
  * - Link status APIs return cached state. Runtime refresh is scheduled through
- *   `requestLinkRefresh()`, a PHY interrupt, and bounded `service()` calls.
+ *   `requestLinkRefresh()`, a board-wired PHY interrupt, and bounded
+ *   `service()` calls.
  * - PHY management is routed through `MiimManager`; synchronous PHY helpers are
  *   not used on the frame RX/TX path.
  * - Carrier and link callbacks notify upper layers when cached link state
  *   changes so stack code does not need to inspect PHY registers.
+ * - Automatic runtime link-change detection requires an active PHY interrupt
+ *   pin configured with `setPhyInterruptPin()`. This class does not contain a
+ *   hidden PHY polling fallback.
  *
  * `EthernetClass` is not a TCP/IP stack. It does not own sockets, IP
  * addresses, DHCP, DNS, TLS state, or lwIP packet lifetimes.
@@ -113,7 +117,8 @@ public:
    * @brief Return cached link status.
    *
    * This does not read PHY registers. Use `requestLinkRefresh()` plus
-   * `service()` or a configured PHY interrupt to update the cache.
+   * `service()` for an explicit bounded refresh. Automatic runtime updates
+   * require a configured PHY interrupt.
    */
   EthernetLinkStatus linkStatus() const;
 
@@ -187,6 +192,16 @@ public:
   bool requestLinkRefresh();
 
   /**
+   * @brief Queue an explicit asynchronous PHY software reset.
+   *
+   * This writes the Clause-22 BMCR reset bit through `MiimManager` and returns
+   * immediately. Completion invalidates cached link/carrier state and returns
+   * PHY setup state to idle so callers can request setup verification again.
+   * Normal setup verification does not silently reset the PHY.
+   */
+  bool requestPhyReset();
+
+  /**
    * @brief Queue asynchronous verification of the selected PHY address.
    *
    * If the selected PHY uses `EthernetPhy::BROADCAST_ADDRESS`, setup first
@@ -208,7 +223,9 @@ public:
    * @brief Attach a board PHY interrupt pin.
    *
    * The interrupt only schedules deferred link refresh work. It does not run
-   * MIIM transactions directly inside the ISR.
+   * MIIM transactions directly inside the ISR. Automatic runtime link-change
+   * detection requires this pin to be connected to the selected PHY interrupt
+   * output and configured with the correct active edge/level for the board.
    */
   bool setPhyInterruptPin(uint32_t pin, uint32_t mode);
 
