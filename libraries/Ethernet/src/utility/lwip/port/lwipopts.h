@@ -18,6 +18,7 @@
 #define LWIP_ETHERNET 1
 #define LWIP_ICMP 1
 #define LWIP_IGMP 1
+/* Raw IP PCBs are not used; UDP/TCP still use lwIP's callback APIs. */
 #define LWIP_RAW 0
 
 #define LWIP_TCP 1

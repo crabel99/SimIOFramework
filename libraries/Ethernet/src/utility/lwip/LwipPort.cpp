@@ -4,6 +4,7 @@
 
 #if SIMIO_ETHERNET_HAS_LWIP_CORE
 #include <lwip/dhcp.h>
+#include <lwip/dns.h>
 #include <lwip/init.h>
 #include <lwip/ip4_addr.h>
 #include <lwip/pbuf.h>
@@ -17,6 +18,37 @@ namespace {
 struct netif globalLwipNetif;
 bool globalLwipInitialized = false;
 bool globalLwipNetifAdded = false;
+
+bool ipAddressIsZero(IPAddress ip) {
+  return ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0;
+}
+
+ip4_addr_t makeIp4Address(IPAddress ip) {
+  ip4_addr_t address;
+  IP4_ADDR(&address, ip[0], ip[1], ip[2], ip[3]);
+  return address;
+}
+
+ip_addr_t makeIpAddress(IPAddress ip) {
+  ip_addr_t address;
+  IP_ADDR4(&address, ip[0], ip[1], ip[2], ip[3]);
+  return address;
+}
+
+IPAddress makeIPAddressFromIp4(const ip4_addr_t *address) {
+  if (address == nullptr)
+    return IPAddress();
+
+  const uint32_t hostAddress = lwip_ntohl(ip4_addr_get_u32(address));
+  return IPAddress(static_cast<uint8_t>((hostAddress >> 24) & 0xff),
+                   static_cast<uint8_t>((hostAddress >> 16) & 0xff),
+                   static_cast<uint8_t>((hostAddress >> 8) & 0xff),
+                   static_cast<uint8_t>(hostAddress & 0xff));
+}
+
+IPAddress makeIPAddressFromIp(const ip_addr_t *address) {
+  return address == nullptr ? IPAddress() : makeIPAddressFromIp4(ip_2_ip4(address));
+}
 } // namespace
 #endif
 
@@ -108,6 +140,86 @@ void EthernetLwipPort::setLinkChangeCallback(LinkChangeCallback callback,
 void EthernetLwipPort::clearLinkChangeCallback() {
   _linkChangeCallback = nullptr;
   _linkChangeContext = nullptr;
+}
+
+bool EthernetLwipPort::configureNetwork(const NetworkConfig &config) {
+  _networkConfig = config;
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  if (_started)
+    return applyNetworkConfigToLwip();
+#endif
+  return true;
+}
+
+bool EthernetLwipPort::dhcpActive() const {
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  return _started && globalLwipNetifAdded && globalLwipNetif.state == this &&
+         _networkConfig.mode == NetworkAddressDhcp &&
+         netif_dhcp_data(&globalLwipNetif) != nullptr;
+#else
+  return false;
+#endif
+}
+
+bool EthernetLwipPort::dhcpAddressSupplied() const {
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  return dhcpActive() && dhcp_supplied_address(&globalLwipNetif) != 0;
+#else
+  return false;
+#endif
+}
+
+bool EthernetLwipPort::addressAssigned() const {
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  return _started && globalLwipNetifAdded && globalLwipNetif.state == this &&
+         !ip4_addr_isany_val(*netif_ip4_addr(&globalLwipNetif));
+#else
+  return false;
+#endif
+}
+
+IPAddress EthernetLwipPort::localIP() const {
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  if (!_started || !globalLwipNetifAdded || globalLwipNetif.state != this)
+    return IPAddress();
+
+  return makeIPAddressFromIp4(netif_ip4_addr(&globalLwipNetif));
+#else
+  return IPAddress();
+#endif
+}
+
+IPAddress EthernetLwipPort::gatewayIP() const {
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  if (!_started || !globalLwipNetifAdded || globalLwipNetif.state != this)
+    return IPAddress();
+
+  return makeIPAddressFromIp4(netif_ip4_gw(&globalLwipNetif));
+#else
+  return IPAddress();
+#endif
+}
+
+IPAddress EthernetLwipPort::subnetMask() const {
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  if (!_started || !globalLwipNetifAdded || globalLwipNetif.state != this)
+    return IPAddress();
+
+  return makeIPAddressFromIp4(netif_ip4_netmask(&globalLwipNetif));
+#else
+  return IPAddress();
+#endif
+}
+
+IPAddress EthernetLwipPort::dnsServerIP() const {
+#if SIMIO_ETHERNET_HAS_LWIP_CORE
+  if (!_started || !globalLwipNetifAdded || globalLwipNetif.state != this)
+    return IPAddress();
+
+  return makeIPAddressFromIp(dns_getserver(0));
+#else
+  return IPAddress();
+#endif
 }
 
 void EthernetLwipPort::setTcpBackend(LwipTcpSocketBackend &backend) {
@@ -409,7 +521,7 @@ bool EthernetLwipPort::beginLwipNetif() {
 
   if (globalLwipNetifAdded) {
     globalLwipNetif.state = this;
-    return true;
+    return applyNetworkConfigToLwip();
   }
 
   ip4_addr_t ipaddr;
@@ -432,6 +544,9 @@ bool EthernetLwipPort::beginLwipNetif() {
     netif_set_link_down(&globalLwipNetif);
 
   globalLwipNetifAdded = true;
+  if (!applyNetworkConfigToLwip())
+    return false;
+
   return true;
 }
 
@@ -441,6 +556,41 @@ void EthernetLwipPort::endLwipNetif() {
 
   netif_set_link_down(&globalLwipNetif);
   globalLwipNetif.state = nullptr;
+}
+
+bool EthernetLwipPort::applyNetworkConfigToLwip() {
+  if (!globalLwipNetifAdded || globalLwipNetif.state != this)
+    return false;
+
+  switch (_networkConfig.mode) {
+  case NetworkAddressDhcp: {
+    ip4_addr_t zero;
+    ip4_addr_set_zero(&zero);
+    netif_set_addr(&globalLwipNetif, &zero, &zero, &zero);
+    return dhcp_start(&globalLwipNetif) == ERR_OK;
+  }
+  case NetworkAddressStatic: {
+    dhcp_stop(&globalLwipNetif);
+    ip4_addr_t localIp = makeIp4Address(_networkConfig.localIp);
+    ip4_addr_t gateway = makeIp4Address(_networkConfig.gateway);
+    ip4_addr_t subnet = makeIp4Address(_networkConfig.subnet);
+    netif_set_addr(&globalLwipNetif, &localIp, &subnet, &gateway);
+
+    if (!ipAddressIsZero(_networkConfig.dnsServer)) {
+      ip_addr_t dnsServer = makeIpAddress(_networkConfig.dnsServer);
+      dns_setserver(0, &dnsServer);
+    }
+    return true;
+  }
+  case NetworkAddressUnconfigured:
+  default: {
+    dhcp_stop(&globalLwipNetif);
+    ip4_addr_t zero;
+    ip4_addr_set_zero(&zero);
+    netif_set_addr(&globalLwipNetif, &zero, &zero, &zero);
+    return true;
+  }
+  }
 }
 
 bool EthernetLwipPort::inputPacketToLwip(EthernetPacket *packet) {

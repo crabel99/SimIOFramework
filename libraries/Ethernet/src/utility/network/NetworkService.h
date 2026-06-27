@@ -24,6 +24,13 @@ public:
                        IPAddress gateway, IPAddress subnet);
   const NetworkConfig &networkConfig() const { return _networkConfig; }
   bool networkConfigured() const;
+  bool dhcpActive() const;
+  bool dhcpAddressSupplied() const;
+  bool addressAssigned() const;
+  IPAddress localIP() const;
+  IPAddress gatewayIP() const;
+  IPAddress subnetMask() const;
+  IPAddress dnsServerIP() const;
 
   EthernetNetif &netif() { return _netif; }
   EthernetLwipPort &lwipPort() { return _lwipPort; }

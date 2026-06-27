@@ -1,12 +1,15 @@
 /**
  * @file LwipSocketBackend.h
- * @brief Concrete TCP/UDP backend for lwIP socket builds.
+ * @brief Concrete transport backend for lwIP-backed builds.
  *
- * `LwipSocketBackend` implements the internal TCP and UDP backend contracts
- * using lwIP's socket API when lwIP is present. If lwIP headers are not
- * available at compile time, the same class compiles as a fail-closed backend
- * so native tests and partial framework builds do not accidentally pull in
- * platform networking dependencies.
+ * `LwipSocketBackend` implements the internal TCP and UDP backend contracts at
+ * the lwIP boundary. TCP client/server use lwIP's no-OS raw TCP PCB callback
+ * API and UDP uses lwIP's no-OS `udp_pcb` callback API when the vendored lwIP
+ * core is present. TLS currently remains fail-closed until a secure transport
+ * provider is added above the TCP backend. Public API classes must not own
+ * lwIP internals directly. Hostname operations are non-blocking: numeric or
+ * cached DNS answers proceed immediately, while unresolved names return
+ * fail-pending instead of waiting for DNS completion.
  */
 #pragma once
 
@@ -15,6 +18,9 @@
 class LwipSocketBackend : public LwipTcpSocketBackend,
                           public LwipUdpBackend {
 public:
+  struct TcpHandle;
+  struct UdpState;
+
   LwipSocketBackend();
   ~LwipSocketBackend() override;
 
@@ -63,13 +69,11 @@ public:
   uint16_t remotePort() override;
 
 private:
-  struct TcpHandle;
-  struct UdpState;
-
   TcpHandle *_client;
   TcpHandle *_secure;
   TcpHandle *_accepted;
   UdpState *_udp;
+  void *_serverPcb;
   int _serverFd;
   uint16_t _serverPort;
 

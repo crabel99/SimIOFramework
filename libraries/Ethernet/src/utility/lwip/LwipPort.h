@@ -3,9 +3,9 @@
  * @brief Boundary between EthernetNetif and the lwIP-facing transport layer.
  *
  * `EthernetLwipPort` is the only layer that should translate netif packet,
- * carrier, and output semantics into lwIP-style behavior. Until real lwIP is
- * imported, it preserves those contracts and fails TCP/UDP/TLS socket
- * operations closed through `TransportProvider`.
+ * carrier, address configuration, and output semantics into lwIP behavior. It
+ * owns lwIP netif setup/status and routes public transport-provider calls to
+ * lwIP-backed TCP/UDP/TLS adapters.
  *
  * This layer must not know SAME5x hardware details, GMAC descriptors, PHY
  * registers, or MDIO/MIIM operations. It must also not let public
@@ -16,6 +16,7 @@
 
 #include <utility/lwip/LwipTcpSocket.h>
 #include <utility/netif/Netif.h>
+#include <utility/network/NetworkConfig.h>
 #include <utility/transport/TransportProvider.h>
 
 #if defined(__has_include)
@@ -102,6 +103,14 @@ public:
   void setLinkChangeCallback(LinkChangeCallback callback,
                              void *context = nullptr);
   void clearLinkChangeCallback();
+  bool configureNetwork(const NetworkConfig &config);
+  bool dhcpActive() const;
+  bool dhcpAddressSupplied() const;
+  bool addressAssigned() const;
+  IPAddress localIP() const;
+  IPAddress gatewayIP() const;
+  IPAddress subnetMask() const;
+  IPAddress dnsServerIP() const;
   void setTcpBackend(LwipTcpSocketBackend &backend);
   void clearTcpBackend();
   void setUdpBackend(LwipUdpBackend &backend);
@@ -157,6 +166,7 @@ private:
   void *_inputContext = nullptr;
   LinkChangeCallback _linkChangeCallback = nullptr;
   void *_linkChangeContext = nullptr;
+  NetworkConfig _networkConfig;
   bool _started = false;
   LwipTcpSocketBackend *_tcpBackend = nullptr;
   LwipTcpSocket _clientSocket;
@@ -177,6 +187,7 @@ private:
 #if SIMIO_ETHERNET_HAS_LWIP_CORE
   bool beginLwipNetif();
   void endLwipNetif();
+  bool applyNetworkConfigToLwip();
   bool inputPacketToLwip(EthernetPacket *packet);
   EthernetLwipErr outputPbuf(struct pbuf *p);
   static err_t lwipNetifInit(struct netif *netif);

@@ -12,6 +12,7 @@ bool NetworkService::begin() {
   if (_packetAllocator == nullptr)
     return false;
 
+  _lwipPort.configureNetwork(_networkConfig);
   _started = _lwipPort.begin(*_packetAllocator);
   return _started;
 }
@@ -33,6 +34,7 @@ bool NetworkService::carrierUp() const { return _lwipPort.carrierUp(); }
 void NetworkService::configureDhcp() {
   _networkConfig = NetworkConfig();
   _networkConfig.mode = NetworkAddressDhcp;
+  _lwipPort.configureNetwork(_networkConfig);
 }
 
 void NetworkService::configureStatic(IPAddress localIp) {
@@ -55,8 +57,29 @@ void NetworkService::configureStatic(IPAddress localIp, IPAddress dnsServer,
   _networkConfig.dnsServer = dnsServer;
   _networkConfig.gateway = gateway;
   _networkConfig.subnet = subnet;
+  _lwipPort.configureNetwork(_networkConfig);
 }
 
 bool NetworkService::networkConfigured() const {
   return _networkConfig.mode != NetworkAddressUnconfigured;
+}
+
+bool NetworkService::dhcpActive() const { return _lwipPort.dhcpActive(); }
+
+bool NetworkService::dhcpAddressSupplied() const {
+  return _lwipPort.dhcpAddressSupplied();
+}
+
+bool NetworkService::addressAssigned() const {
+  return _lwipPort.addressAssigned();
+}
+
+IPAddress NetworkService::localIP() const { return _lwipPort.localIP(); }
+
+IPAddress NetworkService::gatewayIP() const { return _lwipPort.gatewayIP(); }
+
+IPAddress NetworkService::subnetMask() const { return _lwipPort.subnetMask(); }
+
+IPAddress NetworkService::dnsServerIP() const {
+  return _lwipPort.dnsServerIP();
 }
