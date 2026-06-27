@@ -1,3 +1,11 @@
+/**
+ * @file SecureClient.h
+ * @brief TLS-capable EthernetClient facade.
+ *
+ * `SecureClient` extends `EthernetClient` with TLS availability and error
+ * policy. The provider owns TLS socket/session implementation; this class
+ * chooses secure socket acquisition and fails closed when TLS is unavailable.
+ */
 #pragma once
 
 #include <EthernetClient.h>
@@ -19,6 +27,9 @@ public:
   SecureClient(SecureClient &&other);
   SecureClient &operator=(SecureClient &&other);
 
+  /**
+   * @brief Connect through a TLS-capable provider socket.
+   */
   int connect(IPAddress ip, uint16_t port) override;
   int connect(const char *host, uint16_t port) override;
 

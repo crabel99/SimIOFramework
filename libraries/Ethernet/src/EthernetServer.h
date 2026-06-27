@@ -1,3 +1,11 @@
+/**
+ * @file EthernetServer.h
+ * @brief Arduino Server facade backed by TransportProvider listener state.
+ *
+ * `EthernetServer` owns Arduino `Server` API behavior for a single listen port.
+ * The provider owns actual listener/socket objects. Accepted clients receive
+ * provider-owned sockets and release them through `EthernetClient`.
+ */
 #pragma once
 
 #include <EthernetClient.h>
@@ -12,8 +20,16 @@ public:
 
   void setProvider(TransportProvider &provider);
   void clearProvider();
+
+  /**
+   * @brief Start listening through the provider.
+   */
   void begin() override;
   void stop();
+
+  /**
+   * @brief Return the next accepted client, or a disconnected client if none.
+   */
   EthernetClient available();
   EthernetClient accept();
 

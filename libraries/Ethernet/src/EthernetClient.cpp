@@ -59,8 +59,14 @@ void EthernetClient::clearSocket() {
 }
 
 int EthernetClient::connect(IPAddress ip, uint16_t port) {
-  if (!ensureSocket() || !_socket->carrierUp())
+  if (!ensureSocket())
     return 0;
+
+  if (!_socket->carrierUp()) {
+    if (_ownsSocket)
+      releaseOwnedSocket();
+    return 0;
+  }
 
   const int result = _socket->connect(ip, port);
   if (result == 0 && _ownsSocket)
@@ -73,8 +79,14 @@ int EthernetClient::connect(const char *host, uint16_t port) {
   if (host == nullptr || host[0] == '\0')
     return 0;
 
-  if (!ensureSocket() || !_socket->carrierUp())
+  if (!ensureSocket())
     return 0;
+
+  if (!_socket->carrierUp()) {
+    if (_ownsSocket)
+      releaseOwnedSocket();
+    return 0;
+  }
 
   const int result = _socket->connect(host, port);
   if (result == 0 && _ownsSocket)

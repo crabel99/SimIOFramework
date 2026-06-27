@@ -1,3 +1,11 @@
+/**
+ * @file EthernetUdp.h
+ * @brief Arduino UDP facade backed by TransportProvider UDP operations.
+ *
+ * `EthernetUDP` owns Arduino `UDP` API validation and delegates endpoint,
+ * packet, and receive-buffer behavior to the provider. It must not own lwIP UDP
+ * control blocks, network interface state, frame buffers, or hardware details.
+ */
 #pragma once
 
 #include <Udp.h>
@@ -11,9 +19,16 @@ public:
   void setProvider(TransportProvider &provider);
   void clearProvider();
 
+  /**
+   * @brief Bind UDP endpoint state through the provider.
+   */
   uint8_t begin(uint16_t port) override;
   uint8_t beginMulticast(IPAddress ip, uint16_t port) override;
   void stop() override;
+
+  /**
+   * @brief Delegate one outbound UDP packet lifecycle to the provider.
+   */
   int beginPacket(IPAddress ip, uint16_t port) override;
   int beginPacket(const char *host, uint16_t port) override;
   int endPacket() override;

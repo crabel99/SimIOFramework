@@ -1,3 +1,11 @@
+/**
+ * @file EthernetClient.h
+ * @brief Arduino Client facade backed by a TransportProvider socket.
+ *
+ * `EthernetClient` owns Arduino `Client` behavior and provider-acquired socket
+ * lifetime. It must not allocate lwIP protocol-control blocks directly, manage
+ * DNS/TLS policy, inspect Ethernet frames, or touch GMAC/PHY/MIIM hardware.
+ */
 #pragma once
 
 #include <Client.h>
@@ -19,6 +27,13 @@ public:
   void setTransportProvider(TransportProvider &provider);
   void clearSocket();
 
+  /**
+   * @brief Connect using an attached or provider-acquired socket.
+   *
+   * The call fails closed when no socket/provider exists, carrier is down, or
+   * the provider cannot connect. Provider-acquired sockets are released on
+   * failed connect attempts.
+   */
   int connect(IPAddress ip, uint16_t port) override;
   int connect(const char *host, uint16_t port) override;
   size_t write(uint8_t value) override;
