@@ -14,8 +14,7 @@
  */
 
 #include <GMAC.h>
-#include <utility/miim/MiimManager.h>
-#include <utility/phy/Phy.h>
+#include <utility/phy/PhyLinkManager.h>
 
 #include <stdint.h>
 
@@ -29,83 +28,6 @@ enum EthernetHardwareStatus {
   EthernetNoHardware = 0,
   /// SAME5x GMAC hardware is available.
   EthernetGmac = 1,
-};
-
-/**
- * @brief Cached Ethernet carrier/link state.
- */
-enum EthernetLinkStatus {
-  /// PHY reports link down or no carrier.
-  LinkOFF = 0,
-  /// PHY reports link up.
-  LinkON = 1,
-  /// Link state has not been resolved or a management operation failed.
-  Unknown = 2,
-};
-
-/**
- * @brief Runtime PHY setup/verification state.
- *
- * This state describes the bounded management flow that verifies the selected
- * PHY address without calling synchronous PHY helpers from runtime service.
- */
-enum EthernetPhySetupState {
-  /// No runtime PHY setup has been requested or the state was reset.
-  PhySetupIdle = 0,
-  /// PHY address scan has been queued or is active.
-  PhySetupScanning,
-  /// PHY ID1 read has been queued or is active.
-  PhySetupReadingId1,
-  /// PHY ID2 read has been queued or is active.
-  PhySetupReadingId2,
-  /// PHY interrupt mask write has been queued or is active.
-  PhySetupConfiguringInterrupts,
-  /// PHY ID was read and accepted by the selected PHY object.
-  PhySetupVerified,
-  /// PHY ID was readable but rejected by the selected PHY object.
-  PhySetupInvalidId,
-  /// Address scan completed without finding a readable PHY ID1 register.
-  PhySetupScanNotFound,
-  /// PHY setup failed because a management operation failed or could not queue.
-  PhySetupFailed,
-};
-
-/**
- * @brief Runtime PHY link-refresh state.
- *
- * This state describes the bounded management flow that updates cached link
- * status. It is intentionally separate from `EthernetLinkStatus`: link status
- * is the resolved carrier cache, while link-refresh state describes the
- * management operation currently in progress or the last terminal refresh
- * outcome.
- */
-enum EthernetLinkRefreshState {
-  /// No runtime link refresh has been requested or the state was reset.
-  LinkRefreshIdle = 0,
-  /// BMSR/link-status read has been queued or is active.
-  LinkRefreshReadingStatus,
-  /// Link is up, but auto-negotiation is still active.
-  LinkRefreshAutoNegotiationActive,
-  /// Link is up, but Clause-22 auto-negotiation is not available.
-  LinkRefreshAutoNegotiationUnsupported,
-  /// Vendor resolved-mode register read has been queued or is active.
-  LinkRefreshReadingVendorMode,
-  /// Local advertisement read has been queued or is active.
-  LinkRefreshReadingAdvertisement,
-  /// Link partner ability read has been queued or is active.
-  LinkRefreshReadingPartnerAbility,
-  /// Refresh completed and resolved link down.
-  LinkRefreshLinkDown,
-  /// Refresh completed and resolved link up speed/duplex.
-  LinkRefreshResolved,
-  /// Refresh completed with link up but unresolved speed/duplex.
-  LinkRefreshUnresolved,
-  /// Refresh completed and resolved link up through a vendor mode register.
-  LinkRefreshVendorModeResolved,
-  /// Refresh completed with link up but unresolved vendor mode.
-  LinkRefreshVendorModeUnresolved,
-  /// Refresh failed because a management operation failed or could not queue.
-  LinkRefreshFailed,
 };
 
 /**
@@ -430,104 +352,9 @@ private:
   uint8_t _mac[6];
   bool _hasMac;
   bool _begun;
-  EthernetPhy *_phy;
-  EthernetLinkStatus _linkStatus;
-  EthernetPhyLinkSpeed _linkSpeed;
-  EthernetPhyDuplex _duplex;
-  LinkChangeCallback _linkChangeCallback;
-  void *_linkChangeCallbackContext;
-  CarrierCallback _carrierCallback;
-  void *_carrierCallbackContext;
-
-  MiimManager _miim;
-  bool _phySetupPending;
-  EthernetPhySetupState _phySetupState;
-  bool _linkRefreshPending;
-  EthernetLinkRefreshState _linkRefreshState;
-  volatile bool _linkRefreshRequested;
-  volatile bool _phyInterruptStatusRequested;
-  bool _phyInterruptStatusPending;
-  bool _phyInterruptAttached;
-  uint32_t _phyInterruptPin;
-  uint32_t _phyInterruptMode;
-  uint16_t _phyId1;
-  uint16_t _phyInterruptEvents;
-  uint16_t _linkAdvertisement;
-
-  bool ensurePhyPendSvServiceRegistered();
-  void clearPhyInterruptPin(bool disablePhyInterrupts);
-  bool updateCachedLink(EthernetLinkStatus status, EthernetPhyLinkSpeed speed,
-                        EthernetPhyDuplex duplex);
-  bool queuePhyId1Read();
-  bool queuePhyId2Read();
-  bool queuePhyScan();
-  bool queuePhyInterruptEnableWrite();
-  bool queuePhyInterruptDisableWrite();
-  bool queuePhyInterruptStatusRead();
-  bool queueLinkStatusRead();
-  bool queueVendorModeRead();
-  bool queueLinkAdvertisementRead();
-  bool queueLinkPartnerAbilityRead();
+  PhyLinkManager _phyLink;
   void handleGmacEvents(gmac::EventMask events);
-  void handlePhyId1Read(MiimManager::OperationHandle handle,
-                        MiimManager::OperationResult result, uint16_t value);
-  void handlePhyScanRead(MiimManager::OperationHandle handle,
-                         MiimManager::OperationResult result, uint16_t value);
-  void handlePhyId2Read(MiimManager::OperationHandle handle,
-                        MiimManager::OperationResult result, uint16_t value);
-  void handlePhyInterruptEnableWrite(MiimManager::OperationHandle handle,
-                                     MiimManager::OperationResult result,
-                                     uint16_t value);
-  void handlePhyInterruptStatusRead(MiimManager::OperationHandle handle,
-                                    MiimManager::OperationResult result,
-                                    uint16_t value);
-  bool handlePhyInterruptEvents(uint16_t events);
-  bool handlePhyLinkDownInterrupt();
-  bool handlePhyLinkUpInterrupt();
-  bool handlePhyAutoNegotiationCompleteInterrupt();
-  void handleLinkStatusRead(MiimManager::OperationHandle handle,
-                            MiimManager::OperationResult result,
-                            uint16_t value);
-  void handleVendorModeRead(MiimManager::OperationHandle handle,
-                            MiimManager::OperationResult result,
-                            uint16_t value);
-  void handleLinkAdvertisementRead(MiimManager::OperationHandle handle,
-                                   MiimManager::OperationResult result,
-                                   uint16_t value);
-  void handleLinkPartnerAbilityRead(MiimManager::OperationHandle handle,
-                                    MiimManager::OperationResult result,
-                                    uint16_t value);
   static void handleGmacEvents(gmac::EventMask events, void *context);
-  static void handlePhyId1Read(MiimManager::OperationHandle handle,
-                               MiimManager::OperationResult result,
-                               uint16_t value, void *context);
-  static void handlePhyScanRead(MiimManager::OperationHandle handle,
-                                MiimManager::OperationResult result,
-                                uint16_t value, void *context);
-  static void handlePhyId2Read(MiimManager::OperationHandle handle,
-                               MiimManager::OperationResult result,
-                               uint16_t value, void *context);
-  static void handlePhyInterruptEnableWrite(
-      MiimManager::OperationHandle handle, MiimManager::OperationResult result,
-      uint16_t value, void *context);
-  static void handlePhyInterruptStatusRead(
-      MiimManager::OperationHandle handle, MiimManager::OperationResult result,
-      uint16_t value, void *context);
-  static void handleLinkStatusRead(MiimManager::OperationHandle handle,
-                                   MiimManager::OperationResult result,
-                                   uint16_t value, void *context);
-  static void handleVendorModeRead(MiimManager::OperationHandle handle,
-                                   MiimManager::OperationResult result,
-                                   uint16_t value, void *context);
-  static void handleLinkAdvertisementRead(MiimManager::OperationHandle handle,
-                                          MiimManager::OperationResult result,
-                                          uint16_t value, void *context);
-  static void handleLinkPartnerAbilityRead(MiimManager::OperationHandle handle,
-                                           MiimManager::OperationResult result,
-                                           uint16_t value, void *context);
-  static void handlePhyPendSv(uint8_t serviceId, void *context);
-  static void handlePhyInterrupt();
-  static void handlePhyInterruptCallback(void *context);
 };
 
 extern EthernetClass Ethernet;
