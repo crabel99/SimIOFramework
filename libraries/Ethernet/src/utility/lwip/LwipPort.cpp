@@ -9,7 +9,14 @@ bool EthernetLwipPort::begin(EthernetPacketAllocator &allocator) {
   _netif->setPacketAllocator(allocator);
   _netif->setInputCallback(inputThunk, this);
   _netif->setLinkChangeCallback(linkThunk, this);
-  return _netif->begin();
+  _started = _netif->begin();
+  if (!_started) {
+    _netif->clearInputCallback();
+    _netif->clearLinkChangeCallback();
+    _netif->clearPacketAllocator();
+  }
+
+  return _started;
 }
 
 void EthernetLwipPort::end() {
@@ -20,10 +27,11 @@ void EthernetLwipPort::end() {
   _netif->clearLinkChangeCallback();
   _netif->clearPacketAllocator();
   _netif->end();
+  _started = false;
 }
 
 bool EthernetLwipPort::service() {
-  if (_netif == nullptr)
+  if (!_started || _netif == nullptr)
     return false;
 
   return _netif->service();
@@ -53,14 +61,14 @@ void EthernetLwipPort::clearLinkChangeCallback() {
 
 EthernetLwipErr EthernetLwipPort::output(const uint8_t *frame,
                                          uint16_t length) {
-  if (_netif == nullptr)
+  if (!_started || _netif == nullptr)
     return EthernetLwipErrUse;
 
   return mapOutputResult(_netif->outputResult(frame, length));
 }
 
 bool EthernetLwipPort::carrierUp() const {
-  return _netif != nullptr && _netif->carrierUp();
+  return _started && _netif != nullptr && _netif->carrierUp();
 }
 
 EthernetSocket *EthernetLwipPort::acquireClientSocket() { return nullptr; }

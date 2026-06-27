@@ -1,3 +1,17 @@
+/**
+ * @file LwipPort.h
+ * @brief Boundary between EthernetNetif and the lwIP-facing transport layer.
+ *
+ * `EthernetLwipPort` is the only layer that should translate netif packet,
+ * carrier, and output semantics into lwIP-style behavior. Until real lwIP is
+ * imported, it preserves those contracts and fails TCP/UDP/TLS socket
+ * operations closed through `TransportProvider`.
+ *
+ * This layer must not know SAME5x hardware details, GMAC descriptors, PHY
+ * registers, or MDIO/MIIM operations. It must also not let public
+ * `EthernetClient`, `EthernetServer`, `EthernetUDP`, or `SecureClient` classes
+ * own lwIP internals directly.
+ */
 #pragma once
 
 #include <utility/netif/Netif.h>
@@ -13,8 +27,18 @@ enum EthernetLwipErr {
 
 class EthernetLwipPort : public TransportProvider {
 public:
+  /**
+   * @brief lwIP-style packet input callback.
+   *
+   * `EthernetLwipErrOk` accepts packet ownership. Any other result rejects the
+   * packet and lets `EthernetNetif` release it.
+   */
   using InputCallback = EthernetLwipErr (*)(EthernetPacket *packet,
                                             void *context);
+
+  /**
+   * @brief Carrier/link notification forwarded from `EthernetNetif`.
+   */
   using LinkChangeCallback = void (*)(bool carrierUp,
                                       EthernetFrameLinkStatus status,
                                       EthernetFrameLinkSpeed speed,
@@ -23,8 +47,19 @@ public:
 
   explicit EthernetLwipPort(EthernetNetif &netif);
 
+  /**
+   * @brief Wire packet allocation and callbacks into the netif.
+   */
   bool begin(EthernetPacketAllocator &allocator);
+
+  /**
+   * @brief Unwire netif callbacks and fail closed until `begin()` is called.
+   */
   void end();
+
+  /**
+   * @brief Advance bounded netif/driver work only while started.
+   */
   bool service();
 
   void setInputCallback(InputCallback callback, void *context = nullptr);
@@ -33,9 +68,19 @@ public:
                              void *context = nullptr);
   void clearLinkChangeCallback();
 
+  /**
+   * @brief Send one raw Ethernet frame through the netif and map the result.
+   */
   EthernetLwipErr output(const uint8_t *frame, uint16_t length);
+
+  /**
+   * @brief Return current carrier state only while the port is started.
+   */
   bool carrierUp() const;
 
+  /**
+   * @brief Convert netif output results into the lwIP-style error model.
+   */
   static EthernetLwipErr mapOutputResult(EthernetNetifOutputResult result);
 
   EthernetSocket *acquireClientSocket() override;
@@ -73,6 +118,7 @@ private:
   void *_inputContext = nullptr;
   LinkChangeCallback _linkChangeCallback = nullptr;
   void *_linkChangeContext = nullptr;
+  bool _started = false;
 
   bool handleInput(EthernetPacket *packet);
   void handleLinkChange(bool carrierUp, EthernetFrameLinkStatus status,
