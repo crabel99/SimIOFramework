@@ -197,7 +197,9 @@ public:
    * This writes the Clause-22 BMCR reset bit through `MiimManager` and returns
    * immediately. Completion invalidates cached link/carrier state and returns
    * PHY setup state to idle so callers can request setup verification again.
-   * Normal setup verification does not silently reset the PHY.
+   * Normal setup verification does not silently reset the PHY. The request is
+   * rejected while setup, link-refresh, or PHY interrupt-status work is active
+   * so reset cannot interleave with stale management callbacks.
    */
   bool requestPhyReset();
 
