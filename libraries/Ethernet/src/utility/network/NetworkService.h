@@ -1,6 +1,7 @@
 #pragma once
 
 #include <utility/lwip/LwipPort.h>
+#include <utility/lwip/LwipSocketBackend.h>
 #include <utility/netif/FrameDriver.h>
 #include <utility/netif/Netif.h>
 #include <utility/network/NetworkConfig.h>
@@ -31,6 +32,7 @@ private:
   EthernetPacketAllocator *_packetAllocator;
   EthernetNetif _netif;
   EthernetLwipPort _lwipPort;
+  LwipSocketBackend _socketBackend;
   NetworkConfig _networkConfig;
   bool _started;
 };
