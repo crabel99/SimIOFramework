@@ -1,0 +1,36 @@
+{
+  "name": "Crypto",
+  "version": "0.1.0",
+  "description": "Arduino-facing cryptography API layered over Mbed TLS and SAME5x crypto hardware modules.",
+  "keywords": [
+    "crypto",
+    "aes",
+    "trng",
+    "pukcc",
+    "mbedtls"
+  ],
+  "frameworks": [
+    "arduino"
+  ],
+  "platforms": [
+    "atmelsam",
+    "native"
+  ],
+  "build": {
+    "flags": [
+      "-Isrc/utility/third_party/mbedtls/include",
+      "-Isrc/utility/third_party/mbedtls/tf-psa-crypto/include",
+      "-Isrc/utility/third_party/mbedtls/tf-psa-crypto/core",
+      "-Isrc/utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/include",
+      "-Isrc/utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src",
+      "-Isrc/utility/third_party/mbedtls/tf-psa-crypto/platform",
+      "-Isrc/utility/third_party/mbedtls/tf-psa-crypto/utilities"
+    ],
+    "srcFilter": [
+      "+<*>",
+      "-<utility/third_party/>",
+      "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c>",
+      "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/ctr_drbg.c>"
+    ]
+  }
+}
