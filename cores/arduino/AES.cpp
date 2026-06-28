@@ -7,6 +7,16 @@ inline aes_registers_t *regs() {
   return reinterpret_cast<aes_registers_t *>(AES_PERIPH);
 }
 
+uint32_t enterCritical() {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  return primask;
+}
+
+void exitCritical(uint32_t primask) {
+  __set_PRIMASK(primask);
+}
+
 uint8_t expectedKeyWords(aes::KeySize keySize) {
   switch (keySize) {
   case aes::KeySize::Bits128:
@@ -17,6 +27,65 @@ uint8_t expectedKeyWords(aes::KeySize keySize) {
     return 8;
   }
   return 0;
+}
+
+struct AsyncState {
+  aes::EventCallback callback = nullptr;
+  void *callbackContext = nullptr;
+  uint32_t *output = nullptr;
+  uint8_t pendingFlags = 0;
+  bool serviceRegistered = false;
+  bool busy = false;
+};
+
+AsyncState asyncState;
+
+void aesPendSvService(uint8_t serviceId, void *context) {
+  (void)serviceId;
+  (void)context;
+
+  aes::EventCallback callback = nullptr;
+  void *callbackContext = nullptr;
+  uint32_t *output = nullptr;
+  uint8_t flags = 0;
+
+  const uint32_t primask = enterCritical();
+  flags = asyncState.pendingFlags;
+  asyncState.pendingFlags = 0;
+  output = asyncState.output;
+  callback = asyncState.callback;
+  callbackContext = asyncState.callbackContext;
+  exitCritical(primask);
+
+  aes::EventMask events = aes::EventNone;
+  if ((flags & aes::EncryptionCompleteInterrupt) != 0u) {
+    if (output != nullptr)
+      aes::readOutputBlock(output);
+    events |= aes::EventComplete;
+  }
+  if ((flags & aes::GaloisMultiplyCompleteInterrupt) != 0u)
+    events |= aes::EventGaloisComplete;
+
+  aes::end();
+
+  const uint32_t completePrimask = enterCritical();
+  asyncState.output = nullptr;
+  asyncState.busy = false;
+  exitCritical(completePrimask);
+
+  if (callback != nullptr && events != aes::EventNone)
+    callback(events, callbackContext);
+}
+
+bool ensurePendSvServiceRegistered() {
+  if (asyncState.serviceRegistered)
+    return true;
+
+  const bool registered = PendSV::instance().registerService(
+      aes::pendSvServiceId(), aesPendSvService);
+  if (registered)
+    asyncState.serviceRegistered = true;
+  return registered;
 }
 } // namespace
 
@@ -134,6 +203,95 @@ void aes::enableInterrupts(uint8_t mask) {
 
 void aes::disableInterrupts(uint8_t mask) {
   regs()->AES_INTENCLR = mask & AES_INTENCLR_Msk;
+}
+
+bool aes::registerEventCallback(EventCallback callback, void *context) {
+  if (callback == nullptr || !ensurePendSvServiceRegistered())
+    return false;
+
+  const uint32_t primask = enterCritical();
+  asyncState.callback = callback;
+  asyncState.callbackContext = context;
+  asyncState.pendingFlags = 0;
+  exitCritical(primask);
+  return true;
+}
+
+void aes::clearEventCallback() {
+  const uint32_t primask = enterCritical();
+  asyncState.callback = nullptr;
+  asyncState.callbackContext = nullptr;
+  asyncState.pendingFlags = 0;
+  exitCritical(primask);
+  PendSV::instance().clearService(pendSvServiceId());
+  asyncState.serviceRegistered = false;
+}
+
+bool aes::startEcb128Async(Direction direction, const uint32_t key[4],
+                           const uint32_t input[4], uint32_t output[4]) {
+  if (key == nullptr || input == nullptr || output == nullptr)
+    return false;
+  if (!ensurePendSvServiceRegistered())
+    return false;
+
+  uint32_t primask = enterCritical();
+  if (asyncState.busy || asyncState.callback == nullptr) {
+    exitCritical(primask);
+    return false;
+  }
+  asyncState.busy = true;
+  asyncState.output = output;
+  asyncState.pendingFlags = 0;
+  exitCritical(primask);
+
+  begin();
+  configure(Mode::Ecb, KeySize::Bits128, direction);
+  if (!writeKey(key, 4)) {
+    end();
+    primask = enterCritical();
+    asyncState.busy = false;
+    asyncState.output = nullptr;
+    exitCritical(primask);
+    return false;
+  }
+
+  clearInterruptFlags(EncryptionCompleteInterrupt |
+                      GaloisMultiplyCompleteInterrupt);
+  beginMessage();
+  writeInputBlock(input);
+  enableInterrupts(EncryptionCompleteInterrupt);
+  NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
+  NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
+  start();
+  return true;
+}
+
+bool aes::asyncBusy() {
+  const uint32_t primask = enterCritical();
+  const bool busy = asyncState.busy;
+  exitCritical(primask);
+  return busy;
+}
+
+void aes::handleInterrupt() {
+  const uint8_t flags = interruptFlags();
+  const uint8_t handled =
+      flags & (EncryptionCompleteInterrupt | GaloisMultiplyCompleteInterrupt);
+  if (handled == 0u)
+    return;
+
+  disableInterrupts(handled);
+  clearInterruptFlags(handled);
+
+  const uint32_t primask = enterCritical();
+  asyncState.pendingFlags |= handled;
+  exitCritical(primask);
+
+  PendSV::instance().setPending(pendSvServiceId());
+}
+
+extern "C" void AES_Handler(void) {
+  aes::handleInterrupt();
 }
 
 #endif /* AES_AVAILABLE */

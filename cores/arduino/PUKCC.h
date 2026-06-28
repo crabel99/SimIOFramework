@@ -41,6 +41,14 @@
  */
 class pukcc {
 public:
+  using EventMask = uint8_t;
+  using EventCallback = void (*)(EventMask events, uint8_t serviceId,
+                                 uint16_t status, void *context);
+
+  static constexpr EventMask EventNone = 0;
+  static constexpr EventMask EventComplete = 1u << 0;
+  static constexpr EventMask EventError = 1u << 1;
+
   static constexpr uintptr_t StatusRegisterAddress = 0x4200302Cu;
   static constexpr uint32_t ClearRamBusyMask = 0x00000001u;
   static constexpr uintptr_t RomJumpTableAddress = 0x02000001u;
@@ -159,12 +167,6 @@ public:
 
   /** @brief Return the CMSIS IRQ number for the PUKCC service block. */
   static int irqNumber();
-  /**
-   * @brief Enable the PUKCC AHB clock gate and wait for Crypto RAM readiness.
-   * @param loopBudget Maximum status-register polls before giving up.
-   * @return true when the PUKCC clear-RAM busy bit is deasserted.
-   */
-  static bool begin(uint32_t loopBudget = 1000000u);
   /** @brief Disable the PUKCC AHB clock gate. */
   static void end();
   /** @brief Enable the PUKCC AHB clock gate without waiting for readiness. */
@@ -175,43 +177,8 @@ public:
   static uint32_t status();
   /** @brief Return true while PUKCC is clearing its private Crypto RAM. */
   static bool ramClearBusy();
-  /**
-   * @brief Poll the mandatory Crypto RAM clear state with a bounded budget.
-   * @param loopBudget Maximum status-register polls before returning false.
-   * @return true once the clear-RAM busy bit is deasserted.
-   */
-  static bool waitForRamClear(uint32_t loopBudget);
   /** @brief Return true when the PUKCC service block is ready for ROM calls. */
   static bool ready();
-  /**
-   * @brief Run the mandatory PUKCL ROM self-test service.
-   *
-   * This is the only PUKCL ROM service owned directly by the hardware boundary
-   * because the datasheet requires it before any other service call. The method
-   * enables PUKCC, waits for Crypto RAM clear readiness, dispatches the ROM
-   * SelfTest entry, captures returned version/check values, and validates the
-   * documented check words and final step. RSA/ECC primitive parameter blocks
-   * remain the responsibility of the later PUKCL service wrapper.
-   *
-   * @param result Filled with raw self-test status and return values.
-   * @param loopBudget Maximum clear-RAM status polls before dispatch.
-   * @return true when status is OK and documented check values match.
-   */
-  static bool selfTest(SelfTestResult &result,
-                       uint32_t loopBudget = 1000000u);
-  /**
-   * @brief Dispatch the PUKCL ClearFlags service on an owned header block.
-   *
-   * ClearFlags is the minimal non-self-test ROM service: it touches only the
-   * common PUKCL status field and requires no Crypto RAM workspace. It proves
-   * generic service dispatch and status decoding while keeping RSA/ECC service
-   * parameter ownership deferred to the later PUKCL wrapper.
-   *
-   * @param initialFlags Initial PUKCL specific-status bits to pass.
-   * @param result Filled with the service ID, returned status, and final bits.
-   * @return true when the service returns StatusOk.
-   */
-  static bool clearFlags(uint32_t initialFlags, ServiceResult &result);
   /** @brief Return the PUKCL severity class encoded in a service status. */
   static StatusSeverity statusSeverity(uint16_t serviceStatus);
   /** @brief Return the PUKCL status reason with severity bits removed. */
@@ -246,21 +213,27 @@ public:
    */
   static uint16_t cryptoRamNearPointer(uint16_t offset);
   /**
-   * @brief Dispatch the PUKCL Fill service into owned Crypto RAM.
+   * @brief Register the PUKCC service callback.
    *
-   * Fill is the first workspace-backed PUKCL service exposed by this boundary.
-   * It validates the Crypto RAM range, dispatches the ROM Fill entry, and
-   * reports the common service status. More complex arithmetic/RSA/ECC services
-   * should build on the same range validation and near-pointer model.
-   *
-   * @param offset Four-byte aligned offset into PUKCC Crypto RAM.
-   * @param length Four-byte multiple in [4, CryptoRamUsableSize].
-   * @param fillValue 32-bit pattern written by the ROM service.
-   * @param result Filled with the service ID, returned status, and final bits.
-   * @return true when the service returns StatusOk.
+   * PUKCL ROM services are submitted from thread context and executed by the
+   * PUKCC PendSV service. The callback also runs from PendSV context after the
+   * result structure has been filled.
    */
-  static bool fillCryptoRam(uint16_t offset, uint16_t length,
-                            uint32_t fillValue, ServiceResult &result);
+  static bool registerEventCallback(EventCallback callback,
+                                    void *context = nullptr);
+  /** @brief Clear callback state and cancel queued PUKCC service dispatch. */
+  static void clearEventCallback();
+  /** @brief Queue the mandatory PUKCL SelfTest service without blocking. */
+  static bool selfTestAsync(SelfTestResult &result);
+  /** @brief Queue the PUKCL ClearFlags service without blocking. */
+  static bool clearFlagsAsync(uint32_t initialFlags, ServiceResult &result);
+  /** @brief Queue the PUKCL Fill service without blocking. */
+  static bool fillCryptoRamAsync(uint16_t offset, uint16_t length,
+                                 uint32_t fillValue, ServiceResult &result);
+  /** @brief Return true while a PUKCC async service is outstanding. */
+  static bool asyncBusy();
+  /** @brief Schedule PUKCC PendSV work from the PUKCC IRQ, when used. */
+  static void handleInterrupt();
   /** @brief Return the CMSIS peripheral instance ID when exposed. */
   inline static int instanceId() {
 #if defined(PUKCC_INSTANCE_ID)

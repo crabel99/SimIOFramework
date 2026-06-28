@@ -7,6 +7,16 @@ inline volatile uint32_t &statusRegister() {
   return *reinterpret_cast<volatile uint32_t *>(pukcc::StatusRegisterAddress);
 }
 
+uint32_t enterCritical() {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  return primask;
+}
+
+void exitCritical(uint32_t primask) {
+  __set_PRIMASK(primask);
+}
+
 struct PukclHeader {
   uint8_t service;
   uint8_t subService;
@@ -67,14 +77,159 @@ inline PukclHeaderFunction clearFlagsFunction() {
 inline PukclFillFunction fillFunction() {
   return reinterpret_cast<PukclFillFunction>(pukcc::FillFunctionAddress);
 }
+
+enum class PendingOperation : uint8_t {
+  None,
+  SelfTest,
+  ClearFlags,
+  Fill,
+};
+
+struct AsyncState {
+  pukcc::EventCallback callback = nullptr;
+  void *callbackContext = nullptr;
+  pukcc::SelfTestResult *selfTestResult = nullptr;
+  pukcc::ServiceResult *serviceResult = nullptr;
+  uint32_t initialFlags = 0;
+  uint16_t offset = 0;
+  uint16_t length = 0;
+  uint32_t fillValue = 0;
+  PendingOperation operation = PendingOperation::None;
+  bool serviceRegistered = false;
+  bool busy = false;
+};
+
+AsyncState asyncState;
+
+void completeAsync(uint8_t serviceId, uint16_t status) {
+  pukcc::EventCallback callback = nullptr;
+  void *callbackContext = nullptr;
+
+  const uint32_t primask = enterCritical();
+  callback = asyncState.callback;
+  callbackContext = asyncState.callbackContext;
+  asyncState.operation = PendingOperation::None;
+  asyncState.selfTestResult = nullptr;
+  asyncState.serviceResult = nullptr;
+  asyncState.busy = false;
+  exitCritical(primask);
+
+  pukcc::EventMask events = pukcc::statusIsOk(status) ? pukcc::EventComplete
+                                                       : pukcc::EventError;
+  if (callback != nullptr)
+    callback(events, serviceId, status, callbackContext);
+}
+
+void pukccPendSvService(uint8_t serviceId, void *context) {
+  (void)serviceId;
+  (void)context;
+
+  PendingOperation operation = PendingOperation::None;
+  pukcc::SelfTestResult *selfTestResult = nullptr;
+  pukcc::ServiceResult *serviceResult = nullptr;
+  uint32_t initialFlags = 0;
+  uint16_t offset = 0;
+  uint16_t length = 0;
+  uint32_t fillValue = 0;
+
+  uint32_t primask = enterCritical();
+  operation = asyncState.operation;
+  selfTestResult = asyncState.selfTestResult;
+  serviceResult = asyncState.serviceResult;
+  initialFlags = asyncState.initialFlags;
+  offset = asyncState.offset;
+  length = asyncState.length;
+  fillValue = asyncState.fillValue;
+  exitCritical(primask);
+
+  if (operation == PendingOperation::None)
+    return;
+
+  pukcc::enableClock();
+  if (pukcc::ramClearBusy()) {
+    PendSV::instance().setPending(pukcc::pendSvServiceId());
+    return;
+  }
+
+  switch (operation) {
+  case PendingOperation::SelfTest: {
+    if (selfTestResult == nullptr) {
+      completeAsync(pukcc::SelfTestServiceId,
+                    pukcc::StatusComputationNotStarted);
+      return;
+    }
+
+    PukclSelfTestParam param = {};
+    param.header.service = pukcc::SelfTestServiceId;
+    param.header.status = pukcc::StatusComputationNotStarted;
+    selfTestFunction()(&param);
+
+    selfTestResult->status = param.header.status;
+    selfTestResult->libraryVersion = param.selfTest.libraryVersion;
+    selfTestResult->hardwareVersion = param.selfTest.hardwareVersion;
+    selfTestResult->check1 = param.selfTest.check1;
+    selfTestResult->check2 = param.selfTest.check2;
+    selfTestResult->step = param.selfTest.step;
+    completeAsync(pukcc::SelfTestServiceId, selfTestResult->status);
+    return;
+  }
+  case PendingOperation::ClearFlags: {
+    if (serviceResult == nullptr) {
+      completeAsync(pukcc::ClearFlagsServiceId,
+                    pukcc::StatusComputationNotStarted);
+      return;
+    }
+
+    PukclHeader header = {};
+    header.service = pukcc::ClearFlagsServiceId;
+    header.specific = initialFlags;
+    header.status = pukcc::StatusComputationNotStarted;
+    clearFlagsFunction()(&header);
+
+    serviceResult->service = header.service;
+    serviceResult->status = header.status;
+    serviceResult->specific = header.specific;
+    completeAsync(pukcc::ClearFlagsServiceId, serviceResult->status);
+    return;
+  }
+  case PendingOperation::Fill: {
+    if (serviceResult == nullptr) {
+      completeAsync(pukcc::FillServiceId, pukcc::StatusComputationNotStarted);
+      return;
+    }
+
+    PukclFillParam param = {};
+    param.header.service = pukcc::FillServiceId;
+    param.header.status = pukcc::StatusComputationNotStarted;
+    param.fill.rBase = pukcc::cryptoRamNearPointer(offset);
+    param.fill.rLength = length;
+    param.fill.fillValue = fillValue;
+    fillFunction()(&param);
+
+    serviceResult->service = param.header.service;
+    serviceResult->status = param.header.status;
+    serviceResult->specific = param.header.specific;
+    completeAsync(pukcc::FillServiceId, serviceResult->status);
+    return;
+  }
+  case PendingOperation::None:
+    return;
+  }
+}
+
+bool ensurePendSvServiceRegistered() {
+  if (asyncState.serviceRegistered)
+    return true;
+
+  const bool registered = PendSV::instance().registerService(
+      pukcc::pendSvServiceId(), pukccPendSvService);
+  if (registered)
+    asyncState.serviceRegistered = true;
+  return registered;
+}
 } // namespace
 
 int pukcc::irqNumber() { return static_cast<int>(PUKCC_IRQn); }
-
-bool pukcc::begin(uint32_t loopBudget) {
-  enableClock();
-  return waitForRamClear(loopBudget);
-}
 
 void pukcc::end() { disableClock(); }
 
@@ -104,59 +259,7 @@ bool pukcc::ramClearBusy() {
   return (status() & ClearRamBusyMask) != 0u;
 }
 
-bool pukcc::waitForRamClear(uint32_t loopBudget) {
-  while (ramClearBusy() && (loopBudget > 0u)) {
-    --loopBudget;
-  }
-  return !ramClearBusy();
-}
-
 bool pukcc::ready() { return !ramClearBusy(); }
-
-bool pukcc::selfTest(SelfTestResult &result, uint32_t loopBudget) {
-  result = {};
-  if (!begin(loopBudget)) {
-    result.status = StatusComputationNotStarted;
-    return false;
-  }
-
-  PukclSelfTestParam param = {};
-  param.header.service = SelfTestServiceId;
-  param.header.status = StatusComputationNotStarted;
-
-  selfTestFunction()(&param);
-
-  result.status = param.header.status;
-  result.libraryVersion = param.selfTest.libraryVersion;
-  result.hardwareVersion = param.selfTest.hardwareVersion;
-  result.check1 = param.selfTest.check1;
-  result.check2 = param.selfTest.check2;
-  result.step = param.selfTest.step;
-
-  return result.status == StatusOk && result.check1 == SelfTestExpectedCheck1 &&
-         result.check2 == SelfTestExpectedCheck2 &&
-         result.step == SelfTestExpectedStep;
-}
-
-bool pukcc::clearFlags(uint32_t initialFlags, ServiceResult &result) {
-  result = {};
-  if (!begin()) {
-    result.status = StatusComputationNotStarted;
-    return false;
-  }
-
-  PukclHeader header = {};
-  header.service = ClearFlagsServiceId;
-  header.specific = initialFlags;
-  header.status = StatusComputationNotStarted;
-
-  clearFlagsFunction()(&header);
-
-  result.service = header.service;
-  result.status = header.status;
-  result.specific = header.specific;
-  return result.status == StatusOk;
-}
 
 pukcc::StatusSeverity pukcc::statusSeverity(uint16_t serviceStatus) {
   if (serviceStatus == StatusOk)
@@ -236,8 +339,74 @@ uint16_t pukcc::cryptoRamNearPointer(uint16_t offset) {
   return CryptoRamNearBase + offset;
 }
 
-bool pukcc::fillCryptoRam(uint16_t offset, uint16_t length,
-                          uint32_t fillValue, ServiceResult &result) {
+bool pukcc::registerEventCallback(EventCallback callback, void *context) {
+  if (callback == nullptr || !ensurePendSvServiceRegistered())
+    return false;
+
+  const uint32_t primask = enterCritical();
+  asyncState.callback = callback;
+  asyncState.callbackContext = context;
+  exitCritical(primask);
+  return true;
+}
+
+void pukcc::clearEventCallback() {
+  const uint32_t primask = enterCritical();
+  asyncState.callback = nullptr;
+  asyncState.callbackContext = nullptr;
+  asyncState.selfTestResult = nullptr;
+  asyncState.serviceResult = nullptr;
+  asyncState.operation = PendingOperation::None;
+  asyncState.busy = false;
+  exitCritical(primask);
+  PendSV::instance().clearService(pendSvServiceId());
+  asyncState.serviceRegistered = false;
+}
+
+bool pukcc::selfTestAsync(SelfTestResult &result) {
+  if (!ensurePendSvServiceRegistered())
+    return false;
+
+  result = {};
+  const uint32_t primask = enterCritical();
+  if (asyncState.busy || asyncState.callback == nullptr) {
+    exitCritical(primask);
+    return false;
+  }
+  asyncState.selfTestResult = &result;
+  asyncState.serviceResult = nullptr;
+  asyncState.operation = PendingOperation::SelfTest;
+  asyncState.busy = true;
+  exitCritical(primask);
+
+  PendSV::instance().setPending(pendSvServiceId());
+  return true;
+}
+
+bool pukcc::clearFlagsAsync(uint32_t initialFlags, ServiceResult &result) {
+  if (!ensurePendSvServiceRegistered())
+    return false;
+
+  result = {};
+  result.service = ClearFlagsServiceId;
+  const uint32_t primask = enterCritical();
+  if (asyncState.busy || asyncState.callback == nullptr) {
+    exitCritical(primask);
+    return false;
+  }
+  asyncState.selfTestResult = nullptr;
+  asyncState.serviceResult = &result;
+  asyncState.initialFlags = initialFlags;
+  asyncState.operation = PendingOperation::ClearFlags;
+  asyncState.busy = true;
+  exitCritical(primask);
+
+  PendSV::instance().setPending(pendSvServiceId());
+  return true;
+}
+
+bool pukcc::fillCryptoRamAsync(uint16_t offset, uint16_t length,
+                               uint32_t fillValue, ServiceResult &result) {
   result = {};
   result.service = FillServiceId;
 
@@ -253,24 +422,40 @@ bool pukcc::fillCryptoRam(uint16_t offset, uint16_t length,
     result.status = StatusParameterNotInPukccRam;
     return false;
   }
-  if (!begin()) {
-    result.status = StatusComputationNotStarted;
+  if (!ensurePendSvServiceRegistered())
+    return false;
+
+  const uint32_t primask = enterCritical();
+  if (asyncState.busy || asyncState.callback == nullptr) {
+    exitCritical(primask);
     return false;
   }
+  asyncState.selfTestResult = nullptr;
+  asyncState.serviceResult = &result;
+  asyncState.offset = offset;
+  asyncState.length = length;
+  asyncState.fillValue = fillValue;
+  asyncState.operation = PendingOperation::Fill;
+  asyncState.busy = true;
+  exitCritical(primask);
 
-  PukclFillParam param = {};
-  param.header.service = FillServiceId;
-  param.header.status = StatusComputationNotStarted;
-  param.fill.rBase = cryptoRamNearPointer(offset);
-  param.fill.rLength = length;
-  param.fill.fillValue = fillValue;
+  PendSV::instance().setPending(pendSvServiceId());
+  return true;
+}
 
-  fillFunction()(&param);
+bool pukcc::asyncBusy() {
+  const uint32_t primask = enterCritical();
+  const bool busy = asyncState.busy;
+  exitCritical(primask);
+  return busy;
+}
 
-  result.service = param.header.service;
-  result.status = param.header.status;
-  result.specific = param.header.specific;
-  return result.status == StatusOk;
+void pukcc::handleInterrupt() {
+  PendSV::instance().setPending(pendSvServiceId());
+}
+
+extern "C" void PUKCC_Handler(void) {
+  pukcc::handleInterrupt();
 }
 
 #endif /* PUKCC_AVAILABLE */

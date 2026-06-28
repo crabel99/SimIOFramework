@@ -31,6 +31,14 @@
  */
 class trng {
 public:
+  using EventMask = uint8_t;
+  using EventCallback = void (*)(EventMask events, uint32_t value,
+                                 void *context);
+
+  static constexpr EventMask EventNone = 0;
+  static constexpr EventMask EventDataReady = 1u << 0;
+  static constexpr EventMask EventError = 1u << 1;
+
   static constexpr uint8_t DataReadyInterrupt = TRNG_INTFLAG_DATARDY_Msk;
 
   inline static uintptr_t baseAddress() { return TRNG_PERIPH; }
@@ -60,5 +68,28 @@ public:
   static void enableInterrupts(uint8_t mask);
   /** @brief Disable selected TRNG interrupt sources. */
   static void disableInterrupts(uint8_t mask);
+  /**
+   * @brief Register callback for async TRNG words.
+   *
+   * The callback runs from the TRNG PendSV service. Register before
+   * `requestWordAsync()`.
+   */
+  static bool registerEventCallback(EventCallback callback,
+                                    void *context = nullptr);
+  /** @brief Clear the callback and cancel queued TRNG PendSV work. */
+  static void clearEventCallback();
+  /**
+   * @brief Request one random word without blocking.
+   *
+   * Starts TRNG generation and enables DATARDY interrupt. The callback receives
+   * the word from PendSV context and the peripheral is stopped before callback
+   * dispatch. Returns false when no callback is registered or a request is
+   * already active.
+   */
+  static bool requestWordAsync(bool runStandby = false);
+  /** @brief Return true while one async TRNG request is outstanding. */
+  static bool asyncBusy();
+  /** @brief Capture DATARDY IRQ state and schedule PendSV callback dispatch. */
+  static void handleInterrupt();
 };
 #endif /*TRNG_AVAILABLE*/

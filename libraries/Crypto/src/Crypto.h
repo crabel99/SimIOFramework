@@ -33,38 +33,27 @@ inline bool hasPUKCC() { return PUKCC_AVAILABLE; };
 inline bool hasTRNG() { return TRNG_AVAILABLE; };
 uint8_t hardwareMask();
 
-/**
- * @brief Read one random word from the hardware TRNG with a bounded wait.
- *
- * This is a direct hardware service helper. It starts the TRNG, polls the
- * non-blocking core `trng::read()` API until a word is available or the timeout
- * expires, then stops the TRNG. It does not own entropy pooling, DRBG state, or
- * TLS nonce/key policy.
- *
- * @param value Filled with the random word when the call returns true.
- * @param timeoutMillis Maximum time to wait for DATARDY.
- * @return true when a word was read, false when TRNG is unavailable or timed out.
- */
-bool randomWord(uint32_t &value, uint32_t timeoutMillis = 100u);
+using AesCallback = aes::EventCallback;
+using TrngCallback = trng::EventCallback;
+using PukccCallback = pukcc::EventCallback;
 
-/**
- * @brief Encrypt one 128-bit block with AES-128 ECB.
- *
- * This helper is intentionally a primitive testable block operation. It does
- * not apply padding, authenticate data, choose IVs, or make ECB safe for bulk
- * messages. Higher layers must provide secure mode policy.
- */
-bool encryptEcb128(const uint32_t key[4], const uint32_t plaintext[4],
-                   uint32_t ciphertext[4], uint32_t timeoutMillis = 100u);
+bool registerAesCallback(AesCallback callback, void *context = nullptr);
+void clearAesCallback();
+bool encryptEcb128Async(const uint32_t key[4], const uint32_t plaintext[4],
+                        uint32_t ciphertext[4]);
+bool decryptEcb128Async(const uint32_t key[4], const uint32_t ciphertext[4],
+                        uint32_t plaintext[4]);
 
-/**
- * @brief Decrypt one 128-bit block with AES-128 ECB.
- *
- * This helper mirrors `encryptEcb128()` for primitive validation and hardware
- * backend use. Higher layers own message framing and secure mode policy.
- */
-bool decryptEcb128(const uint32_t key[4], const uint32_t ciphertext[4],
-                   uint32_t plaintext[4], uint32_t timeoutMillis = 100u);
+bool registerTrngCallback(TrngCallback callback, void *context = nullptr);
+void clearTrngCallback();
+bool randomWordAsync();
+
+bool registerPukccCallback(PukccCallback callback, void *context = nullptr);
+void clearPukccCallback();
+bool selfTestAsync(pukcc::SelfTestResult &result);
+bool clearFlagsAsync(uint32_t initialFlags, pukcc::ServiceResult &result);
+bool fillCryptoRamAsync(uint16_t offset, uint16_t length, uint32_t fillValue,
+                        pukcc::ServiceResult &result);
 
 } // namespace Crypto
 #endif /* CRYPTO_HARDWARE_AVAILABLE */

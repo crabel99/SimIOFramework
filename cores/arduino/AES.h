@@ -31,6 +31,14 @@
  */
 class aes {
 public:
+  using EventMask = uint8_t;
+  using EventCallback = void (*)(EventMask events, void *context);
+
+  static constexpr EventMask EventNone = 0;
+  static constexpr EventMask EventComplete = 1u << 0;
+  static constexpr EventMask EventGaloisComplete = 1u << 1;
+  static constexpr EventMask EventError = 1u << 2;
+
   enum class Mode : uint32_t {
     Ecb = AES_CTRLA_AESMODE_ECB_Val,
     Cbc = AES_CTRLA_AESMODE_CBC_Val,
@@ -98,5 +106,30 @@ public:
   static void enableInterrupts(uint8_t mask);
   /** @brief Disable selected AES interrupt sources. */
   static void disableInterrupts(uint8_t mask);
+  /**
+   * @brief Register the callback used by async AES operations.
+   *
+   * The callback runs from the AES PendSV service, not from the AES IRQ. A
+   * producer must register before starting async work. Registering clears any
+   * queued callback state.
+   */
+  static bool registerEventCallback(EventCallback callback,
+                                    void *context = nullptr);
+  /** @brief Clear the async AES callback and cancel queued callback dispatch. */
+  static void clearEventCallback();
+  /**
+   * @brief Start one AES-128 ECB block without blocking.
+   *
+   * `output` is filled before `EventComplete` is delivered. `key`, `input`, and
+   * `output` must remain valid until the callback fires. Returns false when AES
+   * is unavailable, a pointer is invalid, the callback service is not
+   * registered, or a previous async block is still active.
+   */
+  static bool startEcb128Async(Direction direction, const uint32_t key[4],
+                               const uint32_t input[4], uint32_t output[4]);
+  /** @brief Return true while an async AES operation owns the peripheral. */
+  static bool asyncBusy();
+  /** @brief Capture AES IRQ state and schedule PendSV completion dispatch. */
+  static void handleInterrupt();
 };
 #endif /* AES_AVAILABLE */

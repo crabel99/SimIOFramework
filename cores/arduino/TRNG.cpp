@@ -6,6 +6,66 @@ namespace {
 inline trng_registers_t *regs() {
   return reinterpret_cast<trng_registers_t *>(TRNG_PERIPH);
 }
+
+uint32_t enterCritical() {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  return primask;
+}
+
+void exitCritical(uint32_t primask) {
+  __set_PRIMASK(primask);
+}
+
+struct AsyncState {
+  trng::EventCallback callback = nullptr;
+  void *callbackContext = nullptr;
+  uint8_t pendingFlags = 0;
+  uint32_t pendingValue = 0;
+  bool serviceRegistered = false;
+  bool busy = false;
+};
+
+AsyncState asyncState;
+
+void trngPendSvService(uint8_t serviceId, void *context) {
+  (void)serviceId;
+  (void)context;
+
+  trng::EventCallback callback = nullptr;
+  void *callbackContext = nullptr;
+  uint8_t flags = 0;
+  uint32_t value = 0;
+
+  const uint32_t primask = enterCritical();
+  flags = asyncState.pendingFlags;
+  value = asyncState.pendingValue;
+  asyncState.pendingFlags = 0;
+  callback = asyncState.callback;
+  callbackContext = asyncState.callbackContext;
+  asyncState.busy = false;
+  exitCritical(primask);
+
+  trng::end();
+
+  trng::EventMask events = trng::EventNone;
+  if ((flags & trng::DataReadyInterrupt) != 0u)
+    events |= trng::EventDataReady;
+
+  if (callback != nullptr && events != trng::EventNone)
+    callback(events, value, callbackContext);
+}
+
+bool ensurePendSvServiceRegistered() {
+  if (asyncState.serviceRegistered)
+    return true;
+
+  const bool registered = PendSV::instance().registerService(
+      trng::pendSvServiceId(), trngPendSvService);
+  if (registered)
+    asyncState.serviceRegistered = true;
+  return registered;
+}
 } // namespace
 
 int trng::irqNumber() {
@@ -75,6 +135,85 @@ void trng::enableInterrupts(uint8_t mask) {
 
 void trng::disableInterrupts(uint8_t mask) {
   regs()->TRNG_INTENCLR = mask & TRNG_INTENCLR_Msk;
+}
+
+bool trng::registerEventCallback(EventCallback callback, void *context) {
+  if (callback == nullptr || !ensurePendSvServiceRegistered())
+    return false;
+
+  const uint32_t primask = enterCritical();
+  asyncState.callback = callback;
+  asyncState.callbackContext = context;
+  asyncState.pendingFlags = 0;
+  asyncState.pendingValue = 0;
+  exitCritical(primask);
+  return true;
+}
+
+void trng::clearEventCallback() {
+  const uint32_t primask = enterCritical();
+  asyncState.callback = nullptr;
+  asyncState.callbackContext = nullptr;
+  asyncState.pendingFlags = 0;
+  asyncState.pendingValue = 0;
+  asyncState.busy = false;
+  exitCritical(primask);
+  PendSV::instance().clearService(pendSvServiceId());
+  asyncState.serviceRegistered = false;
+}
+
+bool trng::requestWordAsync(bool runStandby) {
+  if (!ensurePendSvServiceRegistered())
+    return false;
+
+  uint32_t primask = enterCritical();
+  if (asyncState.busy || asyncState.callback == nullptr) {
+    exitCritical(primask);
+    return false;
+  }
+  asyncState.busy = true;
+  asyncState.pendingFlags = 0;
+  asyncState.pendingValue = 0;
+  exitCritical(primask);
+
+  begin(runStandby);
+  clearInterruptFlags(DataReadyInterrupt);
+  enableInterrupts(DataReadyInterrupt);
+  NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
+  NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
+  return true;
+}
+
+bool trng::asyncBusy() {
+  const uint32_t primask = enterCritical();
+  const bool busy = asyncState.busy;
+  exitCritical(primask);
+  return busy;
+}
+
+void trng::handleInterrupt() {
+  const uint8_t flags = interruptFlags();
+  const uint8_t handled = flags & DataReadyInterrupt;
+  if (handled == 0u)
+    return;
+
+  uint32_t value = 0;
+  if (!read(value))
+    return;
+
+  disableInterrupts(handled);
+  clearInterruptFlags(handled);
+
+  const uint32_t primask = enterCritical();
+  asyncState.pendingFlags |= handled;
+  asyncState.pendingValue = value;
+  exitCritical(primask);
+
+  PendSV::instance().setPending(pendSvServiceId());
+}
+
+extern "C" void TRNG_Handler(void) {
+  trng::handleInterrupt();
 }
 
 #endif /* TRNG_AVAILABLE */
