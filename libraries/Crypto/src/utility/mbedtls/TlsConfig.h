@@ -24,6 +24,7 @@
 #define MBEDTLS_SSL_CLI_C
 #if defined(SIMIO_NATIVE_TLS_TEST_SERVER)
 #define MBEDTLS_SSL_SRV_C
+#define MBEDTLS_SSL_CACHE_C
 #endif
 #define MBEDTLS_SSL_TLS_C
 #define MBEDTLS_SSL_ALPN
