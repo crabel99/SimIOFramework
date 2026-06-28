@@ -246,7 +246,21 @@ EthernetClass::EthernetClass(const uint8_t mac[6], EthernetPhy &phy)
   setMacAddress(mac);
 }
 
-EthernetClass::~EthernetClass() = default;
+EthernetClass::~EthernetClass() {
+  clearFrameReceiveCallback();
+
+  if (_begun) {
+    gmac::disableFrameIo();
+    gmac::clearEventCallback();
+    clearReceiveQueue();
+
+    const uint32_t primask = enterCritical();
+    txBufferInUse = false;
+    exitCritical(primask);
+
+    _begun = false;
+  }
+}
 
 EthernetHardwareStatus EthernetClass::hardwareStatus() const {
   return gmac::available() ? EthernetGmac : EthernetNoHardware;

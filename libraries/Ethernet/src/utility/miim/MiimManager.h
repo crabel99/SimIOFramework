@@ -267,6 +267,7 @@ private:
     uint8_t registerAddress;
     uint8_t scanEndAddress;
     uint16_t writeValue;
+    uint32_t startFrame;
     uint16_t resultValue;
     OperationResult result;
     OperationCallback callback;

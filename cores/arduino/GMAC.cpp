@@ -547,6 +547,8 @@ void gmac::enableFrameIo() {
   regs->GMAC_RSR = GMAC_RSR_Msk;
   regs->GMAC_TSR = GMAC_TSR_Msk;
   regs->GMAC_IER = kFrameInterruptMask;
+  NVIC_ClearPendingIRQ(GMAC_IRQn);
+  NVIC_EnableIRQ(GMAC_IRQn);
   __DMB();
   regs->GMAC_NCR |= GMAC_NCR_RXEN_Msk | GMAC_NCR_TXEN_Msk;
 }
@@ -555,6 +557,8 @@ void gmac::disableFrameIo() {
   gmac_registers_t *regs = gmacRegisters();
   regs->GMAC_NCR &= ~(GMAC_NCR_RXEN_Msk | GMAC_NCR_TXEN_Msk);
   regs->GMAC_IDR = kFrameInterruptMask;
+  NVIC_DisableIRQ(GMAC_IRQn);
+  NVIC_ClearPendingIRQ(GMAC_IRQn);
 }
 
 gmac::Status gmac::status() {

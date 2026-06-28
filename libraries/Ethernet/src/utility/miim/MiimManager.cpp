@@ -13,6 +13,29 @@
 #ifdef ETHERNET_HARDWARE_AVAILABLE
 #include <utility/phy/PhyRegisters.h>
 
+namespace {
+constexpr uint32_t MdioReadOperation = 2;
+constexpr uint32_t MdioWriteOperation = 1;
+constexpr uint32_t MdioWriteTen = 2;
+
+uint32_t readStartFrame(uint8_t phyAddress, uint8_t registerAddress) {
+  return GMAC_MAN_CLTTO_Msk | GMAC_MAN_OP(MdioReadOperation) |
+         GMAC_MAN_PHYA(phyAddress) | GMAC_MAN_REGA(registerAddress) |
+         GMAC_MAN_WTN(MdioWriteTen);
+}
+
+uint32_t writeStartFrame(uint8_t phyAddress, uint8_t registerAddress,
+                         uint16_t value) {
+  return GMAC_MAN_CLTTO_Msk | GMAC_MAN_OP(MdioWriteOperation) |
+         GMAC_MAN_PHYA(phyAddress) | GMAC_MAN_REGA(registerAddress) |
+         GMAC_MAN_WTN(MdioWriteTen) | GMAC_MAN_DATA(value);
+}
+
+uint32_t currentManagementFrame() {
+  return reinterpret_cast<gmac_registers_t *>(gmac::baseAddress())->GMAC_MAN;
+}
+} // namespace
+
 MiimManager::MiimManager()
     : _operations{}, _queue{}, _phyAddress(0), _queueReadIndex(0),
       _queueWriteIndex(0), _queueCount(0), _activeOperationIndex(QueueDepth),
@@ -196,6 +219,7 @@ MiimManager::queueOperation(OperationType type, uint8_t phyAddress,
   operation.registerAddress = registerAddress;
   operation.scanEndAddress = scanEndAddress;
   operation.writeValue = writeValue;
+  operation.startFrame = 0;
   operation.resultValue = 0;
   operation.result = ResultPending;
   operation.callback = callback;
@@ -281,11 +305,14 @@ bool MiimManager::startNextOperation() {
 
 bool MiimManager::startOperation(Operation &operation) {
   if (operation.type == OperationWrite) {
-    return gmac::mdioWriteStart(operation.phyAddress,
-                                operation.registerAddress,
+    operation.startFrame = writeStartFrame(
+        operation.phyAddress, operation.registerAddress, operation.writeValue);
+    return gmac::mdioWriteStart(operation.phyAddress, operation.registerAddress,
                                 operation.writeValue);
   }
 
+  operation.startFrame =
+      readStartFrame(operation.phyAddress, operation.registerAddress);
   return gmac::mdioReadStart(operation.phyAddress, operation.registerAddress);
 }
 
@@ -308,6 +335,10 @@ bool MiimManager::completeActiveOperation() {
     _activeOperationIndex = QueueDepth;
     return true;
   }
+
+  if (_activeServicePasses == 1 &&
+      currentManagementFrame() == operation.startFrame)
+    return false;
 
   uint16_t value = 0;
   if (!gmac::mdioReadComplete(&value))
