@@ -2,29 +2,341 @@
 
 namespace Crypto::MbedTlsPort {
 
-bool registerAesCallback(Crypto::AesCallback callback, void *context) {
-  return Crypto::registerAesCallback(callback, context);
+namespace {
+void copyAesKey(uint32_t destination[4], const uint32_t source[4]) {
+  for (uint8_t index = 0; index < 4; ++index)
+    destination[index] = source[index];
 }
 
-void clearAesCallback() { Crypto::clearAesCallback(); }
-
-bool aesEcb128EncryptAsync(const uint32_t key[4], const uint32_t plaintext[4],
-                           uint32_t ciphertext[4]) {
-  return Crypto::encryptEcb128Async(key, plaintext, ciphertext);
+void clearAesKey(uint32_t key[4]) {
+  for (uint8_t index = 0; index < 4; ++index)
+    key[index] = 0;
 }
 
-bool aesEcb128DecryptAsync(const uint32_t key[4], const uint32_t ciphertext[4],
-                           uint32_t plaintext[4]) {
-  return Crypto::decryptEcb128Async(key, ciphertext, plaintext);
+void aesContextCallback(aes::EventMask events, void *context) {
+  auto *aesContext = static_cast<AesEcb128Context *>(context);
+  if (aesContext == nullptr)
+    return;
+
+  aesContext->busy = false;
+  if (aesContext->callback != nullptr)
+    aesContext->callback(events, *aesContext, aesContext->callbackContext);
 }
 
-bool registerTrngCallback(Crypto::TrngCallback callback, void *context) {
-  return Crypto::registerTrngCallback(callback, context);
+void clearEntropyRequest(EntropyContext &context) {
+  context.buffer = nullptr;
+  context.requestedLength = 0;
+  context.producedLength = 0;
+  context.busy = false;
 }
 
-void clearTrngCallback() { Crypto::clearTrngCallback(); }
+void finishEntropy(EntropyContext &context, bool success) {
+  context.busy = false;
+  Crypto::clearTrngCallback();
+  if (context.callback != nullptr)
+    context.callback(success, context, context.callbackContext);
+}
 
-bool requestEntropyWordAsync() { return Crypto::randomWordAsync(); }
+bool appendEntropyWord(EntropyContext &context, uint32_t value) {
+  if (context.buffer == nullptr ||
+      context.producedLength >= context.requestedLength)
+    return false;
+
+  for (uint8_t byteIndex = 0;
+       byteIndex < 4 && context.producedLength < context.requestedLength;
+       ++byteIndex) {
+    context.buffer[context.producedLength++] =
+        static_cast<uint8_t>((value >> (8u * byteIndex)) & 0xFFu);
+  }
+
+  return true;
+}
+
+void entropyTrngCallback(trng::EventMask events, uint32_t value, void *context) {
+  auto *entropyContext = static_cast<EntropyContext *>(context);
+  if (entropyContext == nullptr || !entropyContext->busy)
+    return;
+
+  if ((events & trng::EventDataReady) == 0 ||
+      !appendEntropyWord(*entropyContext, value)) {
+    finishEntropy(*entropyContext, false);
+    return;
+  }
+
+  if (entropyContext->producedLength >= entropyContext->requestedLength) {
+    finishEntropy(*entropyContext, true);
+    return;
+  }
+
+  if (!Crypto::randomWordAsync())
+    finishEntropy(*entropyContext, false);
+}
+
+void randomEntropyCallback(bool success, EntropyContext &entropy, void *context) {
+  auto *randomContext = static_cast<RandomContext *>(context);
+  if (randomContext == nullptr || !randomContext->busy)
+    return;
+
+  randomContext->busy = false;
+  randomContext->readOffset = 0;
+  randomContext->availableLength = success ? entropy.producedLength : 0;
+  if (randomContext->callback != nullptr)
+    randomContext->callback(success, *randomContext,
+                            randomContext->callbackContext);
+}
+
+void drbgSeedRandomCallback(bool success, RandomContext &random, void *context) {
+  auto *seedContext = static_cast<DrbgSeedContext *>(context);
+  if (seedContext == nullptr || !seedContext->busy)
+    return;
+
+  seedContext->ready = false;
+  if (success) {
+    seedContext->ready =
+        randomRead(random, seedContext->seed, DrbgSeedContext::SeedSize);
+  }
+
+  seedContext->busy = false;
+  if (seedContext->callback != nullptr)
+    seedContext->callback(seedContext->ready, *seedContext,
+                          seedContext->callbackContext);
+}
+} // namespace
+
+void aesEcb128Init(AesEcb128Context &context) {
+  clearAesKey(context.key);
+  context.direction = aes::Direction::Encrypt;
+  context.keyConfigured = false;
+  context.busy = false;
+  context.callback = nullptr;
+  context.callbackContext = nullptr;
+}
+
+void aesEcb128Free(AesEcb128Context &context) {
+  if (context.busy)
+    Crypto::clearAesCallback();
+  aesEcb128Init(context);
+}
+
+bool aesEcb128SetEncryptKey(AesEcb128Context &context, const uint32_t key[4]) {
+  if (key == nullptr || context.busy)
+    return false;
+
+  copyAesKey(context.key, key);
+  context.direction = aes::Direction::Encrypt;
+  context.keyConfigured = true;
+  return true;
+}
+
+bool aesEcb128SetDecryptKey(AesEcb128Context &context, const uint32_t key[4]) {
+  if (key == nullptr || context.busy)
+    return false;
+
+  copyAesKey(context.key, key);
+  context.direction = aes::Direction::Decrypt;
+  context.keyConfigured = true;
+  return true;
+}
+
+bool aesEcb128SetCallback(AesEcb128Context &context,
+                          AesEcb128Callback callback, void *callbackContext) {
+  if (context.busy)
+    return false;
+
+  context.callback = callback;
+  context.callbackContext = callbackContext;
+  return callback != nullptr;
+}
+
+bool aesEcb128CryptAsync(AesEcb128Context &context, const uint32_t input[4],
+                         uint32_t output[4]) {
+  if (input == nullptr || output == nullptr || !context.keyConfigured ||
+      context.callback == nullptr || context.busy) {
+    return false;
+  }
+
+  if (!Crypto::registerAesCallback(aesContextCallback, &context))
+    return false;
+
+  context.busy = true;
+  const bool submitted =
+      (context.direction == aes::Direction::Encrypt)
+          ? Crypto::encryptEcb128Async(context.key, input, output)
+          : Crypto::decryptEcb128Async(context.key, input, output);
+  if (!submitted) {
+    context.busy = false;
+    Crypto::clearAesCallback();
+  }
+
+  return submitted;
+}
+
+void entropyInit(EntropyContext &context) {
+  clearEntropyRequest(context);
+  context.callback = nullptr;
+  context.callbackContext = nullptr;
+}
+
+void entropyFree(EntropyContext &context) {
+  if (context.busy)
+    Crypto::clearTrngCallback();
+  entropyInit(context);
+}
+
+bool entropySetCallback(EntropyContext &context, EntropyCallback callback,
+                        void *callbackContext) {
+  if (context.busy)
+    return false;
+
+  context.callback = callback;
+  context.callbackContext = callbackContext;
+  return callback != nullptr;
+}
+
+bool entropyRequestAsync(EntropyContext &context, uint8_t *buffer,
+                         size_t length) {
+  if (context.busy || context.callback == nullptr || buffer == nullptr ||
+      length == 0) {
+    return false;
+  }
+
+  context.buffer = buffer;
+  context.requestedLength = length;
+  context.producedLength = 0;
+  context.busy = true;
+
+  if (!Crypto::registerTrngCallback(entropyTrngCallback, &context) ||
+      !Crypto::randomWordAsync()) {
+    clearEntropyRequest(context);
+    Crypto::clearTrngCallback();
+    return false;
+  }
+
+  return true;
+}
+
+void randomInit(RandomContext &context) {
+  entropyInit(context.entropy);
+  for (size_t index = 0; index < RandomContext::PoolSize; ++index)
+    context.pool[index] = 0;
+  context.availableLength = 0;
+  context.readOffset = 0;
+  context.busy = false;
+  context.callback = nullptr;
+  context.callbackContext = nullptr;
+}
+
+void randomFree(RandomContext &context) {
+  if (context.busy)
+    entropyFree(context.entropy);
+  randomInit(context);
+}
+
+bool randomSetCallback(RandomContext &context, RandomCallback callback,
+                       void *callbackContext) {
+  if (context.busy)
+    return false;
+
+  context.callback = callback;
+  context.callbackContext = callbackContext;
+  return callback != nullptr;
+}
+
+bool randomPrefetchAsync(RandomContext &context, size_t length) {
+  if (context.busy || context.callback == nullptr || length == 0 ||
+      length > RandomContext::PoolSize) {
+    return false;
+  }
+
+  context.availableLength = 0;
+  context.readOffset = 0;
+  context.busy = true;
+  if (!entropySetCallback(context.entropy, randomEntropyCallback, &context) ||
+      !entropyRequestAsync(context.entropy, context.pool, length)) {
+    context.busy = false;
+    context.availableLength = 0;
+    context.readOffset = 0;
+    entropyFree(context.entropy);
+    return false;
+  }
+
+  return true;
+}
+
+size_t randomAvailable(const RandomContext &context) {
+  if (context.availableLength < context.readOffset)
+    return 0;
+
+  return context.availableLength - context.readOffset;
+}
+
+bool randomRead(RandomContext &context, uint8_t *buffer, size_t length) {
+  if (context.busy || buffer == nullptr || length == 0 ||
+      length > randomAvailable(context)) {
+    return false;
+  }
+
+  for (size_t index = 0; index < length; ++index)
+    buffer[index] = context.pool[context.readOffset + index];
+
+  context.readOffset += length;
+  return true;
+}
+
+void drbgSeedInit(DrbgSeedContext &context) {
+  randomInit(context.random);
+  for (size_t index = 0; index < DrbgSeedContext::SeedSize; ++index)
+    context.seed[index] = 0;
+  context.ready = false;
+  context.busy = false;
+  context.callback = nullptr;
+  context.callbackContext = nullptr;
+}
+
+void drbgSeedFree(DrbgSeedContext &context) {
+  if (context.busy)
+    randomFree(context.random);
+  drbgSeedInit(context);
+}
+
+bool drbgSeedSetCallback(DrbgSeedContext &context, DrbgSeedCallback callback,
+                         void *callbackContext) {
+  if (context.busy)
+    return false;
+
+  context.callback = callback;
+  context.callbackContext = callbackContext;
+  return callback != nullptr;
+}
+
+bool drbgSeedAsync(DrbgSeedContext &context) {
+  if (context.busy || context.callback == nullptr)
+    return false;
+
+  context.ready = false;
+  context.busy = true;
+  if (!randomSetCallback(context.random, drbgSeedRandomCallback, &context) ||
+      !randomPrefetchAsync(context.random, DrbgSeedContext::SeedSize)) {
+    context.busy = false;
+    randomFree(context.random);
+    return false;
+  }
+
+  return true;
+}
+
+bool drbgSeedRead(DrbgSeedContext &context, uint8_t *buffer, size_t length) {
+  if (!context.ready || context.busy || buffer == nullptr ||
+      length != DrbgSeedContext::SeedSize) {
+    return false;
+  }
+
+  for (size_t index = 0; index < DrbgSeedContext::SeedSize; ++index)
+    buffer[index] = context.seed[index];
+
+  context.ready = false;
+  return true;
+}
 
 bool registerPukccCallback(Crypto::PukccCallback callback, void *context) {
   return Crypto::registerPukccCallback(callback, context);
