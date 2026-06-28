@@ -8,9 +8,11 @@
  * core is present. The secure-client slot is a second raw TCP handle that
  * `SecureClient` wraps with the Crypto/Mbed TLS session; this backend does not
  * own TLS state or call Mbed TLS directly. Public API classes must not own lwIP
- * internals directly. Hostname operations are non-blocking: numeric or cached
- * DNS answers proceed immediately, while unresolved names return fail-pending
- * instead of waiting for DNS completion.
+ * internals directly. Capacity is intentionally fixed and Arduino-sized: one
+ * plain client TCP slot, one secure-client TCP slot, one accepted server-client
+ * slot, one listener, and one UDP endpoint. Hostname operations are
+ * non-blocking: numeric or cached DNS answers proceed immediately, while
+ * unresolved names return fail-pending instead of waiting for DNS completion.
  */
 #pragma once
 
@@ -31,8 +33,8 @@ public:
    * Only one plain client and one secure-client TCP slot are exposed by this
    * backend. The secure slot is TLS-capable only by contract; TLS protocol
    * state belongs to `SecureClient` and `libraries/Crypto`. Public clients
-   * must release acquired handles through
-   * `releaseSocket()`.
+   * must release acquired handles through `releaseSocket()` before the same
+   * slot can be acquired again.
    */
   void *acquireClientSocket() override;
   void *acquireSecureClientSocket() override;
