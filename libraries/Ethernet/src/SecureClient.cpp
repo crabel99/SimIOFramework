@@ -7,8 +7,8 @@ SecureClient::SecureClient()
       _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
-      _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit), _hostname{},
-      _cryptoProvider(nullptr),
+      _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
+      _tlsSessionReuseEnabled(false), _hostname{}, _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(EthernetSocket &socket)
@@ -16,8 +16,8 @@ SecureClient::SecureClient(EthernetSocket &socket)
       _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
-      _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit), _hostname{},
-      _cryptoProvider(nullptr),
+      _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
+      _tlsSessionReuseEnabled(false), _hostname{}, _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {
   _tlsTransport.bind(currentSocket());
   _tlsSession.bindTransport(_tlsTransport);
@@ -28,8 +28,8 @@ SecureClient::SecureClient(TransportProvider &provider)
       _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
-      _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit), _hostname{},
-      _cryptoProvider(nullptr),
+      _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
+      _tlsSessionReuseEnabled(false), _hostname{}, _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(SecureClient &&other)
@@ -41,7 +41,8 @@ SecureClient::SecureClient(SecureClient &&other)
       _clientPrivateKey(other._clientPrivateKey),
       _clientPrivateKeyLength(other._clientPrivateKeyLength),
       _alpnProtocols(other._alpnProtocols),
-      _tlsOperationPollLimit(other._tlsOperationPollLimit), _hostname{},
+      _tlsOperationPollLimit(other._tlsOperationPollLimit),
+      _tlsSessionReuseEnabled(other._tlsSessionReuseEnabled), _hostname{},
       _cryptoProvider(other._cryptoProvider),
       _lastTlsCallbackStatus(other._lastTlsCallbackStatus) {
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
@@ -73,6 +74,7 @@ SecureClient &SecureClient::operator=(SecureClient &&other) {
   _clientPrivateKeyLength = other._clientPrivateKeyLength;
   _alpnProtocols = other._alpnProtocols;
   _tlsOperationPollLimit = other._tlsOperationPollLimit;
+  _tlsSessionReuseEnabled = other._tlsSessionReuseEnabled;
   memset(_hostname, 0, sizeof(_hostname));
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
   _hostname[sizeof(_hostname) - 1] = '\0';
@@ -228,6 +230,26 @@ bool SecureClient::setTlsOperationPollLimit(uint16_t pollLimit) {
 
 uint16_t SecureClient::tlsOperationPollLimit() const {
   return _tlsOperationPollLimit;
+}
+
+bool SecureClient::enableTlsSessionReuse(bool enabled) {
+  if (!_tlsSession.enableSessionReuse(enabled))
+    return false;
+
+  _tlsSessionReuseEnabled = enabled;
+  return true;
+}
+
+bool SecureClient::tlsSessionReuseEnabled() const {
+  return _tlsSessionReuseEnabled;
+}
+
+bool SecureClient::tlsSessionCached() const {
+  return _tlsSession.sessionCached();
+}
+
+bool SecureClient::clearTlsSessionCache() {
+  return _tlsSession.clearSessionCache();
 }
 
 Crypto::TlsAsyncStatus SecureClient::pollTls() { return advanceTlsOperation(); }
@@ -405,6 +427,8 @@ bool SecureClient::prepareTlsSession() {
     return false;
   if (!_tlsSession.configureOperationPollLimit(_tlsOperationPollLimit))
     return false;
+  if (!_tlsSession.enableSessionReuse(_tlsSessionReuseEnabled))
+    return false;
   if (_cryptoProvider != nullptr &&
       !_tlsSession.bindCryptoProvider(*_cryptoProvider))
     return false;
@@ -532,6 +556,12 @@ void SecureClient::clearTlsState() {
   _tlsTransport.clear();
   _trustAnchors = nullptr;
   _trustAnchorLength = 0;
+  _clientCertificate = nullptr;
+  _clientCertificateLength = 0;
+  _clientPrivateKey = nullptr;
+  _clientPrivateKeyLength = 0;
+  _alpnProtocols = nullptr;
+  _tlsSessionReuseEnabled = false;
   memset(_hostname, 0, sizeof(_hostname));
   _cryptoProvider = nullptr;
   _lastTlsCallbackStatus = Crypto::TlsAsyncStatus::Idle;

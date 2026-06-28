@@ -86,12 +86,14 @@ TlsClientSession::TlsClientSession()
       _operationPollCount(0), _lastError(0), _verificationResult(0),
       _handshakeComplete(false), _cryptoReady(false), _cryptoFailed(false),
       _tlsConfigured(false), _peerCloseNotified(false),
-      _clientIdentityConfigured(false) {
+      _clientIdentityConfigured(false), _sessionReuseEnabled(false),
+      _sessionCached(false) {
   mbedtls_ssl_init(&_ssl);
   mbedtls_ssl_config_init(&_sslConfig);
   mbedtls_x509_crt_init(&_caChain);
   mbedtls_x509_crt_init(&_clientCertificate);
   mbedtls_pk_init(&_clientKey);
+  mbedtls_ssl_session_init(&_savedSession);
 }
 
 TlsClientSession::~TlsClientSession() {
@@ -100,6 +102,7 @@ TlsClientSession::~TlsClientSession() {
   mbedtls_x509_crt_free(&_caChain);
   mbedtls_x509_crt_free(&_clientCertificate);
   mbedtls_pk_free(&_clientKey);
+  mbedtls_ssl_session_free(&_savedSession);
 }
 
 bool TlsClientSession::configureTrustAnchors(const uint8_t *data,
@@ -207,6 +210,27 @@ bool TlsClientSession::configureOperationPollLimit(uint16_t pollLimit) {
     return false;
 
   _operationPollLimit = pollLimit;
+  return true;
+}
+
+bool TlsClientSession::enableSessionReuse(bool enabled) {
+  if (operationActive())
+    return false;
+
+  _sessionReuseEnabled = enabled;
+  if (!enabled)
+    return clearSessionCache();
+
+  return true;
+}
+
+bool TlsClientSession::clearSessionCache() {
+  if (operationActive())
+    return false;
+
+  mbedtls_ssl_session_free(&_savedSession);
+  mbedtls_ssl_session_init(&_savedSession);
+  _sessionCached = false;
   return true;
 }
 
@@ -441,6 +465,14 @@ bool TlsClientSession::prepareMbedTlsSession() {
     return false;
   }
 
+  if (_sessionReuseEnabled && _sessionCached) {
+    result = mbedtls_ssl_set_session(&_ssl, &_savedSession);
+    if (result != 0) {
+      _lastError = result;
+      return false;
+    }
+  }
+
   mbedtls_ssl_set_bio(&_ssl, this, TlsClientSession::bioSend,
                       TlsClientSession::bioRecv, nullptr);
 
@@ -466,6 +498,14 @@ TlsAsyncStatus TlsClientSession::pollHandshake() {
   if (result == 0) {
     _verificationResult = mbedtls_ssl_get_verify_result(&_ssl);
     _handshakeComplete = true;
+    if (_sessionReuseEnabled) {
+      mbedtls_ssl_session_free(&_savedSession);
+      mbedtls_ssl_session_init(&_savedSession);
+      const int sessionResult = mbedtls_ssl_get_session(&_ssl, &_savedSession);
+      _sessionCached = sessionResult == 0;
+      if (sessionResult != 0)
+        _lastError = sessionResult;
+    }
     return finish(TlsAsyncStatus::Complete);
   }
 

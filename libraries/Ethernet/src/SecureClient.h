@@ -106,6 +106,19 @@ public:
   uint16_t tlsOperationPollLimit() const;
 
   /**
+   * @brief Enable or disable client-owned TLS session reuse.
+   *
+   * Session material remains inside the Crypto TLS session and is only reused
+   * by later handshakes on this secure client. Disabling reuse clears the
+   * cached session. All cache-control calls fail while a TLS operation is
+   * active.
+   */
+  bool enableTlsSessionReuse(bool enabled);
+  bool tlsSessionReuseEnabled() const;
+  bool tlsSessionCached() const;
+  bool clearTlsSessionCache();
+
+  /**
    * @brief Advance one bounded TLS operation step.
    */
   Crypto::TlsAsyncStatus pollTls();
@@ -203,6 +216,7 @@ private:
   size_t _clientPrivateKeyLength;
   const char *const *_alpnProtocols;
   uint16_t _tlsOperationPollLimit;
+  bool _tlsSessionReuseEnabled;
   char _hostname[128];
   Crypto::TlsCryptoProvider *_cryptoProvider;
   SocketTlsTransport _tlsTransport;

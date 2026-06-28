@@ -165,6 +165,26 @@ public:
   uint16_t operationPollLimit() const { return _operationPollLimit; }
 
   /**
+   * @brief Enable or disable the in-memory TLS session reuse cache.
+   *
+   * When enabled, a completed handshake captures Mbed TLS session state for a
+   * future handshake on the same `TlsClientSession` instance. The cached session
+   * never leaves this object and can only be changed while no TLS operation is
+   * active. Disabling reuse clears any cached session material.
+   */
+  bool enableSessionReuse(bool enabled);
+  bool sessionReuseEnabled() const { return _sessionReuseEnabled; }
+  bool sessionCached() const { return _sessionCached; }
+
+  /**
+   * @brief Clear any cached TLS session material.
+   *
+   * This is an idle-only operation because Mbed TLS owns session state while a
+   * handshake/read/write/close-notify operation is active.
+   */
+  bool clearSessionCache();
+
+  /**
    * @brief Bind the TLS BIO to an already-created non-blocking transport.
    */
   bool bindTransport(TlsTransport &transport);
@@ -257,6 +277,7 @@ private:
   mbedtls_x509_crt _caChain;
   mbedtls_x509_crt _clientCertificate;
   mbedtls_pk_context _clientKey;
+  mbedtls_ssl_session _savedSession;
   TlsAsyncStatus _status;
   TlsOperation _operation;
   Callback _callback;
@@ -275,6 +296,8 @@ private:
   bool _tlsConfigured;
   bool _peerCloseNotified;
   bool _clientIdentityConfigured;
+  bool _sessionReuseEnabled;
+  bool _sessionCached;
 };
 
 } // namespace Crypto
