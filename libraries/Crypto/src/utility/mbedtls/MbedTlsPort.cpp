@@ -465,6 +465,68 @@ bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length) {
   return mbedtls_ctr_drbg_random(&context.drbg, buffer, length) == 0;
 }
 
+MbedTlsCryptoProvider::MbedTlsCryptoProvider()
+    : _callback(nullptr), _callbackContext(nullptr) {
+  ctrDrbgInit(_drbg);
+}
+
+MbedTlsCryptoProvider::~MbedTlsCryptoProvider() { reset(); }
+
+bool MbedTlsCryptoProvider::beginHandshakeCrypto(
+    Crypto::TlsCryptoReadyCallback callback, void *context) {
+  if (callback == nullptr || _drbg.busy)
+    return false;
+
+  _callback = callback;
+  _callbackContext = context;
+  if (ctrDrbgReady(_drbg)) {
+    Crypto::TlsCryptoReadyCallback readyCallback = _callback;
+    void *readyContext = _callbackContext;
+    _callback = nullptr;
+    _callbackContext = nullptr;
+    readyCallback(true, readyContext);
+    return true;
+  }
+
+  if (!ctrDrbgSetCallback(_drbg, MbedTlsCryptoProvider::handleDrbgReady,
+                          this) ||
+      !ctrDrbgInstantiateAsync(_drbg)) {
+    _callback = nullptr;
+    _callbackContext = nullptr;
+    return false;
+  }
+
+  return true;
+}
+
+void MbedTlsCryptoProvider::reset() {
+  ctrDrbgFree(_drbg);
+  _callback = nullptr;
+  _callbackContext = nullptr;
+}
+
+bool MbedTlsCryptoProvider::ready() const { return ctrDrbgReady(_drbg); }
+
+bool MbedTlsCryptoProvider::generateRandom(uint8_t *buffer, size_t length) {
+  return ctrDrbgGenerate(_drbg, buffer, length);
+}
+
+void MbedTlsCryptoProvider::handleDrbgReady(bool success,
+                                            CtrDrbgContext &context,
+                                            void *user) {
+  (void)context;
+  auto *provider = static_cast<MbedTlsCryptoProvider *>(user);
+  if (provider == nullptr)
+    return;
+
+  Crypto::TlsCryptoReadyCallback callback = provider->_callback;
+  void *callbackContext = provider->_callbackContext;
+  provider->_callback = nullptr;
+  provider->_callbackContext = nullptr;
+  if (callback != nullptr)
+    callback(success, callbackContext);
+}
+
 bool registerPukccCallback(Crypto::PukccCallback callback, void *context) {
   return Crypto::registerPukccCallback(callback, context);
 }

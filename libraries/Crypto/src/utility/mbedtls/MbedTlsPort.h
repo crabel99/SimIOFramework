@@ -1,10 +1,11 @@
 #pragma once
 
 #ifndef MBEDTLS_CONFIG_FILE
-#define MBEDTLS_CONFIG_FILE "utility/mbedtls/SimIOMbedTlsConfig.h"
+#define MBEDTLS_CONFIG_FILE "utility/mbedtls/TlsConfig.h"
 #endif
 
 #include <Crypto.h>
+#include <utility/tls/TlsClientSession.h>
 #include <mbedtls/build_info.h>
 #include <mbedtls/private/ctr_drbg.h>
 
@@ -186,6 +187,35 @@ bool ctrDrbgInstantiateAsync(CtrDrbgContext &context,
                              size_t personalizationLength = 0);
 bool ctrDrbgReady(const CtrDrbgContext &context);
 bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length);
+
+/**
+ * @brief Production TLS crypto-readiness provider backed by Mbed TLS.
+ *
+ * The provider owns the Mbed TLS CTR_DRBG wrapper used by TLS sessions. Starting
+ * handshake crypto submits async TRNG-backed seed collection and reports
+ * readiness through the `TlsCryptoProvider` callback. It never blocks waiting
+ * for entropy or hardware completion. TLS protocol state remains owned by
+ * `TlsClientSession`; this provider only owns RNG/crypto readiness.
+ */
+class MbedTlsCryptoProvider : public Crypto::TlsCryptoProvider {
+public:
+  MbedTlsCryptoProvider();
+  ~MbedTlsCryptoProvider() override;
+
+  bool beginHandshakeCrypto(Crypto::TlsCryptoReadyCallback callback,
+                            void *context) override;
+  void reset() override;
+  bool ready() const override;
+  bool generateRandom(uint8_t *buffer, size_t length);
+
+private:
+  static void handleDrbgReady(bool success, CtrDrbgContext &context,
+                              void *user);
+
+  CtrDrbgContext _drbg;
+  Crypto::TlsCryptoReadyCallback _callback;
+  void *_callbackContext;
+};
 
 bool registerPukccCallback(Crypto::PukccCallback callback,
                            void *context = nullptr);

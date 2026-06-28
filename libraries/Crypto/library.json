@@ -18,6 +18,7 @@
   ],
   "build": {
     "flags": [
+      "-DMBEDTLS_CONFIG_FILE=\\\"utility/mbedtls/TlsConfig.h\\\"",
       "-Isrc/utility/third_party/mbedtls/include",
       "-Isrc/utility/third_party/mbedtls/tf-psa-crypto/include",
       "-Isrc/utility/third_party/mbedtls/tf-psa-crypto/core",
