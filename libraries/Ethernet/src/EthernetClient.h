@@ -13,9 +13,28 @@
 
 class EthernetClient : public Client {
 public:
+  /**
+   * @brief Construct using the registered default provider, if any.
+   *
+   * The provider is snapshotted at construction. If no default provider is
+   * registered, the client remains fail-closed until a socket or provider is
+   * explicitly supplied.
+   */
   EthernetClient();
+
+  /**
+   * @brief Construct around an explicit socket supplied by the caller.
+   */
   explicit EthernetClient(EthernetSocket &socket);
+
+  /**
+   * @brief Construct around an explicit transport provider.
+   */
   explicit EthernetClient(TransportProvider &provider);
+
+  /**
+   * @brief Construct around an accepted provider-owned socket.
+   */
   EthernetClient(TransportProvider &provider, EthernetSocket &socket);
   EthernetClient(const EthernetClient &) = delete;
   EthernetClient &operator=(const EthernetClient &) = delete;

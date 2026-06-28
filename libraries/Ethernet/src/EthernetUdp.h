@@ -13,7 +13,17 @@
 
 class EthernetUDP : public UDP {
 public:
+  /**
+   * @brief Construct using the registered default provider, if any.
+   *
+   * The provider is snapshotted at construction. Without a default provider,
+   * UDP operations fail closed until `setProvider()` is called.
+   */
   EthernetUDP();
+
+  /**
+   * @brief Construct around an explicit transport provider.
+   */
   explicit EthernetUDP(TransportProvider &provider);
 
   /**

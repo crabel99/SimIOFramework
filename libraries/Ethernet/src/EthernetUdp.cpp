@@ -1,6 +1,6 @@
 #include "EthernetUdp.h"
 
-EthernetUDP::EthernetUDP() : _provider(nullptr) {}
+EthernetUDP::EthernetUDP() : _provider(TransportProvider::defaultProvider()) {}
 
 EthernetUDP::EthernetUDP(TransportProvider &provider) : _provider(&provider) {}
 

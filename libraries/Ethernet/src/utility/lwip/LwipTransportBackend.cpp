@@ -70,6 +70,8 @@ struct LwipTransportBackend::TcpHandle {
   bool acquired = false;
   bool connected = false;
   bool connecting = false;
+  bool dnsPending = false;
+  uint16_t dnsPort = 0;
   uint8_t rx[kTcpBufferSize];
   size_t rxLength = 0;
   size_t rxIndex = 0;
@@ -97,6 +99,26 @@ void resetTcpReceiveBuffer(LwipTransportBackend::TcpHandle *state) {
 
   state->rxLength = 0;
   state->rxIndex = 0;
+}
+
+err_t startTcpConnect(LwipTransportBackend::TcpHandle *tcp, IPAddress ip,
+                      uint16_t port);
+
+void handleTcpDnsResult(const char *name, const ip_addr_t *address,
+                        void *context) {
+  (void)name;
+  auto *tcp = static_cast<LwipTransportBackend::TcpHandle *>(context);
+  if (tcp == nullptr || !tcp->dnsPending || !tcp->acquired)
+    return;
+
+  tcp->dnsPending = false;
+  if (address == nullptr || tcp->pcb == nullptr) {
+    tcp->connecting = false;
+    return;
+  }
+
+  if (startTcpConnect(tcp, rawIpAddressToIp(address), tcp->dnsPort) != ERR_OK)
+    tcp->connecting = false;
 }
 } // namespace
 
@@ -174,6 +196,18 @@ void armTcpCallbacks(LwipTransportBackend::TcpHandle *state, tcp_pcb *pcb) {
   tcp_arg(pcb, state);
   tcp_recv(pcb, receiveTcpData);
   tcp_err(pcb, handleTcpError);
+}
+
+err_t startTcpConnect(LwipTransportBackend::TcpHandle *tcp, IPAddress ip,
+                      uint16_t port) {
+  if (tcp == nullptr || tcp->pcb == nullptr)
+    return ERR_ARG;
+
+  ip_addr_t address = makeRawIpAddress(ip);
+  const err_t result = tcp_connect(tcp->pcb, &address, port, tcpConnected);
+  if (result == ERR_OK)
+    tcp->connecting = true;
+  return result;
 }
 
 err_t acceptTcpConnection(void *arg, tcp_pcb *newPcb, err_t err) {
@@ -347,22 +381,36 @@ int LwipTransportBackend::connect(void *handle, IPAddress ip, uint16_t port) {
   if (tcp == nullptr || tcp->pcb == nullptr)
     return 0;
 
-  ip_addr_t address = makeRawIpAddress(ip);
-  if (tcp_connect(tcp->pcb, &address, port, tcpConnected) != ERR_OK) {
+  tcp->dnsPending = false;
+  tcp->dnsPort = 0;
+  if (startTcpConnect(tcp, ip, port) != ERR_OK) {
     closeTcpHandle(tcp);
     return 0;
   }
 
-  tcp->connecting = true;
   return 1;
 }
 
 int LwipTransportBackend::connect(void *handle, const char *host, uint16_t port) {
-  ip_addr_t address;
-  if (!resolveRawHostImmediate(host, address))
+  if (host == nullptr || host[0] == '\0')
     return 0;
 
-  return connect(handle, rawIpAddressToIp(&address), port);
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr || tcp->pcb == nullptr)
+    return 0;
+
+  ip_addr_t address;
+  const err_t result =
+      dns_gethostbyname(host, &address, handleTcpDnsResult, tcp);
+  if (result == ERR_OK)
+    return connect(handle, rawIpAddressToIp(&address), port);
+  if (result != ERR_INPROGRESS)
+    return 0;
+
+  tcp->dnsPending = true;
+  tcp->dnsPort = port;
+  tcp->connecting = true;
+  return 1;
 }
 
 size_t LwipTransportBackend::write(void *handle, uint8_t value) {
@@ -652,6 +700,8 @@ void LwipTransportBackend::closeTcpHandle(TcpHandle *handle) {
   handle->acquired = false;
   handle->connected = false;
   handle->connecting = false;
+  handle->dnsPending = false;
+  handle->dnsPort = 0;
   resetTcpReceiveBuffer(handle);
 }
 

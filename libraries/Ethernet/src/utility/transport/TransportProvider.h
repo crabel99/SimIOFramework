@@ -62,6 +62,28 @@ public:
   virtual ~TransportProvider() = default;
 
   /**
+   * @brief Register the default provider used by default-constructed facades.
+   *
+   * This does not transfer ownership. The registered provider must outlive any
+   * default-constructed `EthernetClient`, `EthernetServer`, `EthernetUDP`, or
+   * `SecureClient` that snapshots it. Passing no provider keeps default public
+   * objects fail-closed, which is the reset and test-safe behavior.
+   */
+  static void setDefaultProvider(TransportProvider &provider) {
+    defaultProviderSlot() = &provider;
+  }
+
+  /**
+   * @brief Clear the default provider so new default facades fail closed.
+   */
+  static void clearDefaultProvider() { defaultProviderSlot() = nullptr; }
+
+  /**
+   * @brief Return the currently registered default provider, if any.
+   */
+  static TransportProvider *defaultProvider() { return defaultProviderSlot(); }
+
+  /**
    * @brief Acquire provider-owned sockets for public client objects.
    *
    * The caller owns the acquired handle until it calls `releaseSocket()`. If a
@@ -110,4 +132,10 @@ public:
   virtual void flushUdp() = 0;
   virtual IPAddress remoteUdpIP() = 0;
   virtual uint16_t remoteUdpPort() = 0;
+
+private:
+  static TransportProvider *&defaultProviderSlot() {
+    static TransportProvider *provider = nullptr;
+    return provider;
+  }
 };

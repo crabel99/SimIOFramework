@@ -500,6 +500,7 @@ void EthernetLwipPort::endLwipNetif() {
   if (!globalLwipNetifAdded || globalLwipNetif.state != this)
     return;
 
+  dhcp_stop(&globalLwipNetif);
   netif_set_link_down(&globalLwipNetif);
   netif_set_down(&globalLwipNetif);
   netif_remove(&globalLwipNetif);
@@ -513,6 +514,7 @@ bool EthernetLwipPort::applyNetworkConfigToLwip() {
 
   switch (_networkConfig.mode) {
   case NetworkAddressDhcp: {
+    dhcp_stop(&globalLwipNetif);
     ip4_addr_t zero;
     ip4_addr_set_zero(&zero);
     netif_set_addr(&globalLwipNetif, &zero, &zero, &zero);

@@ -1,7 +1,8 @@
 #include "EthernetServer.h"
 
 EthernetServer::EthernetServer(uint16_t port)
-    : _port(port), _provider(nullptr), _listening(false) {}
+    : _port(port), _provider(TransportProvider::defaultProvider()),
+      _listening(false) {}
 
 EthernetServer::EthernetServer(uint16_t port, TransportProvider &provider)
     : _port(port), _provider(&provider), _listening(false) {}

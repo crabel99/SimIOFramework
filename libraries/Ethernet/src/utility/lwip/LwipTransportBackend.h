@@ -10,9 +10,10 @@
  * own TLS state or call Mbed TLS directly. Public API classes must not own lwIP
  * internals directly. Capacity is intentionally fixed and Arduino-sized: one
  * plain client TCP slot, one secure-client TCP slot, one accepted server-client
- * slot, one listener, and one UDP endpoint. Hostname operations are
+ * slot, one listener, and one UDP endpoint. TCP hostname connects are
  * non-blocking: numeric or cached DNS answers proceed immediately, while
- * unresolved names return fail-pending instead of waiting for DNS completion.
+ * unresolved names leave the handle in a pending-connect state until lwIP's DNS
+ * callback resolves or fails.
  */
 #pragma once
 
@@ -57,7 +58,8 @@ public:
    * @brief Start a bounded TCP connect attempt.
    *
    * Numeric IPs and cached DNS names may proceed immediately. Unresolved DNS
-   * names fail pending rather than blocking for resolver completion.
+   * names return success with the handle in pending-connect state; callers
+   * observe progress through `connected()` without blocking.
    */
   int connect(void *handle, IPAddress ip, uint16_t port) override;
   int connect(void *handle, const char *host, uint16_t port) override;

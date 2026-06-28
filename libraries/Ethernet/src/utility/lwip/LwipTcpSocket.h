@@ -2,10 +2,15 @@
  * @file LwipTcpSocket.h
  * @brief Internal TCP/TLS socket wrapper for the lwIP port boundary.
  *
- * `LwipTcpSocket` adapts an opaque lwIP-side socket handle to the
- * `EthernetSocket` contract consumed by public Arduino client classes. The
- * backend owns the real protocol-control block or TLS session object; this
- * wrapper owns only delegation and fail-closed API behavior.
+ * `LwipTcpSocket` is the narrow adapter between provider-owned transport
+ * handles and the public `EthernetSocket` contract consumed by Arduino client
+ * classes. It is not a second socket implementation and it is not a fallback
+ * stack: the attached backend owns the real TCP PCB, accepted-client PCB, or
+ * secure-client transport handle.
+ *
+ * The wrapper owns only delegation and fail-closed API behavior. Public client
+ * objects may hold this adapter, but they must not see lwIP PCB types, DNS
+ * callbacks, server listener state, or TLS transport internals.
  */
 #pragma once
 
@@ -15,11 +20,25 @@ class LwipTcpSocketBackend {
 public:
   virtual ~LwipTcpSocketBackend() = default;
 
+  /**
+   * @brief Acquire and release bounded provider-owned TCP/TLS handles.
+   *
+   * Backends own the concrete lwIP resources. Each acquired handle must remain
+   * valid until `releaseSocket()` or until the backend explicitly fails the
+   * operation closed through the handle APIs.
+   */
   virtual void *acquireClientSocket() = 0;
   virtual void *acquireSecureClientSocket() = 0;
   virtual void releaseSocket(void *handle) = 0;
   virtual bool tlsAvailable() const = 0;
 
+  /**
+   * @brief Listener and accepted-client operations.
+   *
+   * Listener lifetime is independent from accepted-client handle lifetime.
+   * Stopping a listener must not invalidate a handle already returned by
+   * `acceptClientSocket()`.
+   */
   virtual bool beginServer(uint16_t port) = 0;
   virtual void stopServer(uint16_t port) = 0;
   virtual void *acceptClientSocket(uint16_t port) = 0;
@@ -27,6 +46,13 @@ public:
   virtual size_t writeServer(uint16_t port, const uint8_t *buffer,
                              size_t size) = 0;
 
+  /**
+   * @brief Per-handle stream operations.
+   *
+   * Calls must be bounded and fail closed for null, released, disconnected, or
+   * carrier-down handles. Hostname connect may represent pending DNS inside the
+   * backend without exposing DNS state through this adapter.
+   */
   virtual bool carrierUp(void *handle) const = 0;
   virtual int connect(void *handle, IPAddress ip, uint16_t port) = 0;
   virtual int connect(void *handle, const char *host, uint16_t port) = 0;

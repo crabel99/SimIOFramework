@@ -1,7 +1,8 @@
 #include "EthernetClient.h"
 
 EthernetClient::EthernetClient()
-    : _socket(nullptr), _provider(nullptr), _ownsSocket(false) {}
+    : _socket(nullptr), _provider(TransportProvider::defaultProvider()),
+      _ownsSocket(false) {}
 
 EthernetClient::EthernetClient(EthernetSocket &socket)
     : _socket(&socket), _provider(nullptr), _ownsSocket(false) {}

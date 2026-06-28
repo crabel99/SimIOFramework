@@ -112,6 +112,18 @@ public:
    */
   EthernetLwipPort &lwipPort() { return _lwipPort; }
 
+  /**
+   * @brief Return the provider boundary consumed by public TCP/UDP/TLS facades.
+   *
+   * Callers may pass this explicitly to `EthernetClient`, `EthernetServer`,
+   * `EthernetUDP`, or `SecureClient`, or register it with
+   * `TransportProvider::setDefaultProvider()` while this service remains alive.
+   * The service retains ownership; public facades must not delete or inspect the
+   * provider.
+   */
+  TransportProvider &transportProvider() { return _lwipPort; }
+  const TransportProvider &transportProvider() const { return _lwipPort; }
+
 private:
   EthernetPacketAllocator *_packetAllocator;
   EthernetNetif _netif;

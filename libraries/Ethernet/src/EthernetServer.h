@@ -14,7 +14,17 @@
 
 class EthernetServer : public Server {
 public:
+  /**
+   * @brief Construct using the registered default provider, if any.
+   *
+   * The provider is snapshotted at construction. Without a default provider,
+   * `begin()` leaves the server fail-closed.
+   */
   explicit EthernetServer(uint16_t port);
+
+  /**
+   * @brief Construct around an explicit transport provider.
+   */
   EthernetServer(uint16_t port, TransportProvider &provider);
   ~EthernetServer();
 
