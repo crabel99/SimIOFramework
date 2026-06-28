@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sam.h"
+#include "PendSV.h"
 
 #include <stdint.h>
 
@@ -18,9 +19,46 @@
 
 #define CRYPTO_HARDWARE_AVAILABLE
 
+/**
+ * @brief SAME5x true-random generator hardware interface.
+ *
+ * `trng` owns the MCU TRNG register path: APB clock gating, peripheral
+ * enable/disable, DATARDY status, interrupt masks, and non-blocking random-word
+ * reads. It does not own entropy policy, TLS state, provisioning state, or any
+ * consumer-side buffering; higher layers must call `begin()` before requesting
+ * data and must handle `read()` returning false when the hardware has not
+ * produced a word yet.
+ */
 class trng {
 public:
+  static constexpr uint8_t DataReadyInterrupt = TRNG_INTFLAG_DATARDY_Msk;
+
   inline static uintptr_t baseAddress() { return TRNG_PERIPH; }
+  inline static uint8_t pendSvServiceId() { return PendSVChannels::Trng; }
+
+  /** @brief Return the CMSIS IRQ number for the TRNG peripheral. */
   static int irqNumber();
+  /** @brief Enable the peripheral bus clock needed before touching registers. */
+  static void enableClock();
+  /** @brief Disable the peripheral bus clock when no TRNG access is required. */
+  static void disableClock();
+  /** @brief Enable the TRNG and clear stale interrupt state. */
+  static void begin(bool runStandby = false);
+  /** @brief Disable TRNG generation and DATARDY interrupts. */
+  static void end();
+  /** @brief Report whether the peripheral enable bit is currently set. */
+  static bool enabled();
+  /** @brief Report whether a random word can be read without waiting. */
+  static bool dataReady();
+  /** @brief Read one random word if available; returns false without blocking. */
+  static bool read(uint32_t &value);
+  /** @brief Return currently latched TRNG interrupt flags. */
+  static uint8_t interruptFlags();
+  /** @brief Clear selected TRNG interrupt flags. */
+  static void clearInterruptFlags(uint8_t flags);
+  /** @brief Enable selected TRNG interrupt sources. */
+  static void enableInterrupts(uint8_t mask);
+  /** @brief Disable selected TRNG interrupt sources. */
+  static void disableInterrupts(uint8_t mask);
 };
 #endif /*TRNG_AVAILABLE*/
