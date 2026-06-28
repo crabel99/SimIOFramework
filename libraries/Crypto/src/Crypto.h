@@ -7,6 +7,18 @@
 #include <stdint.h>
 
 #ifdef CRYPTO_HARDWARE_AVAILABLE
+/**
+ * @brief Public crypto adapter consumed by SecureClient and provisioning code.
+ *
+ * The Crypto library is not a home-grown TLS or cryptographic algorithm
+ * library. It is the framework-facing API boundary that higher layers consume.
+ * Production TLS, certificate parsing, DRBG construction, authenticated modes,
+ * and public-key algorithms must be provided by Mbed TLS. The SAME5x `AES`,
+ * `PUKCC`, and `TRNG` core modules are hardware backends routed through that
+ * library where doing so is correct and testable. Direct primitive helpers in
+ * this namespace exist only to prove hardware behavior and to support the
+ * Mbed TLS integration layer; they must not become parallel protocol logic.
+ */
 namespace Crypto {
 
 enum CryptoHardwareMask : uint8_t {

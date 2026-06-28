@@ -55,15 +55,67 @@ public:
   static constexpr uintptr_t ClearFlagsFunctionAddress =
       RomJumpTableAddress + 0x10u;
   static constexpr uintptr_t FillFunctionAddress = RomJumpTableAddress + 0x3Cu;
+  static constexpr uintptr_t RngFunctionAddress = RomJumpTableAddress + 0x70u;
+  static constexpr uintptr_t ExpModFunctionAddress =
+      RomJumpTableAddress + 0x80u;
+  static constexpr uintptr_t ZpEcDsaGenerateFunctionAddress =
+      RomJumpTableAddress + 0xC4u;
+  static constexpr uintptr_t ZpEcDsaVerifyFunctionAddress =
+      RomJumpTableAddress + 0xD4u;
+  static constexpr uint8_t RedModServiceId = 0x50u;
+  static constexpr uint8_t CondCopyServiceId = 0x51u;
+  static constexpr uint8_t DivServiceId = 0x52u;
+  static constexpr uint8_t ZpEcDsaGenerateFastServiceId = 0x53u;
+  static constexpr uint8_t ZpEcDsaVerifyFastServiceId = 0x54u;
+  static constexpr uint8_t FastDivServiceId = 0x55u;
+  static constexpr uint8_t ZpEcRandomiseCoordinateServiceId = 0x56u;
+  static constexpr uint8_t ZpEccAddSubServiceId = 0x57u;
+  static constexpr uint8_t ZpEccConvProjToAffineServiceId = 0x58u;
+  static constexpr uint8_t ZpEccDblServiceId = 0x59u;
+  static constexpr uint8_t ZpEccMulServiceId = 0x5Au;
   static constexpr uint8_t SelfTestServiceId = 0x5Bu;
+  static constexpr uint8_t FastCopyServiceId = 0x5Cu;
+  static constexpr uint8_t GcdServiceId = 0x5Du;
   static constexpr uint8_t ClearFlagsServiceId = 0x5Fu;
+  static constexpr uint8_t RngServiceId = 0x62u;
+  static constexpr uint8_t SwapServiceId = 0x63u;
+  static constexpr uint8_t ZpEcPointIsOnCurveServiceId = 0x64u;
+  static constexpr uint8_t ZpEccQuickDualMulServiceId = 0x65u;
+  static constexpr uint8_t ZpEcConvProjToAffineServiceId = 0x67u;
+  static constexpr uint8_t ZpEccMulFastServiceId = 0x68u;
+  static constexpr uint8_t ZpEcDsaGenerateServiceId = 0x69u;
+  static constexpr uint8_t ZpEcDsaVerifyServiceId = 0x6Au;
+  static constexpr uint8_t CompServiceId = 0x6Bu;
+  static constexpr uint8_t ExpModServiceId = 0x6Cu;
+  static constexpr uint8_t SquareServiceId = 0x6Du;
+  static constexpr uint8_t PrimeGenServiceId = 0x6Eu;
   static constexpr uint8_t FillServiceId = 0x6Fu;
   static constexpr uint16_t StatusOk = 0x0000u;
+  static constexpr uint16_t StatusSeverityMask = 0xC000u;
+  static constexpr uint16_t StatusReasonMask = 0x3FFFu;
   static constexpr uint16_t StatusComputationNotStarted = 0xC001u;
+  static constexpr uint16_t StatusUnknownService = 0xC002u;
+  static constexpr uint16_t StatusUnexploitableOptions = 0xC003u;
+  static constexpr uint16_t StatusHardwareIssue = 0xC004u;
+  static constexpr uint16_t StatusWrongHardware = 0xC005u;
+  static constexpr uint16_t StatusLibraryMalformed = 0xC006u;
   static constexpr uint16_t StatusError = 0xC007u;
+  static constexpr uint16_t StatusUnknownSubservice = 0xC008u;
+  static constexpr uint16_t StatusOverlapNotAllowed = 0xC010u;
   static constexpr uint16_t StatusParameterNotInPukccRam = 0xC011u;
+  static constexpr uint16_t StatusParameterNotInRam = 0xC012u;
+  static constexpr uint16_t StatusParameterNotInCpuRam = 0xC013u;
   static constexpr uint16_t StatusParameterWrongLength = 0xC014u;
   static constexpr uint16_t StatusParameterBadAlignment = 0xC015u;
+  static constexpr uint16_t StatusParameterXBiggerThanY = 0xC016u;
+  static constexpr uint16_t StatusParameterLengthTooSmall = 0xC017u;
+  static constexpr uint16_t StatusDivisionByZero = 0xC101u;
+  static constexpr uint16_t StatusMalformedModulus = 0xC102u;
+  static constexpr uint16_t StatusFaultDetected = 0xC103u;
+  static constexpr uint16_t StatusMalformedKey = 0xC104u;
+  static constexpr uint16_t StatusWrongSignature = 0x8002u;
+  static constexpr uint16_t StatusNumberIsNotPrime = 0x4001u;
+  static constexpr uint16_t StatusNumberIsPrime = 0x4002u;
   static constexpr uint32_t SelfTestExpectedCheck1 = 0x6E70DDD2u;
   static constexpr uint32_t SelfTestExpectedCheck2 = 0x25C8D64Fu;
   static constexpr uint8_t SelfTestExpectedStep = 3u;
@@ -89,6 +141,13 @@ public:
     uint8_t service;
     uint16_t status;
     uint32_t specific;
+  };
+
+  enum class StatusSeverity : uint8_t {
+    Ok,
+    Information,
+    Warning,
+    Severe,
   };
 
   inline static uintptr_t apbBaseAddress() { return PUKCC_PERIPH_APB; }
@@ -153,6 +212,25 @@ public:
    * @return true when the service returns StatusOk.
    */
   static bool clearFlags(uint32_t initialFlags, ServiceResult &result);
+  /** @brief Return the PUKCL severity class encoded in a service status. */
+  static StatusSeverity statusSeverity(uint16_t serviceStatus);
+  /** @brief Return the PUKCL status reason with severity bits removed. */
+  static uint16_t statusReason(uint16_t serviceStatus);
+  /** @brief Return true when a PUKCL status is an exact success. */
+  static bool statusIsOk(uint16_t serviceStatus);
+  /** @brief Return true when a PUKCL status is informational. */
+  static bool statusIsInformation(uint16_t serviceStatus);
+  /** @brief Return true when a PUKCL status is a warning. */
+  static bool statusIsWarning(uint16_t serviceStatus);
+  /** @brief Return true when a PUKCL status is a severe failure. */
+  static bool statusIsSevere(uint16_t serviceStatus);
+  /**
+   * @brief Return the ROM jump-table entry for a known PUKCL service.
+   * @return Thumb function address for known services, or 0 for unknown ones.
+   */
+  static uintptr_t serviceFunctionAddress(uint8_t serviceId);
+  /** @brief Return true when the clean-room boundary knows this service ID. */
+  static bool serviceHasKnownEntry(uint8_t serviceId);
   /**
    * @brief Return the CPU-visible address for a Crypto RAM offset.
    * @param offset Offset from the start of PUKCC Crypto RAM.

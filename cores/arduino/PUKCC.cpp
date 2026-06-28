@@ -158,6 +158,67 @@ bool pukcc::clearFlags(uint32_t initialFlags, ServiceResult &result) {
   return result.status == StatusOk;
 }
 
+pukcc::StatusSeverity pukcc::statusSeverity(uint16_t serviceStatus) {
+  if (serviceStatus == StatusOk)
+    return StatusSeverity::Ok;
+
+  switch (serviceStatus & StatusSeverityMask) {
+  case 0x4000u:
+    return StatusSeverity::Information;
+  case 0x8000u:
+    return StatusSeverity::Warning;
+  case 0xC000u:
+    return StatusSeverity::Severe;
+  default:
+    return StatusSeverity::Ok;
+  }
+}
+
+uint16_t pukcc::statusReason(uint16_t serviceStatus) {
+  return serviceStatus & StatusReasonMask;
+}
+
+bool pukcc::statusIsOk(uint16_t serviceStatus) {
+  return serviceStatus == StatusOk;
+}
+
+bool pukcc::statusIsInformation(uint16_t serviceStatus) {
+  return statusSeverity(serviceStatus) == StatusSeverity::Information;
+}
+
+bool pukcc::statusIsWarning(uint16_t serviceStatus) {
+  return statusSeverity(serviceStatus) == StatusSeverity::Warning;
+}
+
+bool pukcc::statusIsSevere(uint16_t serviceStatus) {
+  return statusSeverity(serviceStatus) == StatusSeverity::Severe;
+}
+
+uintptr_t pukcc::serviceFunctionAddress(uint8_t serviceId) {
+  switch (serviceId) {
+  case ClearFlagsServiceId:
+    return ClearFlagsFunctionAddress;
+  case SelfTestServiceId:
+    return SelfTestFunctionAddress;
+  case RngServiceId:
+    return RngFunctionAddress;
+  case ExpModServiceId:
+    return ExpModFunctionAddress;
+  case ZpEcDsaGenerateServiceId:
+    return ZpEcDsaGenerateFunctionAddress;
+  case ZpEcDsaVerifyServiceId:
+    return ZpEcDsaVerifyFunctionAddress;
+  case FillServiceId:
+    return FillFunctionAddress;
+  default:
+    return 0u;
+  }
+}
+
+bool pukcc::serviceHasKnownEntry(uint8_t serviceId) {
+  return serviceFunctionAddress(serviceId) != 0u;
+}
+
 volatile uint8_t *pukcc::cryptoRam(uint16_t offset) {
   return reinterpret_cast<volatile uint8_t *>(cryptoRamBaseAddress() + offset);
 }
