@@ -61,6 +61,7 @@ public:
 protected:
   virtual EthernetSocket *acquireProviderSocket();
   TransportProvider *transportProvider() const { return _provider; }
+  EthernetSocket *currentSocket() const { return _socket; }
 
 private:
   bool ensureSocket();
