@@ -6,6 +6,7 @@
 
 #include <Crypto.h>
 #include <mbedtls/build_info.h>
+#include <mbedtls/private/ctr_drbg.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -146,6 +147,45 @@ bool drbgSeedSetCallback(DrbgSeedContext &context, DrbgSeedCallback callback,
                          void *callbackContext = nullptr);
 bool drbgSeedAsync(DrbgSeedContext &context);
 bool drbgSeedRead(DrbgSeedContext &context, uint8_t *buffer, size_t length);
+
+struct CtrDrbgContext;
+
+using CtrDrbgCallback =
+    void (*)(bool success, CtrDrbgContext &context, void *user);
+
+/**
+ * @brief Async-safe Mbed TLS CTR_DRBG wrapper.
+ *
+ * The underlying CTR_DRBG implementation is Mbed TLS. This wrapper only
+ * controls when Mbed TLS is allowed to run: instantiation first collects seed
+ * material through `DrbgSeedContext`, then calls Mbed TLS with a non-blocking
+ * entropy callback that copies already-ready bytes. Random generation is
+ * fail-fast and bounded; it never waits on TRNG or hardware completion.
+ */
+struct CtrDrbgContext {
+  static constexpr size_t MaxPersonalizationSize = 64;
+
+  DrbgSeedContext seed = {};
+  mbedtls_ctr_drbg_context drbg = {};
+  uint8_t seedMaterial[DrbgSeedContext::SeedSize] = {};
+  uint8_t personalization[MaxPersonalizationSize] = {};
+  size_t seedReadOffset = 0;
+  size_t personalizationLength = 0;
+  bool initialized = false;
+  bool busy = false;
+  CtrDrbgCallback callback = nullptr;
+  void *callbackContext = nullptr;
+};
+
+void ctrDrbgInit(CtrDrbgContext &context);
+void ctrDrbgFree(CtrDrbgContext &context);
+bool ctrDrbgSetCallback(CtrDrbgContext &context, CtrDrbgCallback callback,
+                        void *callbackContext = nullptr);
+bool ctrDrbgInstantiateAsync(CtrDrbgContext &context,
+                             const uint8_t *personalization = nullptr,
+                             size_t personalizationLength = 0);
+bool ctrDrbgReady(const CtrDrbgContext &context);
+bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length);
 
 bool registerPukccCallback(Crypto::PukccCallback callback,
                            void *context = nullptr);

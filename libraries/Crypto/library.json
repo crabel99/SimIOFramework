@@ -28,7 +28,10 @@
     ],
     "srcFilter": [
       "+<*>",
-      "-<utility/third_party/>"
+      "-<utility/third_party/>",
+      "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c>",
+      "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/ctr_drbg.c>",
+      "+<utility/third_party/mbedtls/tf-psa-crypto/utilities/constant_time.c>"
     ]
   }
 }

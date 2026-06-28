@@ -101,6 +101,65 @@ void drbgSeedRandomCallback(bool success, RandomContext &random, void *context) 
     seedContext->callback(seedContext->ready, *seedContext,
                           seedContext->callbackContext);
 }
+
+int ctrDrbgEntropyCallback(void *context, unsigned char *buffer,
+                           size_t length) {
+  auto *drbgContext = static_cast<CtrDrbgContext *>(context);
+  if (drbgContext == nullptr || buffer == nullptr ||
+      drbgContext->seedReadOffset + length > DrbgSeedContext::SeedSize) {
+    return MBEDTLS_ERR_CTR_DRBG_ENTROPY_SOURCE_FAILED;
+  }
+
+  for (size_t index = 0; index < length; ++index) {
+    buffer[index] =
+        drbgContext->seedMaterial[drbgContext->seedReadOffset + index];
+  }
+  drbgContext->seedReadOffset += length;
+  return 0;
+}
+
+void clearCtrDrbgPersonalization(CtrDrbgContext &context) {
+  for (size_t index = 0; index < CtrDrbgContext::MaxPersonalizationSize; ++index)
+    context.personalization[index] = 0;
+  context.personalizationLength = 0;
+}
+
+void ctrDrbgSeedCallback(bool success, DrbgSeedContext &seedContext,
+                         void *context) {
+  auto *drbgContext = static_cast<CtrDrbgContext *>(context);
+  if (drbgContext == nullptr || !drbgContext->busy)
+    return;
+
+  bool ready = false;
+  if (success &&
+      drbgSeedRead(seedContext, drbgContext->seedMaterial,
+                   DrbgSeedContext::SeedSize)) {
+    mbedtls_ctr_drbg_free(&drbgContext->drbg);
+    mbedtls_ctr_drbg_init(&drbgContext->drbg);
+    mbedtls_ctr_drbg_set_prediction_resistance(&drbgContext->drbg,
+                                               MBEDTLS_CTR_DRBG_PR_OFF);
+    mbedtls_ctr_drbg_set_entropy_len(&drbgContext->drbg,
+                                     MBEDTLS_CTR_DRBG_ENTROPY_LEN);
+    (void)mbedtls_ctr_drbg_set_nonce_len(
+        &drbgContext->drbg,
+        DrbgSeedContext::SeedSize - MBEDTLS_CTR_DRBG_ENTROPY_LEN);
+    drbgContext->seedReadOffset = 0;
+    const unsigned char *personalization =
+        drbgContext->personalizationLength == 0
+            ? nullptr
+            : drbgContext->personalization;
+    ready = mbedtls_ctr_drbg_seed(&drbgContext->drbg, ctrDrbgEntropyCallback,
+                                  drbgContext, personalization,
+                                  drbgContext->personalizationLength) == 0;
+  }
+
+  drbgContext->initialized = ready;
+  drbgContext->busy = false;
+  if (!ready)
+    mbedtls_ctr_drbg_free(&drbgContext->drbg);
+  if (drbgContext->callback != nullptr)
+    drbgContext->callback(ready, *drbgContext, drbgContext->callbackContext);
+}
 } // namespace
 
 void aesEcb128Init(AesEcb128Context &context) {
@@ -336,6 +395,74 @@ bool drbgSeedRead(DrbgSeedContext &context, uint8_t *buffer, size_t length) {
 
   context.ready = false;
   return true;
+}
+
+void ctrDrbgInit(CtrDrbgContext &context) {
+  drbgSeedInit(context.seed);
+  mbedtls_ctr_drbg_init(&context.drbg);
+  for (size_t index = 0; index < DrbgSeedContext::SeedSize; ++index)
+    context.seedMaterial[index] = 0;
+  clearCtrDrbgPersonalization(context);
+  context.seedReadOffset = 0;
+  context.initialized = false;
+  context.busy = false;
+  context.callback = nullptr;
+  context.callbackContext = nullptr;
+}
+
+void ctrDrbgFree(CtrDrbgContext &context) {
+  if (context.busy)
+    drbgSeedFree(context.seed);
+  mbedtls_ctr_drbg_free(&context.drbg);
+  ctrDrbgInit(context);
+}
+
+bool ctrDrbgSetCallback(CtrDrbgContext &context, CtrDrbgCallback callback,
+                        void *callbackContext) {
+  if (context.busy)
+    return false;
+
+  context.callback = callback;
+  context.callbackContext = callbackContext;
+  return callback != nullptr;
+}
+
+bool ctrDrbgInstantiateAsync(CtrDrbgContext &context,
+                             const uint8_t *personalization,
+                             size_t personalizationLength) {
+  if (context.busy || context.callback == nullptr ||
+      personalizationLength > CtrDrbgContext::MaxPersonalizationSize ||
+      (personalization == nullptr && personalizationLength != 0)) {
+    return false;
+  }
+
+  clearCtrDrbgPersonalization(context);
+  for (size_t index = 0; index < personalizationLength; ++index)
+    context.personalization[index] = personalization[index];
+  context.personalizationLength = personalizationLength;
+  context.seedReadOffset = 0;
+  context.initialized = false;
+  context.busy = true;
+
+  if (!drbgSeedSetCallback(context.seed, ctrDrbgSeedCallback, &context) ||
+      !drbgSeedAsync(context.seed)) {
+    context.busy = false;
+    drbgSeedFree(context.seed);
+    return false;
+  }
+
+  return true;
+}
+
+bool ctrDrbgReady(const CtrDrbgContext &context) {
+  return context.initialized && !context.busy;
+}
+
+bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length) {
+  if (!ctrDrbgReady(context) || buffer == nullptr || length == 0)
+    return false;
+
+  return mbedtls_ctr_drbg_random(&context.drbg, buffer, length) == 0;
 }
 
 bool registerPukccCallback(Crypto::PukccCallback callback, void *context) {
