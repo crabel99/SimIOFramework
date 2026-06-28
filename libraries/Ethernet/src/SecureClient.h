@@ -75,6 +75,20 @@ public:
   int tlsLastError() const;
   uint32_t tlsVerificationResult() const;
   bool tlsHandshakeComplete() const;
+  /**
+   * @brief Return true once TLS read progress observes peer close-notify.
+   */
+  bool tlsPeerCloseNotified() const;
+
+  /**
+   * @brief Start a bounded TLS close-notify shutdown.
+   *
+   * This is the graceful TLS shutdown path. It fails closed until the handshake
+   * has completed. Call `pollTls()` to continue `WantRead`/`WantWrite`
+   * progress. When close-notify completes or errors, the underlying provider
+   * socket is released. `stop()` remains the immediate abort path.
+   */
+  Crypto::TlsAsyncStatus closeNotifyAsync();
 
   /**
    * @brief TLS stream operations fail closed until handshake completion.
@@ -86,7 +100,8 @@ public:
    * `WantRead`/`WantWrite`; callers must use `pollTls()` to continue deferred
    * TLS work. `write()` returns the number of bytes accepted into that staging
    * buffer, and a second write returns 0 while the staged TLS write is still
-   * pending.
+   * pending. `connected()` is TLS-aware: it reports connected only after the
+   * handshake is complete and the underlying provider socket remains connected.
    */
   size_t write(uint8_t value) override;
   size_t write(const uint8_t *buffer, size_t size) override;

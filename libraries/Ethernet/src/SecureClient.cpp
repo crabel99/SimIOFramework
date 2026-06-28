@@ -166,6 +166,22 @@ bool SecureClient::tlsHandshakeComplete() const {
   return _tlsSession.handshakeComplete();
 }
 
+bool SecureClient::tlsPeerCloseNotified() const {
+  return _tlsSession.peerCloseNotified();
+}
+
+Crypto::TlsAsyncStatus SecureClient::closeNotifyAsync() {
+  if (!tlsHandshakeComplete())
+    return Crypto::TlsAsyncStatus::Error;
+
+  const Crypto::TlsAsyncStatus started =
+      _tlsSession.closeNotifyAsync(SecureClient::handleTlsCallback, this);
+  if (started == Crypto::TlsAsyncStatus::Error)
+    return started;
+
+  return advanceTlsOperation();
+}
+
 size_t SecureClient::write(uint8_t value) { return write(&value, 1); }
 
 size_t SecureClient::write(const uint8_t *buffer, size_t size) {
@@ -243,7 +259,7 @@ void SecureClient::stop() {
 }
 
 uint8_t SecureClient::connected() {
-  return EthernetClient::connected();
+  return tlsHandshakeComplete() && EthernetClient::connected() ? 1 : 0;
 }
 
 bool SecureClient::tlsAvailable() const {
@@ -330,6 +346,7 @@ bool SecureClient::startTlsHandshake() {
 }
 
 Crypto::TlsAsyncStatus SecureClient::advanceTlsOperation() {
+  const Crypto::TlsOperation operation = _tlsSession.operation();
   const Crypto::TlsAsyncStatus status = _tlsSession.poll();
   if (_tlsRxPending && status == Crypto::TlsAsyncStatus::Complete) {
     _tlsRxLength = _tlsSession.bytesTransferred();
@@ -349,6 +366,14 @@ Crypto::TlsAsyncStatus SecureClient::advanceTlsOperation() {
     memset(_tlsTxBuffer, 0, _tlsTxLength);
     _tlsTxLength = 0;
     _tlsTxPending = false;
+  }
+
+  if (operation == Crypto::TlsOperation::CloseNotify &&
+      (status == Crypto::TlsAsyncStatus::Complete ||
+       status == Crypto::TlsAsyncStatus::Error)) {
+    clearTlsStreamBuffers();
+    _tlsTransport.clear();
+    EthernetClient::stop();
   }
 
   return status;

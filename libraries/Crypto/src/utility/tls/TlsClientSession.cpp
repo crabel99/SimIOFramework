@@ -46,7 +46,7 @@ TlsClientSession::TlsClientSession()
       _callbackContext(nullptr), _readBuffer(nullptr), _writeBuffer(nullptr),
       _requestedLength(0), _bytesTransferred(0), _lastError(0),
       _verificationResult(0), _handshakeComplete(false), _cryptoReady(false),
-      _cryptoFailed(false), _tlsConfigured(false) {
+      _cryptoFailed(false), _tlsConfigured(false), _peerCloseNotified(false) {
   mbedtls_ssl_init(&_ssl);
   mbedtls_ssl_config_init(&_sslConfig);
   mbedtls_x509_crt_init(&_caChain);
@@ -111,6 +111,7 @@ bool TlsClientSession::bindCryptoProvider(TlsCryptoProvider &provider) {
   _cryptoReady = provider.ready();
   _cryptoFailed = false;
   _tlsConfigured = false;
+  _peerCloseNotified = false;
   return true;
 }
 
@@ -219,6 +220,7 @@ void TlsClientSession::abort() {
   _handshakeComplete = false;
   _cryptoReady = false;
   _cryptoFailed = false;
+  _peerCloseNotified = false;
   resetMbedTlsSession();
   if (_cryptoProvider != nullptr)
     _cryptoProvider->reset();
@@ -248,6 +250,8 @@ bool TlsClientSession::startOperation(TlsOperation operation, Callback callback,
   _bytesTransferred = 0;
   _lastError = 0;
   _status = TlsAsyncStatus::Busy;
+  if (operation == TlsOperation::Handshake)
+    _peerCloseNotified = false;
   return true;
 }
 
@@ -338,6 +342,12 @@ TlsAsyncStatus TlsClientSession::pollRead() {
     _bytesTransferred = static_cast<size_t>(result);
     return finish(TlsAsyncStatus::Complete);
   }
+  if (result == 0 || result == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+    _peerCloseNotified = true;
+    _handshakeComplete = false;
+    _bytesTransferred = 0;
+    return finish(TlsAsyncStatus::Complete);
+  }
 
   return handleMbedTlsResult(result);
 }
@@ -376,6 +386,7 @@ TlsAsyncStatus TlsClientSession::pollCloseNotify() {
   _handshakeComplete = false;
   _cryptoReady = false;
   _cryptoFailed = false;
+  _peerCloseNotified = false;
   resetMbedTlsSession();
   if (_cryptoProvider != nullptr)
     _cryptoProvider->reset();

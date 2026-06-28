@@ -247,13 +247,25 @@ void *LwipTransportBackend::acquireClientSocket() {
   return _client;
 }
 
-void *LwipTransportBackend::acquireSecureClientSocket() { return nullptr; }
+void *LwipTransportBackend::acquireSecureClientSocket() {
+  if (_secure == nullptr || _secure->acquired)
+    return nullptr;
+
+  closeTcpHandle(_secure);
+  _secure->pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
+  if (_secure->pcb == nullptr)
+    return nullptr;
+
+  armTcpCallbacks(_secure, _secure->pcb);
+  _secure->acquired = true;
+  return _secure;
+}
 
 void LwipTransportBackend::releaseSocket(void *handle) {
   closeTcpHandle(asTcpHandle(handle));
 }
 
-bool LwipTransportBackend::tlsAvailable() const { return false; }
+bool LwipTransportBackend::tlsAvailable() const { return _secure != nullptr; }
 
 bool LwipTransportBackend::beginServer(uint16_t port) {
   stopServer(_serverPort);

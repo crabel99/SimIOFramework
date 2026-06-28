@@ -5,11 +5,12 @@
  * `LwipTransportBackend` implements the internal TCP and UDP backend contracts at
  * the lwIP boundary. TCP client/server use lwIP's no-OS raw TCP PCB callback
  * API and UDP uses lwIP's no-OS `udp_pcb` callback API when the vendored lwIP
- * core is present. TLS currently remains fail-closed until a secure transport
- * provider is added above the TCP backend. Public API classes must not own
- * lwIP internals directly. Hostname operations are non-blocking: numeric or
- * cached DNS answers proceed immediately, while unresolved names return
- * fail-pending instead of waiting for DNS completion.
+ * core is present. The secure-client slot is a second raw TCP handle that
+ * `SecureClient` wraps with the Crypto/Mbed TLS session; this backend does not
+ * own TLS state or call Mbed TLS directly. Public API classes must not own lwIP
+ * internals directly. Hostname operations are non-blocking: numeric or cached
+ * DNS answers proceed immediately, while unresolved names return fail-pending
+ * instead of waiting for DNS completion.
  */
 #pragma once
 
@@ -27,8 +28,10 @@ public:
   /**
    * @brief Allocate one provider-owned TCP client handle.
    *
-   * Only one plain client and one secure client slot are exposed by this
-   * backend. Public clients must release acquired handles through
+   * Only one plain client and one secure-client TCP slot are exposed by this
+   * backend. The secure slot is TLS-capable only by contract; TLS protocol
+   * state belongs to `SecureClient` and `libraries/Crypto`. Public clients
+   * must release acquired handles through
    * `releaseSocket()`.
    */
   void *acquireClientSocket() override;

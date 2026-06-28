@@ -145,6 +145,10 @@ public:
   uint32_t verificationResult() const { return _verificationResult; }
   bool configured() const;
   bool handshakeComplete() const { return _handshakeComplete; }
+  /**
+   * @brief Return true after a read observes TLS close-notify from the peer.
+   */
+  bool peerCloseNotified() const { return _peerCloseNotified; }
   size_t bytesTransferred() const { return _bytesTransferred; }
 
 private:
@@ -187,6 +191,7 @@ private:
   bool _cryptoReady;
   bool _cryptoFailed;
   bool _tlsConfigured;
+  bool _peerCloseNotified;
 };
 
 } // namespace Crypto
