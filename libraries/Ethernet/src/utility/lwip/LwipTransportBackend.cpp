@@ -86,6 +86,8 @@ struct LwipTransportBackend::UdpState {
   size_t rxIndex = 0;
   SockAddrParts txRemote = {0, 0};
   SockAddrParts rxRemote = {0, 0};
+  bool multicastJoined = false;
+  uint32_t multicastAddress = 0;
 };
 
 namespace {
@@ -477,6 +479,8 @@ uint8_t LwipTransportBackend::beginMulticast(IPAddress ip, uint16_t port) {
     stop();
     return 0;
   }
+  _udp->multicastJoined = true;
+  _udp->multicastAddress = ipToHostOrderAddress(ip);
 #else
   (void)ip;
 #endif
@@ -484,6 +488,13 @@ uint8_t LwipTransportBackend::beginMulticast(IPAddress ip, uint16_t port) {
 }
 
 void LwipTransportBackend::stop() {
+#if LWIP_IGMP
+  if (_udp != nullptr && _udp->multicastJoined) {
+    ip_addr_t groupAddress =
+        makeRawIpAddress(hostOrderAddressToIp(_udp->multicastAddress));
+    igmp_leavegroup(IP4_ADDR_ANY, ip_2_ip4(&groupAddress));
+  }
+#endif
   if (_udp != nullptr && _udp->pcb != nullptr) {
     udp_recv(_udp->pcb, nullptr, nullptr);
     udp_remove(_udp->pcb);
@@ -499,6 +510,8 @@ void LwipTransportBackend::stop() {
   _udp->rxIndex = 0;
   _udp->txRemote = {0, 0};
   _udp->rxRemote = {0, 0};
+  _udp->multicastJoined = false;
+  _udp->multicastAddress = 0;
 }
 
 int LwipTransportBackend::beginPacket(IPAddress ip, uint16_t port) {

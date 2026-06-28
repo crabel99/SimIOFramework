@@ -75,6 +75,10 @@ public:
 
   /**
    * @brief UDP raw PCB endpoint and packet lifecycle.
+   *
+   * Multicast begin joins one IGMP group when enabled. `stop()` and rebegin
+   * leave the previous group before releasing endpoint state, so multicast
+   * membership cannot leak across endpoint lifetimes.
    */
   uint8_t begin(uint16_t port) override;
   uint8_t beginMulticast(IPAddress ip, uint16_t port) override;
