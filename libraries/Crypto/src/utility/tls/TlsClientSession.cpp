@@ -2,6 +2,7 @@
 
 #include <mbedtls/net_sockets.h>
 #include <psa/crypto.h>
+#include <string.h>
 
 namespace Crypto {
 
@@ -19,6 +20,39 @@ constexpr int TlsErrorCryptoUnavailable = -5;
 constexpr int TlsErrorCryptoFailed = -6;
 constexpr int TlsErrorMbedTlsSetupFailed = -7;
 constexpr int TlsErrorMbedTlsIoFailed = -8;
+constexpr size_t MaxAlpnProtocols = 8;
+
+constexpr int StrictTls12CipherSuites[] = {
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, 0};
+
+bool policySupported(const TlsClientPolicy &policy) {
+  return policy.verification == TlsVerificationPolicy::Required &&
+         policy.minVersion == TlsProtocolVersion::Tls12 &&
+         policy.maxVersion == TlsProtocolVersion::Tls12 &&
+         policy.cipherSuite ==
+             TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256;
+}
+
+bool alpnListSupported(const char *const *protocols) {
+  if (protocols == nullptr)
+    return true;
+
+  size_t totalLength = 0;
+  for (size_t index = 0; index <= MaxAlpnProtocols; ++index) {
+    const char *protocol = protocols[index];
+    if (protocol == nullptr)
+      return index != 0;
+
+    const size_t length = strlen(protocol);
+    if (length == 0 || length > MBEDTLS_SSL_MAX_ALPN_NAME_LEN)
+      return false;
+    totalLength += length + 1;
+    if (totalLength > MBEDTLS_SSL_MAX_ALPN_LIST_LEN)
+      return false;
+  }
+
+  return false;
+}
 
 class ExternalRandomProviderGuard {
 public:
@@ -41,21 +75,28 @@ private:
 
 TlsClientSession::TlsClientSession()
     : _transport(nullptr), _cryptoProvider(nullptr), _trustAnchors(nullptr),
-      _trustAnchorLength(0), _hostname(nullptr), _status(TlsAsyncStatus::Idle),
-      _operation(TlsOperation::None), _callback(nullptr),
+      _trustAnchorLength(0), _hostname(nullptr), _alpnProtocols(nullptr),
+      _policy(),
+      _status(TlsAsyncStatus::Idle), _operation(TlsOperation::None),
+      _callback(nullptr),
       _callbackContext(nullptr), _readBuffer(nullptr), _writeBuffer(nullptr),
       _requestedLength(0), _bytesTransferred(0), _lastError(0),
       _verificationResult(0), _handshakeComplete(false), _cryptoReady(false),
-      _cryptoFailed(false), _tlsConfigured(false), _peerCloseNotified(false) {
+      _cryptoFailed(false), _tlsConfigured(false), _peerCloseNotified(false),
+      _clientIdentityConfigured(false) {
   mbedtls_ssl_init(&_ssl);
   mbedtls_ssl_config_init(&_sslConfig);
   mbedtls_x509_crt_init(&_caChain);
+  mbedtls_x509_crt_init(&_clientCertificate);
+  mbedtls_pk_init(&_clientKey);
 }
 
 TlsClientSession::~TlsClientSession() {
   mbedtls_ssl_free(&_ssl);
   mbedtls_ssl_config_free(&_sslConfig);
   mbedtls_x509_crt_free(&_caChain);
+  mbedtls_x509_crt_free(&_clientCertificate);
+  mbedtls_pk_free(&_clientKey);
 }
 
 bool TlsClientSession::configureTrustAnchors(const uint8_t *data,
@@ -88,6 +129,72 @@ bool TlsClientSession::setHostname(const char *hostname) {
     return false;
 
   _hostname = hostname;
+  _tlsConfigured = false;
+  return true;
+}
+
+bool TlsClientSession::configureClientIdentity(const uint8_t *certificate,
+                                               size_t certificateLength,
+                                               const uint8_t *privateKey,
+                                               size_t privateKeyLength) {
+  if (operationActive() || certificate == nullptr || certificateLength == 0 ||
+      privateKey == nullptr || privateKeyLength == 0)
+    return false;
+
+  const psa_status_t psaInitResult = psa_crypto_init();
+  if (psaInitResult != PSA_SUCCESS) {
+    _lastError = static_cast<int>(psaInitResult);
+    return false;
+  }
+
+  mbedtls_x509_crt_free(&_clientCertificate);
+  mbedtls_x509_crt_init(&_clientCertificate);
+  mbedtls_pk_free(&_clientKey);
+  mbedtls_pk_init(&_clientKey);
+  _clientIdentityConfigured = false;
+
+  int parseResult =
+      mbedtls_x509_crt_parse(&_clientCertificate, certificate, certificateLength);
+  if (parseResult != 0) {
+    _lastError = parseResult;
+    return false;
+  }
+
+  parseResult =
+      mbedtls_pk_parse_key(&_clientKey, privateKey, privateKeyLength, nullptr, 0);
+  if (parseResult != 0) {
+    mbedtls_x509_crt_free(&_clientCertificate);
+    mbedtls_x509_crt_init(&_clientCertificate);
+    _lastError = parseResult;
+    return false;
+  }
+
+  _clientIdentityConfigured = true;
+  _tlsConfigured = false;
+  return true;
+}
+
+bool TlsClientSession::configureAlpnProtocols(const char *const *protocols) {
+  if (operationActive() || !alpnListSupported(protocols))
+    return false;
+
+  _alpnProtocols = protocols;
+  _tlsConfigured = false;
+  return true;
+}
+
+const char *TlsClientSession::negotiatedAlpnProtocol() const {
+  if (!_handshakeComplete)
+    return nullptr;
+
+  return mbedtls_ssl_get_alpn_protocol(&_ssl);
+}
+
+bool TlsClientSession::configurePolicy(const TlsClientPolicy &policy) {
+  if (operationActive() || !policySupported(policy))
+    return false;
+
+  _policy = policy;
   _tlsConfigured = false;
   return true;
 }
@@ -284,7 +391,26 @@ bool TlsClientSession::prepareMbedTlsSession() {
     return false;
   }
 
+  mbedtls_ssl_conf_authmode(&_sslConfig, MBEDTLS_SSL_VERIFY_REQUIRED);
+  mbedtls_ssl_conf_min_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
+  mbedtls_ssl_conf_max_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
+  mbedtls_ssl_conf_ciphersuites(&_sslConfig, StrictTls12CipherSuites);
   mbedtls_ssl_conf_ca_chain(&_sslConfig, &_caChain, nullptr);
+  if (_alpnProtocols != nullptr) {
+    result = mbedtls_ssl_conf_alpn_protocols(&_sslConfig, _alpnProtocols);
+    if (result != 0) {
+      _lastError = result;
+      return false;
+    }
+  }
+  if (_clientIdentityConfigured) {
+    result = mbedtls_ssl_conf_own_cert(&_sslConfig, &_clientCertificate,
+                                       &_clientKey);
+    if (result != 0) {
+      _lastError = result;
+      return false;
+    }
+  }
 
   result = mbedtls_ssl_setup(&_ssl, &_sslConfig);
   if (result != 0) {

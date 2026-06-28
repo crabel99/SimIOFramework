@@ -62,9 +62,39 @@ public:
   bool setHostname(const char *hostname);
 
   /**
+   * @brief Configure the optional client certificate and private key.
+   *
+   * The caller must keep both buffers valid for the secure client lifetime.
+   * Parsing and key validation are delegated to the Crypto TLS session. This
+   * method fails closed while a TLS operation is active.
+   */
+  bool setClientIdentity(const uint8_t *certificate, size_t certificateLength,
+                         const uint8_t *privateKey, size_t privateKeyLength);
+
+  /**
+   * @brief Configure optional ALPN protocol names for future handshakes.
+   *
+   * `protocols` may be `nullptr` to disable ALPN. Otherwise it must point to a
+   * null-terminated list that remains valid for the secure client lifetime.
+   */
+  bool setAlpnProtocols(const char *const *protocols);
+  const char *negotiatedAlpnProtocol() const;
+
+  /**
    * @brief Bind the async TLS crypto provider.
    */
   bool setCryptoProvider(Crypto::TlsCryptoProvider &provider);
+
+  /**
+   * @brief Configure the strict TLS policy used for future handshakes.
+   *
+   * The current supported policy is intentionally narrow and fail-closed:
+   * required certificate verification, TLS 1.2 only, and
+   * ECDHE-ECDSA-AES128-GCM-SHA256. Unsupported values are rejected by the
+   * Crypto TLS session.
+   */
+  bool setTlsPolicy(const Crypto::TlsClientPolicy &policy);
+  const Crypto::TlsClientPolicy &tlsPolicy() const;
 
   /**
    * @brief Advance one bounded TLS operation step.
@@ -158,6 +188,11 @@ private:
   int _lastError;
   const uint8_t *_trustAnchors;
   size_t _trustAnchorLength;
+  const uint8_t *_clientCertificate;
+  size_t _clientCertificateLength;
+  const uint8_t *_clientPrivateKey;
+  size_t _clientPrivateKeyLength;
+  const char *const *_alpnProtocols;
   char _hostname[128];
   Crypto::TlsCryptoProvider *_cryptoProvider;
   SocketTlsTransport _tlsTransport;

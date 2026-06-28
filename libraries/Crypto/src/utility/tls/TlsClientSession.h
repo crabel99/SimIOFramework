@@ -16,6 +16,7 @@
 #define MBEDTLS_CONFIG_FILE "utility/mbedtls/TlsConfig.h"
 #endif
 
+#include <mbedtls/pk.h>
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
 
@@ -66,6 +67,32 @@ enum class TlsOperation : uint8_t {
   CloseNotify,
 };
 
+enum class TlsVerificationPolicy : uint8_t {
+  Required,
+};
+
+enum class TlsProtocolVersion : uint8_t {
+  Tls12,
+};
+
+enum class TlsCipherSuite : uint8_t {
+  EcdheEcdsaWithAes128GcmSha256,
+};
+
+/**
+ * @brief Strict TLS policy supported by the current SecureClient profile.
+ *
+ * The policy is intentionally narrow and fail-closed. Runtime configuration
+ * exists so callers and tests can state the contract explicitly; unsupported
+ * values are rejected rather than silently widening the protocol surface.
+ */
+struct TlsClientPolicy {
+  TlsVerificationPolicy verification = TlsVerificationPolicy::Required;
+  TlsProtocolVersion minVersion = TlsProtocolVersion::Tls12;
+  TlsProtocolVersion maxVersion = TlsProtocolVersion::Tls12;
+  TlsCipherSuite cipherSuite = TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256;
+};
+
 class TlsClientSession {
 public:
   using Callback = void (*)(TlsAsyncStatus status, void *context);
@@ -87,6 +114,42 @@ public:
    * @brief Set the hostname used for SNI and certificate verification.
    */
   bool setHostname(const char *hostname);
+
+  /**
+   * @brief Configure the optional client certificate and private key.
+   *
+   * The caller must keep both buffers valid for the session lifetime. Parsing
+   * is delegated to Mbed TLS at configuration time so malformed identity
+   * material fails before any handshake begins. This call fails closed while an
+   * operation is active and clears any previously configured client identity on
+   * parse failure.
+   */
+  bool configureClientIdentity(const uint8_t *certificate,
+                               size_t certificateLength,
+                               const uint8_t *privateKey,
+                               size_t privateKeyLength);
+
+  /**
+   * @brief Configure optional ALPN protocols for future handshakes.
+   *
+   * `protocols` may be `nullptr` to disable ALPN. Otherwise it must point to a
+   * null-terminated list of non-empty protocol strings that remains valid for
+   * the session lifetime. The list is bounded by this wrapper before Mbed TLS
+   * sees it so missing terminators and oversized names fail closed.
+   */
+  bool configureAlpnProtocols(const char *const *protocols);
+  const char *negotiatedAlpnProtocol() const;
+
+  /**
+   * @brief Configure the strict TLS policy used for future handshakes.
+   *
+   * This call fails while an operation is active. The current implementation
+   * supports only TLS 1.2 with required certificate verification and
+   * ECDHE-ECDSA-AES128-GCM-SHA256. Unsupported enum values fail closed so
+   * adding broader policy later requires explicit implementation and tests.
+   */
+  bool configurePolicy(const TlsClientPolicy &policy);
+  const TlsClientPolicy &policy() const { return _policy; }
 
   /**
    * @brief Bind the TLS BIO to an already-created non-blocking transport.
@@ -174,9 +237,13 @@ private:
   const uint8_t *_trustAnchors;
   size_t _trustAnchorLength;
   const char *_hostname;
+  const char *const *_alpnProtocols;
+  TlsClientPolicy _policy;
   mbedtls_ssl_context _ssl;
   mbedtls_ssl_config _sslConfig;
   mbedtls_x509_crt _caChain;
+  mbedtls_x509_crt _clientCertificate;
+  mbedtls_pk_context _clientKey;
   TlsAsyncStatus _status;
   TlsOperation _operation;
   Callback _callback;
@@ -192,6 +259,7 @@ private:
   bool _cryptoFailed;
   bool _tlsConfigured;
   bool _peerCloseNotified;
+  bool _clientIdentityConfigured;
 };
 
 } // namespace Crypto

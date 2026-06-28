@@ -4,28 +4,37 @@
 
 SecureClient::SecureClient()
     : EthernetClient(), _lastError(SecureClientNoError), _trustAnchors(nullptr),
-      _trustAnchorLength(0), _hostname{}, _cryptoProvider(nullptr),
-      _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
+      _trustAnchorLength(0), _clientCertificate(nullptr),
+      _clientCertificateLength(0), _clientPrivateKey(nullptr),
+      _clientPrivateKeyLength(0), _alpnProtocols(nullptr), _hostname{},
+      _cryptoProvider(nullptr), _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(EthernetSocket &socket)
     : EthernetClient(socket), _lastError(SecureClientNoError),
-      _trustAnchors(nullptr), _trustAnchorLength(0), _hostname{},
-      _cryptoProvider(nullptr),
-      _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {
+      _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
+      _clientCertificateLength(0), _clientPrivateKey(nullptr),
+      _clientPrivateKeyLength(0), _alpnProtocols(nullptr), _hostname{},
+      _cryptoProvider(nullptr), _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {
   _tlsTransport.bind(currentSocket());
   _tlsSession.bindTransport(_tlsTransport);
 }
 
 SecureClient::SecureClient(TransportProvider &provider)
     : EthernetClient(provider), _lastError(SecureClientNoError),
-      _trustAnchors(nullptr), _trustAnchorLength(0), _hostname{},
-      _cryptoProvider(nullptr),
-      _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
+      _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
+      _clientCertificateLength(0), _clientPrivateKey(nullptr),
+      _clientPrivateKeyLength(0), _alpnProtocols(nullptr), _hostname{},
+      _cryptoProvider(nullptr), _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(SecureClient &&other)
     : EthernetClient(static_cast<EthernetClient &&>(other)),
       _lastError(other._lastError), _trustAnchors(other._trustAnchors),
-      _trustAnchorLength(other._trustAnchorLength), _hostname{},
+      _trustAnchorLength(other._trustAnchorLength),
+      _clientCertificate(other._clientCertificate),
+      _clientCertificateLength(other._clientCertificateLength),
+      _clientPrivateKey(other._clientPrivateKey),
+      _clientPrivateKeyLength(other._clientPrivateKeyLength),
+      _alpnProtocols(other._alpnProtocols), _hostname{},
       _cryptoProvider(other._cryptoProvider),
       _lastTlsCallbackStatus(other._lastTlsCallbackStatus) {
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
@@ -37,6 +46,7 @@ SecureClient::SecureClient(SecureClient &&other)
   memcpy(_tlsTxBuffer, other._tlsTxBuffer, sizeof(_tlsTxBuffer));
   _tlsTxLength = other._tlsTxLength;
   _tlsTxPending = other._tlsTxPending;
+  _tlsSession.configurePolicy(other.tlsPolicy());
   prepareTlsSession();
   other.clearTlsState();
   other._lastError = SecureClientNoError;
@@ -50,6 +60,11 @@ SecureClient &SecureClient::operator=(SecureClient &&other) {
   _lastError = other._lastError;
   _trustAnchors = other._trustAnchors;
   _trustAnchorLength = other._trustAnchorLength;
+  _clientCertificate = other._clientCertificate;
+  _clientCertificateLength = other._clientCertificateLength;
+  _clientPrivateKey = other._clientPrivateKey;
+  _clientPrivateKeyLength = other._clientPrivateKeyLength;
+  _alpnProtocols = other._alpnProtocols;
   memset(_hostname, 0, sizeof(_hostname));
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
   _hostname[sizeof(_hostname) - 1] = '\0';
@@ -62,6 +77,7 @@ SecureClient &SecureClient::operator=(SecureClient &&other) {
   memcpy(_tlsTxBuffer, other._tlsTxBuffer, sizeof(_tlsTxBuffer));
   _tlsTxLength = other._tlsTxLength;
   _tlsTxPending = other._tlsTxPending;
+  _tlsSession.configurePolicy(other.tlsPolicy());
   prepareTlsSession();
   other.clearTlsState();
   other._lastError = SecureClientNoError;
@@ -145,9 +161,53 @@ bool SecureClient::setHostname(const char *hostname) {
   return _tlsSession.setHostname(_hostname);
 }
 
+bool SecureClient::setClientIdentity(const uint8_t *certificate,
+                                     size_t certificateLength,
+                                     const uint8_t *privateKey,
+                                     size_t privateKeyLength) {
+  if (certificate == nullptr || certificateLength == 0 || privateKey == nullptr ||
+      privateKeyLength == 0)
+    return false;
+
+  _clientCertificate = certificate;
+  _clientCertificateLength = certificateLength;
+  _clientPrivateKey = privateKey;
+  _clientPrivateKeyLength = privateKeyLength;
+  if (!_tlsSession.configureClientIdentity(certificate, certificateLength,
+                                           privateKey, privateKeyLength)) {
+    _clientCertificate = nullptr;
+    _clientCertificateLength = 0;
+    _clientPrivateKey = nullptr;
+    _clientPrivateKeyLength = 0;
+    return false;
+  }
+
+  return true;
+}
+
+bool SecureClient::setAlpnProtocols(const char *const *protocols) {
+  if (!_tlsSession.configureAlpnProtocols(protocols))
+    return false;
+
+  _alpnProtocols = protocols;
+  return true;
+}
+
+const char *SecureClient::negotiatedAlpnProtocol() const {
+  return _tlsSession.negotiatedAlpnProtocol();
+}
+
 bool SecureClient::setCryptoProvider(Crypto::TlsCryptoProvider &provider) {
   _cryptoProvider = &provider;
   return _tlsSession.bindCryptoProvider(provider);
+}
+
+bool SecureClient::setTlsPolicy(const Crypto::TlsClientPolicy &policy) {
+  return _tlsSession.configurePolicy(policy);
+}
+
+const Crypto::TlsClientPolicy &SecureClient::tlsPolicy() const {
+  return _tlsSession.policy();
 }
 
 Crypto::TlsAsyncStatus SecureClient::pollTls() { return advanceTlsOperation(); }
@@ -328,6 +388,13 @@ bool SecureClient::prepareTlsSession() {
     return false;
   if (_trustAnchors != nullptr && _trustAnchorLength != 0 &&
       !_tlsSession.configureTrustAnchors(_trustAnchors, _trustAnchorLength))
+    return false;
+  if (_clientCertificate != nullptr && _clientCertificateLength != 0 &&
+      !_tlsSession.configureClientIdentity(
+          _clientCertificate, _clientCertificateLength, _clientPrivateKey,
+          _clientPrivateKeyLength))
+    return false;
+  if (!_tlsSession.configureAlpnProtocols(_alpnProtocols))
     return false;
   if (_hostname[0] != '\0' && !_tlsSession.setHostname(_hostname))
     return false;
