@@ -20,6 +20,7 @@ constexpr int TlsErrorCryptoUnavailable = -5;
 constexpr int TlsErrorCryptoFailed = -6;
 constexpr int TlsErrorMbedTlsSetupFailed = -7;
 constexpr int TlsErrorMbedTlsIoFailed = -8;
+constexpr int TlsErrorOperationDeadlineExceeded = -9;
 constexpr size_t MaxAlpnProtocols = 8;
 
 constexpr int StrictTls12CipherSuites[] = {
@@ -80,9 +81,11 @@ TlsClientSession::TlsClientSession()
       _status(TlsAsyncStatus::Idle), _operation(TlsOperation::None),
       _callback(nullptr),
       _callbackContext(nullptr), _readBuffer(nullptr), _writeBuffer(nullptr),
-      _requestedLength(0), _bytesTransferred(0), _lastError(0),
-      _verificationResult(0), _handshakeComplete(false), _cryptoReady(false),
-      _cryptoFailed(false), _tlsConfigured(false), _peerCloseNotified(false),
+      _requestedLength(0), _bytesTransferred(0),
+      _operationPollLimit(DefaultTlsOperationPollLimit),
+      _operationPollCount(0), _lastError(0), _verificationResult(0),
+      _handshakeComplete(false), _cryptoReady(false), _cryptoFailed(false),
+      _tlsConfigured(false), _peerCloseNotified(false),
       _clientIdentityConfigured(false) {
   mbedtls_ssl_init(&_ssl);
   mbedtls_ssl_config_init(&_sslConfig);
@@ -199,6 +202,14 @@ bool TlsClientSession::configurePolicy(const TlsClientPolicy &policy) {
   return true;
 }
 
+bool TlsClientSession::configureOperationPollLimit(uint16_t pollLimit) {
+  if (operationActive() || pollLimit == 0)
+    return false;
+
+  _operationPollLimit = pollLimit;
+  return true;
+}
+
 bool TlsClientSession::bindTransport(TlsTransport &transport) {
   if (operationActive())
     return false;
@@ -289,6 +300,11 @@ TlsAsyncStatus TlsClientSession::closeNotifyAsync(Callback callback,
 TlsAsyncStatus TlsClientSession::poll() {
   if (_transport == nullptr)
     return fail(TlsErrorTransportUnavailable);
+  if (operationActive()) {
+    if (_operationPollCount >= _operationPollLimit)
+      return fail(TlsErrorOperationDeadlineExceeded);
+    ++_operationPollCount;
+  }
 
   switch (_operation) {
   case TlsOperation::Handshake:
@@ -355,6 +371,7 @@ bool TlsClientSession::startOperation(TlsOperation operation, Callback callback,
   _writeBuffer = nullptr;
   _requestedLength = 0;
   _bytesTransferred = 0;
+  _operationPollCount = 0;
   _lastError = 0;
   _status = TlsAsyncStatus::Busy;
   if (operation == TlsOperation::Handshake)

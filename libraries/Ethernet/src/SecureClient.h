@@ -97,6 +97,15 @@ public:
   const Crypto::TlsClientPolicy &tlsPolicy() const;
 
   /**
+   * @brief Configure the maximum poll steps for each TLS operation.
+   *
+   * The limit must be nonzero and can only be changed while no TLS operation is
+   * active. Expired TLS operations fail closed and release no caller buffers.
+   */
+  bool setTlsOperationPollLimit(uint16_t pollLimit);
+  uint16_t tlsOperationPollLimit() const;
+
+  /**
    * @brief Advance one bounded TLS operation step.
    */
   Crypto::TlsAsyncStatus pollTls();
@@ -193,6 +202,7 @@ private:
   const uint8_t *_clientPrivateKey;
   size_t _clientPrivateKeyLength;
   const char *const *_alpnProtocols;
+  uint16_t _tlsOperationPollLimit;
   char _hostname[128];
   Crypto::TlsCryptoProvider *_cryptoProvider;
   SocketTlsTransport _tlsTransport;

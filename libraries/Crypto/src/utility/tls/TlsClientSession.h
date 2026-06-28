@@ -93,6 +93,8 @@ struct TlsClientPolicy {
   TlsCipherSuite cipherSuite = TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256;
 };
 
+constexpr uint16_t DefaultTlsOperationPollLimit = 256;
+
 class TlsClientSession {
 public:
   using Callback = void (*)(TlsAsyncStatus status, void *context);
@@ -150,6 +152,17 @@ public:
    */
   bool configurePolicy(const TlsClientPolicy &policy);
   const TlsClientPolicy &policy() const { return _policy; }
+
+  /**
+   * @brief Configure the bounded progress deadline for each TLS operation.
+   *
+   * Each active handshake/read/write/close-notify operation may consume at most
+   * `pollLimit` calls to `poll()`. The limit must be nonzero and can only be
+   * changed while idle. Expired operations fail closed and invoke the pending
+   * operation callback with `TlsAsyncStatus::Error`.
+   */
+  bool configureOperationPollLimit(uint16_t pollLimit);
+  uint16_t operationPollLimit() const { return _operationPollLimit; }
 
   /**
    * @brief Bind the TLS BIO to an already-created non-blocking transport.
@@ -252,6 +265,8 @@ private:
   const uint8_t *_writeBuffer;
   size_t _requestedLength;
   size_t _bytesTransferred;
+  uint16_t _operationPollLimit;
+  uint16_t _operationPollCount;
   int _lastError;
   uint32_t _verificationResult;
   bool _handshakeComplete;

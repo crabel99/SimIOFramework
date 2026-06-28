@@ -6,15 +6,19 @@ SecureClient::SecureClient()
     : EthernetClient(), _lastError(SecureClientNoError), _trustAnchors(nullptr),
       _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
-      _clientPrivateKeyLength(0), _alpnProtocols(nullptr), _hostname{},
-      _cryptoProvider(nullptr), _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
+      _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
+      _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit), _hostname{},
+      _cryptoProvider(nullptr),
+      _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(EthernetSocket &socket)
     : EthernetClient(socket), _lastError(SecureClientNoError),
       _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
-      _clientPrivateKeyLength(0), _alpnProtocols(nullptr), _hostname{},
-      _cryptoProvider(nullptr), _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {
+      _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
+      _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit), _hostname{},
+      _cryptoProvider(nullptr),
+      _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {
   _tlsTransport.bind(currentSocket());
   _tlsSession.bindTransport(_tlsTransport);
 }
@@ -23,8 +27,10 @@ SecureClient::SecureClient(TransportProvider &provider)
     : EthernetClient(provider), _lastError(SecureClientNoError),
       _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
-      _clientPrivateKeyLength(0), _alpnProtocols(nullptr), _hostname{},
-      _cryptoProvider(nullptr), _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
+      _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
+      _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit), _hostname{},
+      _cryptoProvider(nullptr),
+      _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(SecureClient &&other)
     : EthernetClient(static_cast<EthernetClient &&>(other)),
@@ -34,7 +40,8 @@ SecureClient::SecureClient(SecureClient &&other)
       _clientCertificateLength(other._clientCertificateLength),
       _clientPrivateKey(other._clientPrivateKey),
       _clientPrivateKeyLength(other._clientPrivateKeyLength),
-      _alpnProtocols(other._alpnProtocols), _hostname{},
+      _alpnProtocols(other._alpnProtocols),
+      _tlsOperationPollLimit(other._tlsOperationPollLimit), _hostname{},
       _cryptoProvider(other._cryptoProvider),
       _lastTlsCallbackStatus(other._lastTlsCallbackStatus) {
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
@@ -65,6 +72,7 @@ SecureClient &SecureClient::operator=(SecureClient &&other) {
   _clientPrivateKey = other._clientPrivateKey;
   _clientPrivateKeyLength = other._clientPrivateKeyLength;
   _alpnProtocols = other._alpnProtocols;
+  _tlsOperationPollLimit = other._tlsOperationPollLimit;
   memset(_hostname, 0, sizeof(_hostname));
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
   _hostname[sizeof(_hostname) - 1] = '\0';
@@ -208,6 +216,18 @@ bool SecureClient::setTlsPolicy(const Crypto::TlsClientPolicy &policy) {
 
 const Crypto::TlsClientPolicy &SecureClient::tlsPolicy() const {
   return _tlsSession.policy();
+}
+
+bool SecureClient::setTlsOperationPollLimit(uint16_t pollLimit) {
+  if (!_tlsSession.configureOperationPollLimit(pollLimit))
+    return false;
+
+  _tlsOperationPollLimit = pollLimit;
+  return true;
+}
+
+uint16_t SecureClient::tlsOperationPollLimit() const {
+  return _tlsOperationPollLimit;
 }
 
 Crypto::TlsAsyncStatus SecureClient::pollTls() { return advanceTlsOperation(); }
@@ -383,6 +403,8 @@ bool SecureClient::prepareTlsSession() {
   _tlsTransport.bind(currentSocket());
   if (!_tlsSession.bindTransport(_tlsTransport))
     return false;
+  if (!_tlsSession.configureOperationPollLimit(_tlsOperationPollLimit))
+    return false;
   if (_cryptoProvider != nullptr &&
       !_tlsSession.bindCryptoProvider(*_cryptoProvider))
     return false;
@@ -438,6 +460,11 @@ Crypto::TlsAsyncStatus SecureClient::advanceTlsOperation() {
   if (operation == Crypto::TlsOperation::CloseNotify &&
       (status == Crypto::TlsAsyncStatus::Complete ||
        status == Crypto::TlsAsyncStatus::Error)) {
+    clearTlsStreamBuffers();
+    _tlsTransport.clear();
+    EthernetClient::stop();
+  } else if (operation == Crypto::TlsOperation::Handshake &&
+             status == Crypto::TlsAsyncStatus::Error) {
     clearTlsStreamBuffers();
     _tlsTransport.clear();
     EthernetClient::stop();
