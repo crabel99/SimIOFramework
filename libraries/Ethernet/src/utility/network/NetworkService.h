@@ -124,6 +124,21 @@ public:
   TransportProvider &transportProvider() { return _lwipPort; }
   const TransportProvider &transportProvider() const { return _lwipPort; }
 
+  /**
+   * @brief Register this service as the default provider for public facades.
+   *
+   * This is a non-owning registration. Board packages, examples, or application
+   * composition code should call this after constructing the long-lived service
+   * object that owns the frame driver and packet allocator. `EthernetClass`
+   * remains the low-level hardware object and does not own this registration.
+   */
+  void registerAsDefaultProvider();
+
+  /**
+   * @brief Clear the default provider if it currently points at this service.
+   */
+  void clearDefaultProvider();
+
 private:
   EthernetPacketAllocator *_packetAllocator;
   EthernetNetif _netif;

@@ -83,3 +83,12 @@ IPAddress NetworkService::subnetMask() const { return _lwipPort.subnetMask(); }
 IPAddress NetworkService::dnsServerIP() const {
   return _lwipPort.dnsServerIP();
 }
+
+void NetworkService::registerAsDefaultProvider() {
+  TransportProvider::setDefaultProvider(_lwipPort);
+}
+
+void NetworkService::clearDefaultProvider() {
+  if (TransportProvider::defaultProvider() == &_lwipPort)
+    TransportProvider::clearDefaultProvider();
+}
