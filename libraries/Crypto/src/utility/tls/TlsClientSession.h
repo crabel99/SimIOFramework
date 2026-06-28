@@ -17,6 +17,26 @@
 
 namespace Crypto {
 
+using TlsCryptoReadyCallback = void (*)(bool success, void *context);
+
+/**
+ * @brief Async crypto readiness provider for TLS sessions.
+ *
+ * Implementations own the Mbed TLS RNG/crypto setup required before handshake
+ * progress can run. They must return immediately from `beginHandshakeCrypto()`
+ * and later report completion through the callback. The callback only marks
+ * readiness; TLS protocol progress still happens from `TlsClientSession::poll()`.
+ */
+class TlsCryptoProvider {
+public:
+  virtual ~TlsCryptoProvider() = default;
+
+  virtual bool beginHandshakeCrypto(TlsCryptoReadyCallback callback,
+                                    void *context) = 0;
+  virtual void reset() = 0;
+  virtual bool ready() const = 0;
+};
+
 enum class TlsAsyncStatus : uint8_t {
   Idle,
   Busy,
@@ -61,24 +81,21 @@ public:
   bool bindTransport(TlsTransport &transport);
 
   /**
+   * @brief Bind the async crypto provider used before TLS handshake progress.
+   *
+   * A production provider owns the Mbed TLS DRBG/session crypto setup. Tests may
+   * inject a mock provider to verify state-machine behavior without hardware.
+   */
+  bool bindCryptoProvider(TlsCryptoProvider &provider);
+
+  /**
    * @brief Start async TLS handshake progress.
    *
    * The call validates configuration and stores callback state only. `poll()`
-   * reports `WaitingCrypto` until the owning Crypto/Mbed TLS adapter has
-   * completed async seed/DRBG readiness and calls `markCryptoReady()`.
+   * reports `WaitingCrypto` until the bound `TlsCryptoProvider` has completed
+   * async seed/DRBG readiness.
    */
   TlsAsyncStatus handshakeAsync(Callback callback, void *context = nullptr);
-
-  /**
-   * @brief Mark the async crypto prerequisites for handshake as ready.
-   *
-   * This is the handoff point from `MbedTlsPort` seed/DRBG setup into the TLS
-   * session state machine. It exists so TLS handshake progress never calls a
-   * blocking entropy or random callback. Future real Mbed TLS integration will
-   * call this from the async crypto completion path after the Mbed TLS RNG
-   * context is ready.
-   */
-  bool markCryptoReady();
 
   /**
    * @brief Start an async TLS read operation.
@@ -118,11 +135,14 @@ public:
 private:
   bool operationActive() const;
   bool startOperation(TlsOperation operation, Callback callback, void *context);
+  bool startHandshakeCrypto();
   TlsAsyncStatus finish(TlsAsyncStatus status);
   TlsAsyncStatus fail(int error);
   TlsAsyncStatus reject(int error);
+  static void handleCryptoReady(bool success, void *context);
 
   TlsTransport *_transport;
+  TlsCryptoProvider *_cryptoProvider;
   const uint8_t *_trustAnchors;
   size_t _trustAnchorLength;
   const char *_hostname;
@@ -138,6 +158,7 @@ private:
   uint32_t _verificationResult;
   bool _handshakeComplete;
   bool _cryptoReady;
+  bool _cryptoFailed;
 };
 
 } // namespace Crypto

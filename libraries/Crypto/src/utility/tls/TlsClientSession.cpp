@@ -7,15 +7,18 @@ constexpr int TlsErrorInvalidState = -1;
 constexpr int TlsErrorInvalidArgument = -2;
 constexpr int TlsErrorTransportUnavailable = -3;
 constexpr int TlsErrorTransportDisconnected = -4;
+constexpr int TlsErrorCryptoUnavailable = -5;
+constexpr int TlsErrorCryptoFailed = -6;
 } // namespace
 
 TlsClientSession::TlsClientSession()
-    : _transport(nullptr), _trustAnchors(nullptr), _trustAnchorLength(0),
-      _hostname(nullptr), _status(TlsAsyncStatus::Idle),
+    : _transport(nullptr), _cryptoProvider(nullptr), _trustAnchors(nullptr),
+      _trustAnchorLength(0), _hostname(nullptr), _status(TlsAsyncStatus::Idle),
       _operation(TlsOperation::None), _callback(nullptr),
       _callbackContext(nullptr), _readBuffer(nullptr), _writeBuffer(nullptr),
       _requestedLength(0), _bytesTransferred(0), _lastError(0),
-      _verificationResult(0), _handshakeComplete(false), _cryptoReady(false) {}
+      _verificationResult(0), _handshakeComplete(false), _cryptoReady(false),
+      _cryptoFailed(false) {}
 
 bool TlsClientSession::configureTrustAnchors(const uint8_t *data,
                                              size_t length) {
@@ -45,6 +48,16 @@ bool TlsClientSession::bindTransport(TlsTransport &transport) {
   return true;
 }
 
+bool TlsClientSession::bindCryptoProvider(TlsCryptoProvider &provider) {
+  if (operationActive())
+    return false;
+
+  _cryptoProvider = &provider;
+  _cryptoReady = provider.ready();
+  _cryptoFailed = false;
+  return true;
+}
+
 TlsAsyncStatus TlsClientSession::handshakeAsync(Callback callback,
                                                 void *context) {
   if (operationActive())
@@ -58,16 +71,10 @@ TlsAsyncStatus TlsClientSession::handshakeAsync(Callback callback,
 
   if (!startOperation(TlsOperation::Handshake, callback, context))
     return fail(TlsErrorInvalidState);
+  if (!startHandshakeCrypto())
+    return fail(TlsErrorCryptoUnavailable);
 
   return _status;
-}
-
-bool TlsClientSession::markCryptoReady() {
-  if (_handshakeComplete)
-    return false;
-
-  _cryptoReady = true;
-  return true;
 }
 
 TlsAsyncStatus TlsClientSession::readAsync(uint8_t *buffer, size_t length,
@@ -121,6 +128,8 @@ TlsAsyncStatus TlsClientSession::poll() {
   case TlsOperation::Handshake:
     if (!_transport->carrierUp() || _transport->connected() == 0)
       return fail(TlsErrorTransportDisconnected);
+    if (_cryptoFailed)
+      return fail(TlsErrorCryptoFailed);
     if (!_cryptoReady) {
       _status = TlsAsyncStatus::WaitingCrypto;
       return _status;
@@ -161,6 +170,9 @@ TlsAsyncStatus TlsClientSession::poll() {
   case TlsOperation::CloseNotify:
     _handshakeComplete = false;
     _cryptoReady = false;
+    _cryptoFailed = false;
+    if (_cryptoProvider != nullptr)
+      _cryptoProvider->reset();
     _transport->stop();
     return finish(TlsAsyncStatus::Complete);
   case TlsOperation::None:
@@ -180,11 +192,15 @@ void TlsClientSession::abort() {
   _bytesTransferred = 0;
   _handshakeComplete = false;
   _cryptoReady = false;
+  _cryptoFailed = false;
+  if (_cryptoProvider != nullptr)
+    _cryptoProvider->reset();
 }
 
 bool TlsClientSession::configured() const {
   return _transport != nullptr && _trustAnchors != nullptr &&
-         _trustAnchorLength != 0 && _hostname != nullptr;
+         _trustAnchorLength != 0 && _hostname != nullptr &&
+         _cryptoProvider != nullptr;
 }
 
 bool TlsClientSession::operationActive() const {
@@ -206,6 +222,18 @@ bool TlsClientSession::startOperation(TlsOperation operation, Callback callback,
   _lastError = 0;
   _status = TlsAsyncStatus::Busy;
   return true;
+}
+
+bool TlsClientSession::startHandshakeCrypto() {
+  if (_cryptoProvider == nullptr)
+    return false;
+
+  _cryptoReady = _cryptoProvider->ready();
+  _cryptoFailed = false;
+  if (_cryptoReady)
+    return true;
+
+  return _cryptoProvider->beginHandshakeCrypto(handleCryptoReady, this);
 }
 
 TlsAsyncStatus TlsClientSession::finish(TlsAsyncStatus status) {
@@ -231,6 +259,15 @@ TlsAsyncStatus TlsClientSession::fail(int error) {
 TlsAsyncStatus TlsClientSession::reject(int error) {
   _lastError = error;
   return TlsAsyncStatus::Error;
+}
+
+void TlsClientSession::handleCryptoReady(bool success, void *context) {
+  auto *session = static_cast<TlsClientSession *>(context);
+  if (session == nullptr || session->_operation != TlsOperation::Handshake)
+    return;
+
+  session->_cryptoReady = success;
+  session->_cryptoFailed = !success;
 }
 
 } // namespace Crypto
