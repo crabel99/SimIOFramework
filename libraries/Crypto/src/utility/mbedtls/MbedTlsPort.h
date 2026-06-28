@@ -188,6 +188,10 @@ bool ctrDrbgInstantiateAsync(CtrDrbgContext &context,
 bool ctrDrbgReady(const CtrDrbgContext &context);
 bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length);
 
+bool setExternalRandomProvider(Crypto::TlsCryptoProvider *provider);
+void clearExternalRandomProvider(Crypto::TlsCryptoProvider *provider);
+bool generateExternalRandom(uint8_t *buffer, size_t length);
+
 /**
  * @brief Production TLS crypto-readiness provider backed by Mbed TLS.
  *
@@ -206,7 +210,7 @@ public:
                             void *context) override;
   void reset() override;
   bool ready() const override;
-  bool generateRandom(uint8_t *buffer, size_t length);
+  bool generateRandom(uint8_t *buffer, size_t length) override;
 
 private:
   static void handleDrbgReady(bool success, CtrDrbgContext &context,
