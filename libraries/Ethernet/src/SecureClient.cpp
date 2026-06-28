@@ -30,6 +30,13 @@ SecureClient::SecureClient(SecureClient &&other)
       _lastTlsCallbackStatus(other._lastTlsCallbackStatus) {
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
   _hostname[sizeof(_hostname) - 1] = '\0';
+  memcpy(_tlsRxBuffer, other._tlsRxBuffer, sizeof(_tlsRxBuffer));
+  _tlsRxLength = other._tlsRxLength;
+  _tlsRxIndex = other._tlsRxIndex;
+  _tlsRxPending = other._tlsRxPending;
+  memcpy(_tlsTxBuffer, other._tlsTxBuffer, sizeof(_tlsTxBuffer));
+  _tlsTxLength = other._tlsTxLength;
+  _tlsTxPending = other._tlsTxPending;
   prepareTlsSession();
   other.clearTlsState();
   other._lastError = SecureClientNoError;
@@ -43,10 +50,18 @@ SecureClient &SecureClient::operator=(SecureClient &&other) {
   _lastError = other._lastError;
   _trustAnchors = other._trustAnchors;
   _trustAnchorLength = other._trustAnchorLength;
+  memset(_hostname, 0, sizeof(_hostname));
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
   _hostname[sizeof(_hostname) - 1] = '\0';
   _cryptoProvider = other._cryptoProvider;
   _lastTlsCallbackStatus = other._lastTlsCallbackStatus;
+  memcpy(_tlsRxBuffer, other._tlsRxBuffer, sizeof(_tlsRxBuffer));
+  _tlsRxLength = other._tlsRxLength;
+  _tlsRxIndex = other._tlsRxIndex;
+  _tlsRxPending = other._tlsRxPending;
+  memcpy(_tlsTxBuffer, other._tlsTxBuffer, sizeof(_tlsTxBuffer));
+  _tlsTxLength = other._tlsTxLength;
+  _tlsTxPending = other._tlsTxPending;
   prepareTlsSession();
   other.clearTlsState();
   other._lastError = SecureClientNoError;
@@ -124,6 +139,7 @@ bool SecureClient::setHostname(const char *hostname) {
   if (hostname == nullptr || hostname[0] == '\0')
     return false;
 
+  memset(_hostname, 0, sizeof(_hostname));
   strncpy(_hostname, hostname, sizeof(_hostname) - 1);
   _hostname[sizeof(_hostname) - 1] = '\0';
   return _tlsSession.setHostname(_hostname);
@@ -134,7 +150,7 @@ bool SecureClient::setCryptoProvider(Crypto::TlsCryptoProvider &provider) {
   return _tlsSession.bindCryptoProvider(provider);
 }
 
-Crypto::TlsAsyncStatus SecureClient::pollTls() { return _tlsSession.poll(); }
+Crypto::TlsAsyncStatus SecureClient::pollTls() { return advanceTlsOperation(); }
 
 Crypto::TlsAsyncStatus SecureClient::tlsStatus() const {
   return _tlsSession.status();
@@ -153,25 +169,40 @@ bool SecureClient::tlsHandshakeComplete() const {
 size_t SecureClient::write(uint8_t value) { return write(&value, 1); }
 
 size_t SecureClient::write(const uint8_t *buffer, size_t size) {
-  if (!tlsHandshakeComplete() || buffer == nullptr || size == 0)
+  if (!tlsHandshakeComplete() || buffer == nullptr || size == 0 ||
+      _tlsTxPending)
     return 0;
+
+  if (size > sizeof(_tlsTxBuffer))
+    size = sizeof(_tlsTxBuffer);
+  memcpy(_tlsTxBuffer, buffer, size);
+  _tlsTxLength = size;
+  _tlsTxPending = true;
 
   const Crypto::TlsAsyncStatus started =
-      _tlsSession.writeAsync(buffer, size, SecureClient::handleTlsCallback, this);
-  if (started == Crypto::TlsAsyncStatus::Error)
+      _tlsSession.writeAsync(_tlsTxBuffer, _tlsTxLength,
+                             SecureClient::handleTlsCallback, this);
+  if (started == Crypto::TlsAsyncStatus::Error) {
+    _tlsTxPending = false;
+    _tlsTxLength = 0;
+    return 0;
+  }
+
+  const Crypto::TlsAsyncStatus status = advanceTlsOperation();
+  if (status == Crypto::TlsAsyncStatus::Error)
     return 0;
 
-  const Crypto::TlsAsyncStatus status = _tlsSession.poll();
-  return status == Crypto::TlsAsyncStatus::Complete
-             ? _tlsSession.bytesTransferred()
-             : 0;
+  return size;
 }
 
 int SecureClient::available() {
   if (!tlsHandshakeComplete())
     return 0;
 
-  return 0;
+  if (tlsRxAvailable() == 0)
+    fillTlsRxBuffer();
+
+  return static_cast<int>(tlsRxAvailable());
 }
 
 int SecureClient::read() {
@@ -183,18 +214,21 @@ int SecureClient::read(uint8_t *buffer, size_t size) {
   if (!tlsHandshakeComplete() || buffer == nullptr || size == 0)
     return 0;
 
-  const Crypto::TlsAsyncStatus started =
-      _tlsSession.readAsync(buffer, size, SecureClient::handleTlsCallback, this);
-  if (started == Crypto::TlsAsyncStatus::Error)
+  if (tlsRxAvailable() == 0 && !fillTlsRxBuffer())
     return 0;
 
-  const Crypto::TlsAsyncStatus status = _tlsSession.poll();
-  return status == Crypto::TlsAsyncStatus::Complete
-             ? static_cast<int>(_tlsSession.bytesTransferred())
-             : 0;
+  return static_cast<int>(consumeTlsRx(buffer, size));
 }
 
-int SecureClient::peek() { return -1; }
+int SecureClient::peek() {
+  if (!tlsHandshakeComplete())
+    return -1;
+
+  if (tlsRxAvailable() == 0 && !fillTlsRxBuffer())
+    return -1;
+
+  return _tlsRxBuffer[_tlsRxIndex];
+}
 
 void SecureClient::flush() {
   if (currentSocket() != nullptr)
@@ -203,6 +237,7 @@ void SecureClient::flush() {
 
 void SecureClient::stop() {
   _tlsSession.abort();
+  clearTlsStreamBuffers();
   _tlsTransport.clear();
   EthernetClient::stop();
 }
@@ -288,9 +323,89 @@ bool SecureClient::startTlsHandshake() {
   if (!prepareTlsSession())
     return false;
 
+  clearTlsStreamBuffers();
   const Crypto::TlsAsyncStatus status = _tlsSession.handshakeAsync(
       SecureClient::handleTlsCallback, this);
   return status != Crypto::TlsAsyncStatus::Error;
+}
+
+Crypto::TlsAsyncStatus SecureClient::advanceTlsOperation() {
+  const Crypto::TlsAsyncStatus status = _tlsSession.poll();
+  if (_tlsRxPending && status == Crypto::TlsAsyncStatus::Complete) {
+    _tlsRxLength = _tlsSession.bytesTransferred();
+    _tlsRxIndex = 0;
+    _tlsRxPending = false;
+  } else if (_tlsRxPending && status == Crypto::TlsAsyncStatus::Error) {
+    _tlsRxLength = 0;
+    _tlsRxIndex = 0;
+    _tlsRxPending = false;
+  }
+
+  if (_tlsTxPending && status == Crypto::TlsAsyncStatus::Complete) {
+    memset(_tlsTxBuffer, 0, _tlsTxLength);
+    _tlsTxLength = 0;
+    _tlsTxPending = false;
+  } else if (_tlsTxPending && status == Crypto::TlsAsyncStatus::Error) {
+    memset(_tlsTxBuffer, 0, _tlsTxLength);
+    _tlsTxLength = 0;
+    _tlsTxPending = false;
+  }
+
+  return status;
+}
+
+bool SecureClient::fillTlsRxBuffer() {
+  if (_tlsRxPending) {
+    const Crypto::TlsAsyncStatus status = advanceTlsOperation();
+    return status == Crypto::TlsAsyncStatus::Complete && tlsRxAvailable() != 0;
+  }
+  if (tlsRxAvailable() != 0 || _tlsTxPending)
+    return tlsRxAvailable() != 0;
+
+  _tlsRxLength = 0;
+  _tlsRxIndex = 0;
+  _tlsRxPending = true;
+  const Crypto::TlsAsyncStatus started =
+      _tlsSession.readAsync(_tlsRxBuffer, sizeof(_tlsRxBuffer),
+                            SecureClient::handleTlsCallback, this);
+  if (started == Crypto::TlsAsyncStatus::Error) {
+    _tlsRxPending = false;
+    return false;
+  }
+
+  const Crypto::TlsAsyncStatus status = advanceTlsOperation();
+  return status == Crypto::TlsAsyncStatus::Complete && tlsRxAvailable() != 0;
+}
+
+size_t SecureClient::consumeTlsRx(uint8_t *buffer, size_t size) {
+  const size_t availableBytes = tlsRxAvailable();
+  if (buffer == nullptr || size == 0 || availableBytes == 0)
+    return 0;
+
+  const size_t count = size < availableBytes ? size : availableBytes;
+  memcpy(buffer, _tlsRxBuffer + _tlsRxIndex, count);
+  memset(_tlsRxBuffer + _tlsRxIndex, 0, count);
+  _tlsRxIndex += count;
+  if (_tlsRxIndex >= _tlsRxLength) {
+    _tlsRxIndex = 0;
+    _tlsRxLength = 0;
+  }
+
+  return count;
+}
+
+size_t SecureClient::tlsRxAvailable() const {
+  return _tlsRxLength >= _tlsRxIndex ? _tlsRxLength - _tlsRxIndex : 0;
+}
+
+void SecureClient::clearTlsStreamBuffers() {
+  memset(_tlsRxBuffer, 0, sizeof(_tlsRxBuffer));
+  _tlsRxLength = 0;
+  _tlsRxIndex = 0;
+  _tlsRxPending = false;
+  memset(_tlsTxBuffer, 0, sizeof(_tlsTxBuffer));
+  _tlsTxLength = 0;
+  _tlsTxPending = false;
 }
 
 void SecureClient::clearTlsState() {
@@ -298,9 +413,10 @@ void SecureClient::clearTlsState() {
   _tlsTransport.clear();
   _trustAnchors = nullptr;
   _trustAnchorLength = 0;
-  _hostname[0] = '\0';
+  memset(_hostname, 0, sizeof(_hostname));
   _cryptoProvider = nullptr;
   _lastTlsCallbackStatus = Crypto::TlsAsyncStatus::Idle;
+  clearTlsStreamBuffers();
 }
 
 void SecureClient::handleTlsCallback(Crypto::TlsAsyncStatus status,

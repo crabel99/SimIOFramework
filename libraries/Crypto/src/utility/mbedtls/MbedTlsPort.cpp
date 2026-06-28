@@ -1,17 +1,25 @@
 #include "MbedTlsPort.h"
 
+#include <mbedtls/platform_util.h>
+
 namespace Crypto::MbedTlsPort {
 
 namespace {
+void secureZero(void *buffer, size_t length) {
+  if (buffer != nullptr && length != 0)
+    mbedtls_platform_zeroize(buffer, length);
+}
+
+template <typename T, size_t N> void secureZeroArray(T (&buffer)[N]) {
+  secureZero(buffer, sizeof(buffer));
+}
+
 void copyAesKey(uint32_t destination[4], const uint32_t source[4]) {
   for (uint8_t index = 0; index < 4; ++index)
     destination[index] = source[index];
 }
 
-void clearAesKey(uint32_t key[4]) {
-  for (uint8_t index = 0; index < 4; ++index)
-    key[index] = 0;
-}
+void clearAesKey(uint32_t key[4]) { secureZero(key, sizeof(uint32_t) * 4); }
 
 void aesContextCallback(aes::EventMask events, void *context) {
   auto *aesContext = static_cast<AesEcb128Context *>(context);
@@ -111,16 +119,16 @@ int ctrDrbgEntropyCallback(void *context, unsigned char *buffer,
   }
 
   for (size_t index = 0; index < length; ++index) {
-    buffer[index] =
-        drbgContext->seedMaterial[drbgContext->seedReadOffset + index];
+    const size_t seedIndex = drbgContext->seedReadOffset + index;
+    buffer[index] = drbgContext->seedMaterial[seedIndex];
+    drbgContext->seedMaterial[seedIndex] = 0;
   }
   drbgContext->seedReadOffset += length;
   return 0;
 }
 
 void clearCtrDrbgPersonalization(CtrDrbgContext &context) {
-  for (size_t index = 0; index < CtrDrbgContext::MaxPersonalizationSize; ++index)
-    context.personalization[index] = 0;
+  secureZeroArray(context.personalization);
   context.personalizationLength = 0;
 }
 
@@ -153,6 +161,8 @@ void ctrDrbgSeedCallback(bool success, DrbgSeedContext &seedContext,
                                   drbgContext->personalizationLength) == 0;
   }
 
+  secureZeroArray(drbgContext->seedMaterial);
+  clearCtrDrbgPersonalization(*drbgContext);
   drbgContext->initialized = ready;
   drbgContext->busy = false;
   if (!ready)
@@ -276,8 +286,7 @@ bool entropyRequestAsync(EntropyContext &context, uint8_t *buffer,
 
 void randomInit(RandomContext &context) {
   entropyInit(context.entropy);
-  for (size_t index = 0; index < RandomContext::PoolSize; ++index)
-    context.pool[index] = 0;
+  secureZeroArray(context.pool);
   context.availableLength = 0;
   context.readOffset = 0;
   context.busy = false;
@@ -338,14 +347,14 @@ bool randomRead(RandomContext &context, uint8_t *buffer, size_t length) {
   for (size_t index = 0; index < length; ++index)
     buffer[index] = context.pool[context.readOffset + index];
 
+  secureZero(context.pool + context.readOffset, length);
   context.readOffset += length;
   return true;
 }
 
 void drbgSeedInit(DrbgSeedContext &context) {
   randomInit(context.random);
-  for (size_t index = 0; index < DrbgSeedContext::SeedSize; ++index)
-    context.seed[index] = 0;
+  secureZeroArray(context.seed);
   context.ready = false;
   context.busy = false;
   context.callback = nullptr;
@@ -393,6 +402,7 @@ bool drbgSeedRead(DrbgSeedContext &context, uint8_t *buffer, size_t length) {
   for (size_t index = 0; index < DrbgSeedContext::SeedSize; ++index)
     buffer[index] = context.seed[index];
 
+  secureZeroArray(context.seed);
   context.ready = false;
   return true;
 }
@@ -400,8 +410,7 @@ bool drbgSeedRead(DrbgSeedContext &context, uint8_t *buffer, size_t length) {
 void ctrDrbgInit(CtrDrbgContext &context) {
   drbgSeedInit(context.seed);
   mbedtls_ctr_drbg_init(&context.drbg);
-  for (size_t index = 0; index < DrbgSeedContext::SeedSize; ++index)
-    context.seedMaterial[index] = 0;
+  secureZeroArray(context.seedMaterial);
   clearCtrDrbgPersonalization(context);
   context.seedReadOffset = 0;
   context.initialized = false;

@@ -19,6 +19,24 @@ constexpr int TlsErrorCryptoUnavailable = -5;
 constexpr int TlsErrorCryptoFailed = -6;
 constexpr int TlsErrorMbedTlsSetupFailed = -7;
 constexpr int TlsErrorMbedTlsIoFailed = -8;
+
+class ExternalRandomProviderGuard {
+public:
+  explicit ExternalRandomProviderGuard(TlsCryptoProvider *provider)
+      : _provider(provider),
+        _active(MbedTlsPort::setExternalRandomProvider(provider)) {}
+
+  ~ExternalRandomProviderGuard() {
+    if (_active)
+      MbedTlsPort::clearExternalRandomProvider(_provider);
+  }
+
+  bool active() const { return _active; }
+
+private:
+  TlsCryptoProvider *_provider;
+  bool _active;
+};
 } // namespace
 
 TlsClientSession::TlsClientSession()
@@ -201,7 +219,7 @@ void TlsClientSession::abort() {
   _handshakeComplete = false;
   _cryptoReady = false;
   _cryptoFailed = false;
-  _tlsConfigured = false;
+  resetMbedTlsSession();
   if (_cryptoProvider != nullptr)
     _cryptoProvider->reset();
 }
@@ -252,10 +270,7 @@ bool TlsClientSession::prepareMbedTlsSession() {
       _hostname == nullptr)
     return false;
 
-  mbedtls_ssl_free(&_ssl);
-  mbedtls_ssl_config_free(&_sslConfig);
-  mbedtls_ssl_init(&_ssl);
-  mbedtls_ssl_config_init(&_sslConfig);
+  resetMbedTlsSession();
 
   int result = mbedtls_ssl_config_defaults(
       &_sslConfig, MBEDTLS_SSL_IS_CLIENT, MBEDTLS_SSL_TRANSPORT_STREAM,
@@ -286,10 +301,21 @@ bool TlsClientSession::prepareMbedTlsSession() {
   return true;
 }
 
+void TlsClientSession::resetMbedTlsSession() {
+  mbedtls_ssl_free(&_ssl);
+  mbedtls_ssl_config_free(&_sslConfig);
+  mbedtls_ssl_init(&_ssl);
+  mbedtls_ssl_config_init(&_sslConfig);
+  _tlsConfigured = false;
+  _handshakeComplete = false;
+}
+
 TlsAsyncStatus TlsClientSession::pollHandshake() {
-  MbedTlsPort::setExternalRandomProvider(_cryptoProvider);
+  ExternalRandomProviderGuard randomGuard(_cryptoProvider);
+  if (!randomGuard.active())
+    return fail(TlsErrorCryptoUnavailable);
+
   const int result = mbedtls_ssl_handshake(&_ssl);
-  MbedTlsPort::clearExternalRandomProvider(_cryptoProvider);
   if (result == 0) {
     _verificationResult = mbedtls_ssl_get_verify_result(&_ssl);
     _handshakeComplete = true;
@@ -303,9 +329,11 @@ TlsAsyncStatus TlsClientSession::pollRead() {
   if (!_transport->carrierUp() || _transport->connected() == 0)
     return fail(TlsErrorTransportDisconnected);
 
-  MbedTlsPort::setExternalRandomProvider(_cryptoProvider);
+  ExternalRandomProviderGuard randomGuard(_cryptoProvider);
+  if (!randomGuard.active())
+    return fail(TlsErrorCryptoUnavailable);
+
   const int result = mbedtls_ssl_read(&_ssl, _readBuffer, _requestedLength);
-  MbedTlsPort::clearExternalRandomProvider(_cryptoProvider);
   if (result > 0) {
     _bytesTransferred = static_cast<size_t>(result);
     return finish(TlsAsyncStatus::Complete);
@@ -318,9 +346,11 @@ TlsAsyncStatus TlsClientSession::pollWrite() {
   if (!_transport->carrierUp() || _transport->connected() == 0)
     return fail(TlsErrorTransportDisconnected);
 
-  MbedTlsPort::setExternalRandomProvider(_cryptoProvider);
+  ExternalRandomProviderGuard randomGuard(_cryptoProvider);
+  if (!randomGuard.active())
+    return fail(TlsErrorCryptoUnavailable);
+
   const int result = mbedtls_ssl_write(&_ssl, _writeBuffer, _requestedLength);
-  MbedTlsPort::clearExternalRandomProvider(_cryptoProvider);
   if (result > 0) {
     _bytesTransferred = static_cast<size_t>(result);
     return finish(TlsAsyncStatus::Complete);
@@ -330,9 +360,11 @@ TlsAsyncStatus TlsClientSession::pollWrite() {
 }
 
 TlsAsyncStatus TlsClientSession::pollCloseNotify() {
-  MbedTlsPort::setExternalRandomProvider(_cryptoProvider);
+  ExternalRandomProviderGuard randomGuard(_cryptoProvider);
+  if (!randomGuard.active())
+    return fail(TlsErrorCryptoUnavailable);
+
   const int result = mbedtls_ssl_close_notify(&_ssl);
-  MbedTlsPort::clearExternalRandomProvider(_cryptoProvider);
   if (result == MBEDTLS_ERR_SSL_WANT_READ ||
       result == MBEDTLS_ERR_SSL_WANT_WRITE) {
     return handleMbedTlsResult(result);
@@ -344,7 +376,7 @@ TlsAsyncStatus TlsClientSession::pollCloseNotify() {
   _handshakeComplete = false;
   _cryptoReady = false;
   _cryptoFailed = false;
-  _tlsConfigured = false;
+  resetMbedTlsSession();
   if (_cryptoProvider != nullptr)
     _cryptoProvider->reset();
   _transport->stop();

@@ -78,6 +78,15 @@ public:
 
   /**
    * @brief TLS stream operations fail closed until handshake completion.
+   *
+   * Reads are staged through an internal decrypted RX buffer so `available()`
+   * and `peek()` can report plaintext without exposing Mbed TLS internals.
+   * Writes copy caller data into an internal TLS TX staging buffer before
+   * starting Mbed TLS progress, so caller memory is never retained across
+   * `WantRead`/`WantWrite`; callers must use `pollTls()` to continue deferred
+   * TLS work. `write()` returns the number of bytes accepted into that staging
+   * buffer, and a second write returns 0 while the staged TLS write is still
+   * pending.
    */
   size_t write(uint8_t value) override;
   size_t write(const uint8_t *buffer, size_t size) override;
@@ -100,6 +109,9 @@ public:
   int lastError() const;
 
 private:
+  static constexpr size_t TlsRxBufferSize = 512;
+  static constexpr size_t TlsTxBufferSize = 512;
+
   class SocketTlsTransport : public Crypto::TlsTransport {
   public:
     void bind(EthernetSocket *socket) { _socket = socket; }
@@ -120,6 +132,11 @@ private:
   bool tlsConfigurationReady() const;
   bool prepareTlsSession();
   bool startTlsHandshake();
+  Crypto::TlsAsyncStatus advanceTlsOperation();
+  bool fillTlsRxBuffer();
+  size_t consumeTlsRx(uint8_t *buffer, size_t size);
+  size_t tlsRxAvailable() const;
+  void clearTlsStreamBuffers();
   void clearTlsState();
   static void handleTlsCallback(Crypto::TlsAsyncStatus status, void *context);
 
@@ -131,4 +148,11 @@ private:
   SocketTlsTransport _tlsTransport;
   Crypto::TlsClientSession _tlsSession;
   Crypto::TlsAsyncStatus _lastTlsCallbackStatus;
+  uint8_t _tlsRxBuffer[TlsRxBufferSize] = {};
+  size_t _tlsRxLength = 0;
+  size_t _tlsRxIndex = 0;
+  bool _tlsRxPending = false;
+  uint8_t _tlsTxBuffer[TlsTxBufferSize] = {};
+  size_t _tlsTxLength = 0;
+  bool _tlsTxPending = false;
 };

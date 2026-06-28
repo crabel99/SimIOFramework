@@ -22,6 +22,8 @@ Crypto::TlsCryptoProvider *externalRandomProvider = nullptr;
 bool setExternalRandomProvider(Crypto::TlsCryptoProvider *provider) {
   if (provider == nullptr || !provider->ready())
     return false;
+  if (externalRandomProvider != nullptr)
+    return false;
 
   externalRandomProvider = provider;
   return true;
@@ -33,7 +35,7 @@ void clearExternalRandomProvider(Crypto::TlsCryptoProvider *provider) {
 }
 
 bool generateExternalRandom(uint8_t *buffer, size_t length) {
-  if (externalRandomProvider == nullptr)
+  if (externalRandomProvider == nullptr || buffer == nullptr || length == 0)
     return false;
 
   return externalRandomProvider->generateRandom(buffer, length);

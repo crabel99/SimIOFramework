@@ -152,6 +152,7 @@ private:
   bool startOperation(TlsOperation operation, Callback callback, void *context);
   bool startHandshakeCrypto();
   bool prepareMbedTlsSession();
+  void resetMbedTlsSession();
   TlsAsyncStatus pollHandshake();
   TlsAsyncStatus pollRead();
   TlsAsyncStatus pollWrite();
