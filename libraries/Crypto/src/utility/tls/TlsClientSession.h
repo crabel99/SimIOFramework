@@ -26,6 +26,7 @@
 namespace Crypto {
 
 using TlsCryptoReadyCallback = void (*)(bool success, void *context);
+using TlsRandomCallback = void (*)(bool success, void *context);
 using TlsEcdhP256Callback = void (*)(bool success, void *context);
 using TlsEcdsaP256SignCallback = void (*)(bool success, void *context);
 using TlsEcdsaP256VerifyCallback = void (*)(bool success, void *context);
@@ -38,9 +39,12 @@ using TlsAesGcm128Callback = void (*)(bool success, void *context);
  * progress can run. They must return immediately from `beginHandshakeCrypto()`
  * and later report completion through the callback. The callback only marks
  * readiness; TLS protocol progress still happens from `TlsClientSession::poll()`.
- * Once ready, `generateRandom()` must return immediately from already-prepared
- * DRBG state. It must never start entropy collection or block waiting for
- * hardware.
+ * New operation code should request randomness with `randomBytesAsync()` so
+ * the hardware TRNG writes directly into operation-owned sensitive buffers.
+ * The synchronous `generateRandom()` API exists only for compatibility with
+ * legacy Mbed TLS callback points that cannot yield; it must consume only
+ * already-prepared bytes and must never start entropy collection or block
+ * waiting for hardware.
  */
 class TlsCryptoProvider {
 public:
@@ -51,6 +55,24 @@ public:
   virtual void reset() = 0;
   virtual bool ready() const = 0;
   virtual bool generateRandom(uint8_t *buffer, size_t length) = 0;
+
+  /**
+   * @brief Fill an operation-owned sensitive buffer from async hardware random.
+   *
+   * The provider must write TRNG-backed bytes directly into `buffer`; it must
+   * not stage them in a reusable provider pool. The callback reports only that
+   * the buffer is ready for the owning operation to consume. Callers own
+   * zeroizing `buffer` after use. The default implementation fails closed for
+   * test providers that have not implemented an async hardware random path.
+   */
+  virtual bool randomBytesAsync(uint8_t *buffer, size_t length,
+                                TlsRandomCallback callback, void *context) {
+    (void)buffer;
+    (void)length;
+    (void)callback;
+    (void)context;
+    return false;
+  }
   /**
    * @brief Start async P-256 ECDH shared-secret computation.
    *

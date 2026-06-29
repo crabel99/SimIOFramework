@@ -970,7 +970,9 @@ bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length) {
 }
 
 MbedTlsCryptoProvider::MbedTlsCryptoProvider()
-    : _callback(nullptr), _callbackContext(nullptr), _gcmOperation(),
+    : _directRandom(), _directRandomCallback(nullptr),
+      _directRandomCallbackContext(nullptr), _directRandomBusy(false),
+      _callback(nullptr), _callbackContext(nullptr), _gcmOperation(),
       _gcmCallback(nullptr), _gcmCallbackContext(nullptr), _gcmBusy(false)
 #ifdef CRYPTO_HARDWARE_AVAILABLE
       ,
@@ -987,6 +989,7 @@ MbedTlsCryptoProvider::MbedTlsCryptoProvider()
 #endif
 {
   randomInit(_random);
+  entropyInit(_directRandom);
   aesGcm128Init(_gcmOperation);
 }
 
@@ -1021,6 +1024,10 @@ bool MbedTlsCryptoProvider::beginHandshakeCrypto(
 
 void MbedTlsCryptoProvider::reset() {
   randomFree(_random);
+  entropyFree(_directRandom);
+  _directRandomCallback = nullptr;
+  _directRandomCallbackContext = nullptr;
+  _directRandomBusy = false;
   _callback = nullptr;
   _callbackContext = nullptr;
   if (_gcmBusy)
@@ -1065,6 +1072,34 @@ bool MbedTlsCryptoProvider::ready() const {
 
 bool MbedTlsCryptoProvider::generateRandom(uint8_t *buffer, size_t length) {
   return randomRead(_random, buffer, length);
+}
+
+bool MbedTlsCryptoProvider::randomBytesAsync(
+    uint8_t *buffer, size_t length, Crypto::TlsRandomCallback callback,
+    void *context) {
+  if (_directRandomBusy || buffer == nullptr || length == 0 ||
+      callback == nullptr) {
+    return false;
+  }
+
+  entropyFree(_directRandom);
+  _directRandomCallback = callback;
+  _directRandomCallbackContext = context;
+  _directRandomBusy = true;
+
+  if (!entropySetCallback(_directRandom,
+                          MbedTlsCryptoProvider::handleDirectRandomReady,
+                          this) ||
+      !entropyRequestAsync(_directRandom, buffer, length)) {
+    secureZero(buffer, length);
+    _directRandomCallback = nullptr;
+    _directRandomCallbackContext = nullptr;
+    _directRandomBusy = false;
+    entropyFree(_directRandom);
+    return false;
+  }
+
+  return true;
 }
 
 bool MbedTlsCryptoProvider::ecdhP256SharedSecretAsync(
@@ -1475,6 +1510,35 @@ void MbedTlsCryptoProvider::handleRandomReady(bool success,
   void *callbackContext = provider->_callbackContext;
   provider->_callback = nullptr;
   provider->_callbackContext = nullptr;
+  if (callback != nullptr)
+    callback(success, callbackContext);
+}
+
+void MbedTlsCryptoProvider::handleDirectRandomReady(bool success,
+                                                    EntropyContext &context,
+                                                    void *user) {
+  (void)context;
+  auto *provider = static_cast<MbedTlsCryptoProvider *>(user);
+  if (provider == nullptr)
+    return;
+
+  provider->finishDirectRandom(success);
+}
+
+void MbedTlsCryptoProvider::finishDirectRandom(bool success) {
+  Crypto::TlsRandomCallback callback = _directRandomCallback;
+  void *callbackContext = _directRandomCallbackContext;
+
+  if (!success && _directRandom.buffer != nullptr &&
+      _directRandom.requestedLength != 0) {
+    secureZero(_directRandom.buffer, _directRandom.requestedLength);
+  }
+
+  _directRandomCallback = nullptr;
+  _directRandomCallbackContext = nullptr;
+  _directRandomBusy = false;
+  entropyFree(_directRandom);
+
   if (callback != nullptr)
     callback(success, callbackContext);
 }

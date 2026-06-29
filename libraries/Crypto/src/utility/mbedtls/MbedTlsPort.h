@@ -277,12 +277,14 @@ bool generateExternalRandom(uint8_t *buffer, size_t length);
 /**
  * @brief Production TLS crypto-readiness provider backed by async hardware.
  *
- * Starting handshake crypto submits async TRNG-backed random prefetch and
- * reports readiness through the `TlsCryptoProvider` callback. `generateRandom`
- * only consumes already-prefetched bytes and fails closed when the pool is
- * exhausted; it never calls a software DRBG or waits for entropy. TLS protocol
- * state remains owned by `TlsClientSession`; this provider only owns
- * RNG/crypto readiness.
+ * `randomBytesAsync()` is the production random contract: it fills
+ * operation-owned buffers directly from TRNG callback completions without a
+ * reusable provider pool. Starting handshake crypto still submits a bounded
+ * TRNG-backed prefetch only for legacy Mbed TLS callback points that cannot
+ * yield. `generateRandom()` consumes that transitional pool and fails closed
+ * when it is exhausted; it never calls a software DRBG or waits for entropy.
+ * TLS protocol state remains owned by `TlsClientSession`; this provider only
+ * owns RNG/crypto readiness.
  *
  * The provider routes supported P-256 ECDH, ECDSA signing, and ECDSA
  * verification operations through async PUKCC hardware and fails closed on
@@ -300,6 +302,9 @@ public:
   void reset() override;
   bool ready() const override;
   bool generateRandom(uint8_t *buffer, size_t length) override;
+  bool randomBytesAsync(uint8_t *buffer, size_t length,
+                        Crypto::TlsRandomCallback callback,
+                        void *context) override;
   bool ecdhP256SharedSecretAsync(const uint8_t privateScalar[32],
                                  const uint8_t peerPublicKey[65],
                                  uint8_t sharedSecret[32],
@@ -348,6 +353,9 @@ private:
 
   static void handleRandomReady(bool success, RandomContext &context,
                                 void *user);
+  static void handleDirectRandomReady(bool success, EntropyContext &context,
+                                      void *user);
+  void finishDirectRandom(bool success);
 #ifdef CRYPTO_HARDWARE_AVAILABLE
   static void handleEcdhComplete(bool success, pukcc::ServiceResult &result,
                                  Crypto::PukccEcc::EcdhSharedSecretOperation
@@ -371,6 +379,10 @@ private:
   void finishGcm(bool success);
 
   RandomContext _random;
+  EntropyContext _directRandom;
+  Crypto::TlsRandomCallback _directRandomCallback;
+  void *_directRandomCallbackContext;
+  bool _directRandomBusy;
   Crypto::TlsCryptoReadyCallback _callback;
   void *_callbackContext;
   AesGcm128Context _gcmOperation;
