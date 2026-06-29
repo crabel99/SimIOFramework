@@ -17,15 +17,7 @@ void exitCritical(uint32_t primask) {
   __set_PRIMASK(primask);
 }
 
-struct PukclHeader {
-  uint8_t service;
-  uint8_t subService;
-  uint16_t option;
-  uint32_t specific;
-  uint16_t status;
-  uint16_t reserved16;
-  uint32_t reserved32;
-};
+using PukclHeader = pukcc::ServiceParamHeader;
 
 struct PukclSelfTest {
   uint32_t libraryVersion;
@@ -65,6 +57,7 @@ static_assert(sizeof(PukclFill) == 20,
 using PukclFunction = void (*)(PukclSelfTestParam *);
 using PukclHeaderFunction = void (*)(PukclHeader *);
 using PukclFillFunction = void (*)(PukclFillParam *);
+using PukclGenericFunction = void (*)(pukcc::ServiceParamHeader *);
 
 inline PukclFunction selfTestFunction() {
   return reinterpret_cast<PukclFunction>(pukcc::SelfTestFunctionAddress);
@@ -83,6 +76,7 @@ enum class PendingOperation : uint8_t {
   SelfTest,
   ClearFlags,
   Fill,
+  Generic,
 };
 
 struct AsyncState {
@@ -90,10 +84,12 @@ struct AsyncState {
   void *callbackContext = nullptr;
   pukcc::SelfTestResult *selfTestResult = nullptr;
   pukcc::ServiceResult *serviceResult = nullptr;
+  pukcc::ServiceParamHeader *genericParam = nullptr;
   uint32_t initialFlags = 0;
   uint16_t offset = 0;
   uint16_t length = 0;
   uint32_t fillValue = 0;
+  uint8_t genericServiceId = 0;
   PendingOperation operation = PendingOperation::None;
   bool serviceRegistered = false;
   bool busy = false;
@@ -111,6 +107,8 @@ void completeAsync(uint8_t serviceId, uint16_t status) {
   asyncState.operation = PendingOperation::None;
   asyncState.selfTestResult = nullptr;
   asyncState.serviceResult = nullptr;
+  asyncState.genericParam = nullptr;
+  asyncState.genericServiceId = 0;
   asyncState.busy = false;
   exitCritical(primask);
 
@@ -127,19 +125,23 @@ void pukccPendSvService(uint8_t serviceId, void *context) {
   PendingOperation operation = PendingOperation::None;
   pukcc::SelfTestResult *selfTestResult = nullptr;
   pukcc::ServiceResult *serviceResult = nullptr;
+  pukcc::ServiceParamHeader *genericParam = nullptr;
   uint32_t initialFlags = 0;
   uint16_t offset = 0;
   uint16_t length = 0;
   uint32_t fillValue = 0;
+  uint8_t genericServiceId = 0;
 
   uint32_t primask = enterCritical();
   operation = asyncState.operation;
   selfTestResult = asyncState.selfTestResult;
   serviceResult = asyncState.serviceResult;
+  genericParam = asyncState.genericParam;
   initialFlags = asyncState.initialFlags;
   offset = asyncState.offset;
   length = asyncState.length;
   fillValue = asyncState.fillValue;
+  genericServiceId = asyncState.genericServiceId;
   exitCritical(primask);
 
   if (operation == PendingOperation::None)
@@ -210,6 +212,32 @@ void pukccPendSvService(uint8_t serviceId, void *context) {
     serviceResult->status = param.header.status;
     serviceResult->specific = param.header.specific;
     completeAsync(pukcc::FillServiceId, serviceResult->status);
+    return;
+  }
+  case PendingOperation::Generic: {
+    if (serviceResult == nullptr || genericParam == nullptr) {
+      completeAsync(genericServiceId, pukcc::StatusComputationNotStarted);
+      return;
+    }
+
+    const uintptr_t functionAddress =
+        pukcc::serviceFunctionAddress(genericServiceId);
+    if (functionAddress == 0u) {
+      serviceResult->service = genericServiceId;
+      serviceResult->status = pukcc::StatusUnknownService;
+      serviceResult->specific = 0;
+      completeAsync(genericServiceId, serviceResult->status);
+      return;
+    }
+
+    genericParam->service = genericServiceId;
+    genericParam->status = pukcc::StatusComputationNotStarted;
+    reinterpret_cast<PukclGenericFunction>(functionAddress)(genericParam);
+
+    serviceResult->service = genericParam->service;
+    serviceResult->status = genericParam->status;
+    serviceResult->specific = genericParam->specific;
+    completeAsync(genericServiceId, serviceResult->status);
     return;
   }
   case PendingOperation::None:
@@ -299,6 +327,8 @@ bool pukcc::statusIsSevere(uint16_t serviceStatus) {
 
 uintptr_t pukcc::serviceFunctionAddress(uint8_t serviceId) {
   switch (serviceId) {
+  case RedModServiceId:
+    return RedModFunctionAddress;
   case ClearFlagsServiceId:
     return ClearFlagsFunctionAddress;
   case SelfTestServiceId:
@@ -307,10 +337,16 @@ uintptr_t pukcc::serviceFunctionAddress(uint8_t serviceId) {
     return RngFunctionAddress;
   case ExpModServiceId:
     return ExpModFunctionAddress;
-  case ZpEcDsaGenerateServiceId:
-    return ZpEcDsaGenerateFunctionAddress;
-  case ZpEcDsaVerifyServiceId:
-    return ZpEcDsaVerifyFunctionAddress;
+  case ZpEcDsaGenerateFastServiceId:
+    return ZpEcDsaGenerateFastFunctionAddress;
+  case ZpEcDsaVerifyFastServiceId:
+    return ZpEcDsaVerifyFastFunctionAddress;
+  case ZpEccMulFastServiceId:
+    return ZpEccMulFastFunctionAddress;
+  case ZpEccQuickDualMulFastServiceId:
+    return ZpEccQuickDualMulFastFunctionAddress;
+  case ZpEcDsaQuickVerifyServiceId:
+    return ZpEcDsaQuickVerifyFunctionAddress;
   case FillServiceId:
     return FillFunctionAddress;
   default:
@@ -356,6 +392,8 @@ void pukcc::clearEventCallback() {
   asyncState.callbackContext = nullptr;
   asyncState.selfTestResult = nullptr;
   asyncState.serviceResult = nullptr;
+  asyncState.genericParam = nullptr;
+  asyncState.genericServiceId = 0;
   asyncState.operation = PendingOperation::None;
   asyncState.busy = false;
   exitCritical(primask);
@@ -375,6 +413,8 @@ bool pukcc::selfTestAsync(SelfTestResult &result) {
   }
   asyncState.selfTestResult = &result;
   asyncState.serviceResult = nullptr;
+  asyncState.genericParam = nullptr;
+  asyncState.genericServiceId = 0;
   asyncState.operation = PendingOperation::SelfTest;
   asyncState.busy = true;
   exitCritical(primask);
@@ -396,6 +436,8 @@ bool pukcc::clearFlagsAsync(uint32_t initialFlags, ServiceResult &result) {
   }
   asyncState.selfTestResult = nullptr;
   asyncState.serviceResult = &result;
+  asyncState.genericParam = nullptr;
+  asyncState.genericServiceId = 0;
   asyncState.initialFlags = initialFlags;
   asyncState.operation = PendingOperation::ClearFlags;
   asyncState.busy = true;
@@ -432,10 +474,44 @@ bool pukcc::fillCryptoRamAsync(uint16_t offset, uint16_t length,
   }
   asyncState.selfTestResult = nullptr;
   asyncState.serviceResult = &result;
+  asyncState.genericParam = nullptr;
+  asyncState.genericServiceId = 0;
   asyncState.offset = offset;
   asyncState.length = length;
   asyncState.fillValue = fillValue;
   asyncState.operation = PendingOperation::Fill;
+  asyncState.busy = true;
+  exitCritical(primask);
+
+  PendSV::instance().setPending(pendSvServiceId());
+  return true;
+}
+
+bool pukcc::serviceAsync(uint8_t serviceId, ServiceParamHeader &param,
+                         ServiceResult &result) {
+  result = {};
+  result.service = serviceId;
+
+  if (!serviceHasKnownEntry(serviceId)) {
+    result.status = StatusUnknownService;
+    return false;
+  }
+  if (!ensurePendSvServiceRegistered())
+    return false;
+
+  param.service = serviceId;
+  param.status = StatusComputationNotStarted;
+
+  const uint32_t primask = enterCritical();
+  if (asyncState.busy || asyncState.callback == nullptr) {
+    exitCritical(primask);
+    return false;
+  }
+  asyncState.selfTestResult = nullptr;
+  asyncState.serviceResult = &result;
+  asyncState.genericParam = &param;
+  asyncState.genericServiceId = serviceId;
+  asyncState.operation = PendingOperation::Generic;
   asyncState.busy = true;
   exitCritical(primask);
 

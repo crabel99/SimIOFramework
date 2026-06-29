@@ -68,5 +68,10 @@ bool fillCryptoRamAsync(uint16_t offset, uint16_t length, uint32_t fillValue,
          pukcc::fillCryptoRamAsync(offset, length, fillValue, result);
 }
 
+bool pukccServiceAsync(uint8_t serviceId, pukcc::ServiceParamHeader &param,
+                       pukcc::ServiceResult &result) {
+  return hasPUKCC() && pukcc::serviceAsync(serviceId, param, result);
+}
+
 } // namespace Crypto
 #endif /* CRYPTO_HARDWARE_AVAILABLE */

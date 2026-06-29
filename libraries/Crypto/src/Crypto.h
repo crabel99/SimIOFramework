@@ -54,6 +54,8 @@ bool selfTestAsync(pukcc::SelfTestResult &result);
 bool clearFlagsAsync(uint32_t initialFlags, pukcc::ServiceResult &result);
 bool fillCryptoRamAsync(uint16_t offset, uint16_t length, uint32_t fillValue,
                         pukcc::ServiceResult &result);
+bool pukccServiceAsync(uint8_t serviceId, pukcc::ServiceParamHeader &param,
+                       pukcc::ServiceResult &result);
 
 } // namespace Crypto
 #endif /* CRYPTO_HARDWARE_AVAILABLE */

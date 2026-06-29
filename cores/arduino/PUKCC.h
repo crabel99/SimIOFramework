@@ -66,38 +66,44 @@ public:
   static constexpr uintptr_t RngFunctionAddress = RomJumpTableAddress + 0x70u;
   static constexpr uintptr_t ExpModFunctionAddress =
       RomJumpTableAddress + 0x80u;
-  static constexpr uintptr_t ZpEcDsaGenerateFunctionAddress =
-      RomJumpTableAddress + 0xC4u;
-  static constexpr uintptr_t ZpEcDsaVerifyFunctionAddress =
-      RomJumpTableAddress + 0xD4u;
+  static constexpr uintptr_t RedModFunctionAddress = RomJumpTableAddress + 0x8u;
+  static constexpr uintptr_t ZpEcDsaGenerateFastFunctionAddress =
+      RomJumpTableAddress + 0x28u;
+  static constexpr uintptr_t ZpEcDsaVerifyFastFunctionAddress =
+      RomJumpTableAddress + 0x2Cu;
+  static constexpr uintptr_t ZpEccMulFastFunctionAddress =
+      RomJumpTableAddress + 0x40u;
+  static constexpr uintptr_t ZpEccQuickDualMulFastFunctionAddress =
+      RomJumpTableAddress + 0x98u;
+  static constexpr uintptr_t ZpEcDsaQuickVerifyFunctionAddress =
+      RomJumpTableAddress + 0x9Cu;
   static constexpr uint8_t RedModServiceId = 0x50u;
   static constexpr uint8_t CondCopyServiceId = 0x51u;
   static constexpr uint8_t DivServiceId = 0x52u;
   static constexpr uint8_t ZpEcDsaGenerateFastServiceId = 0x53u;
-  static constexpr uint8_t ZpEcDsaVerifyFastServiceId = 0x54u;
-  static constexpr uint8_t FastDivServiceId = 0x55u;
-  static constexpr uint8_t ZpEcRandomiseCoordinateServiceId = 0x56u;
-  static constexpr uint8_t ZpEccAddSubServiceId = 0x57u;
-  static constexpr uint8_t ZpEccConvProjToAffineServiceId = 0x58u;
-  static constexpr uint8_t ZpEccDblServiceId = 0x59u;
-  static constexpr uint8_t ZpEccMulServiceId = 0x5Au;
+  static constexpr uint8_t ZpEcDsaVerifyFastServiceId = 0x55u;
+  static constexpr uint8_t ZpEcConvProjToAffineServiceId = 0x56u;
   static constexpr uint8_t SelfTestServiceId = 0x5Bu;
   static constexpr uint8_t FastCopyServiceId = 0x5Cu;
   static constexpr uint8_t GcdServiceId = 0x5Du;
+  static constexpr uint8_t ZpEcRandomiseCoordinateServiceId = 0x5Eu;
   static constexpr uint8_t ClearFlagsServiceId = 0x5Fu;
+  static constexpr uint8_t ZpEccDblFastServiceId = 0x60u;
+  static constexpr uint8_t ZpEcConvAffineToProjectiveServiceId = 0x61u;
   static constexpr uint8_t RngServiceId = 0x62u;
   static constexpr uint8_t SwapServiceId = 0x63u;
-  static constexpr uint8_t ZpEcPointIsOnCurveServiceId = 0x64u;
-  static constexpr uint8_t ZpEccQuickDualMulServiceId = 0x65u;
-  static constexpr uint8_t ZpEcConvProjToAffineServiceId = 0x67u;
-  static constexpr uint8_t ZpEccMulFastServiceId = 0x68u;
-  static constexpr uint8_t ZpEcDsaGenerateServiceId = 0x69u;
-  static constexpr uint8_t ZpEcDsaVerifyServiceId = 0x6Au;
+  static constexpr uint8_t ZpEccMulFastServiceId = 0x65u;
+  static constexpr uint8_t ZpEccAddFastServiceId = 0x66u;
+  static constexpr uint8_t SmultServiceId = 0x67u;
+  static constexpr uint8_t ZpEcPointIsOnCurveServiceId = 0x68u;
   static constexpr uint8_t CompServiceId = 0x6Bu;
   static constexpr uint8_t ExpModServiceId = 0x6Cu;
   static constexpr uint8_t SquareServiceId = 0x6Du;
   static constexpr uint8_t PrimeGenServiceId = 0x6Eu;
   static constexpr uint8_t FillServiceId = 0x6Fu;
+  static constexpr uint8_t ZpEccAddSubFastServiceId = 0x75u;
+  static constexpr uint8_t ZpEccQuickDualMulFastServiceId = 0x76u;
+  static constexpr uint8_t ZpEcDsaQuickVerifyServiceId = 0x77u;
   static constexpr uint16_t StatusOk = 0x0000u;
   static constexpr uint16_t StatusSeverityMask = 0xC000u;
   static constexpr uint16_t StatusReasonMask = 0x3FFFu;
@@ -149,6 +155,25 @@ public:
     uint8_t service;
     uint16_t status;
     uint32_t specific;
+  };
+
+  /**
+   * @brief Common PUKCL ROM parameter header.
+   *
+   * Every PUKCL service parameter block begins with this header. Higher-level
+   * crypto adapters build service-specific parameter blocks with this as the
+   * first field, then submit the whole block through `serviceAsync()`. The
+   * runner only schedules and completes the ROM call; it does not interpret
+   * ECC/RSA/TLS policy or key material.
+   */
+  struct ServiceParamHeader {
+    uint8_t service;
+    uint8_t subService;
+    uint16_t option;
+    uint32_t specific;
+    uint16_t status;
+    uint16_t reserved16;
+    uint32_t reserved32;
   };
 
   enum class StatusSeverity : uint8_t {
@@ -230,6 +255,16 @@ public:
   /** @brief Queue the PUKCL Fill service without blocking. */
   static bool fillCryptoRamAsync(uint16_t offset, uint16_t length,
                                  uint32_t fillValue, ServiceResult &result);
+  /**
+   * @brief Queue a known PUKCL ROM service parameter block without blocking.
+   *
+   * The parameter object must remain alive until the registered callback fires.
+   * `param` must be the first field of the service-specific parameter block,
+   * not a detached copy, because the ROM service reads fields that follow this
+   * header. Unknown service IDs and overlapping async submissions are rejected.
+   */
+  static bool serviceAsync(uint8_t serviceId, ServiceParamHeader &param,
+                           ServiceResult &result);
   /** @brief Return true while a PUKCC async service is outstanding. */
   static bool asyncBusy();
   /** @brief Schedule PUKCC PendSV work from the PUKCC IRQ, when used. */
