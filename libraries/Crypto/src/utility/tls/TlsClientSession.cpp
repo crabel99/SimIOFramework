@@ -1,6 +1,7 @@
 #include "TlsClientSession.h"
 
 #include <mbedtls/net_sockets.h>
+#include <mbedtls/platform_util.h>
 #include <psa/crypto.h>
 #include <string.h>
 
@@ -22,6 +23,14 @@ constexpr int TlsErrorMbedTlsSetupFailed = -7;
 constexpr int TlsErrorMbedTlsIoFailed = -8;
 constexpr int TlsErrorOperationDeadlineExceeded = -9;
 constexpr size_t MaxAlpnProtocols = 8;
+constexpr size_t TlsGcmExplicitNonceLength = 8;
+constexpr size_t TlsGcmTagLength = 16;
+constexpr size_t TlsGcmFixedIvLength = 4;
+constexpr size_t TlsGcmNonceLength = 12;
+constexpr size_t TlsRecordAadLength = 13;
+constexpr size_t MaxTlsPlaintextLength = 16384;
+constexpr uint8_t Tls12Major = 0x03;
+constexpr uint8_t Tls12Minor = 0x03;
 
 constexpr int StrictTls12CipherSuites[] = {
     MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, 0};
@@ -61,6 +70,47 @@ void configureInterruptableCryptoBudget() {
 #endif
 }
 
+void storeUint16(uint8_t *destination, uint16_t value) {
+  destination[0] = static_cast<uint8_t>((value >> 8) & 0xFFu);
+  destination[1] = static_cast<uint8_t>(value & 0xFFu);
+}
+
+void storeUint64(uint8_t *destination, uint64_t value) {
+  for (uint8_t index = 0; index < 8; ++index) {
+    destination[7u - index] = static_cast<uint8_t>(value & 0xFFu);
+    value >>= 8;
+  }
+}
+
+void buildTls12GcmAad(uint8_t aad[TlsRecordAadLength], uint64_t sequenceNumber,
+                      TlsRecordContentType type, size_t plaintextLength) {
+  storeUint64(aad, sequenceNumber);
+  aad[8] = static_cast<uint8_t>(type);
+  aad[9] = Tls12Major;
+  aad[10] = Tls12Minor;
+  storeUint16(&aad[11], static_cast<uint16_t>(plaintextLength));
+}
+
+void buildTls12GcmNonce(
+    uint8_t nonce[TlsGcmNonceLength],
+    const uint8_t fixedIv[TlsGcmFixedIvLength],
+    const uint8_t explicitNonce[TlsGcmExplicitNonceLength]) {
+  memcpy(nonce, fixedIv, TlsGcmFixedIvLength);
+  memcpy(&nonce[TlsGcmFixedIvLength], explicitNonce, TlsGcmExplicitNonceLength);
+}
+
+bool validRecordType(TlsRecordContentType type) {
+  switch (type) {
+  case TlsRecordContentType::ChangeCipherSpec:
+  case TlsRecordContentType::Alert:
+  case TlsRecordContentType::Handshake:
+  case TlsRecordContentType::ApplicationData:
+    return true;
+  default:
+    return false;
+  }
+}
+
 class ExternalRandomProviderGuard {
 public:
   explicit ExternalRandomProviderGuard(TlsCryptoProvider *provider)
@@ -84,14 +134,17 @@ TlsClientSession::TlsClientSession()
     : _transport(nullptr), _cryptoProvider(nullptr), _trustAnchors(nullptr),
       _trustAnchorLength(0), _hostname(nullptr), _alpnProtocols(nullptr),
       _policy(), _status(TlsAsyncStatus::Idle), _operation(TlsOperation::None),
-      _callback(nullptr), _callbackContext(nullptr), _readBuffer(nullptr),
-      _writeBuffer(nullptr), _requestedLength(0), _bytesTransferred(0),
-      _operationPollLimit(DefaultTlsOperationPollLimit), _operationPollCount(0),
-      _lastError(0), _lastMbedTlsResult(0), _verificationResult(0),
-      _handshakeComplete(false), _cryptoReady(false), _cryptoFailed(false),
-      _tlsConfigured(false), _peerCloseNotified(false),
+      _callback(nullptr), _callbackContext(nullptr), _recordCallback(nullptr),
+      _recordCallbackContext(nullptr), _recordOutputLength(nullptr),
+      _recordPendingLength(0), _recordNonce{}, _recordAad{},
+      _readBuffer(nullptr), _writeBuffer(nullptr), _requestedLength(0),
+      _bytesTransferred(0), _operationPollLimit(DefaultTlsOperationPollLimit),
+      _operationPollCount(0), _lastError(0), _lastMbedTlsResult(0),
+      _verificationResult(0), _handshakeComplete(false), _cryptoReady(false),
+      _cryptoFailed(false), _tlsConfigured(false), _peerCloseNotified(false),
       _clientIdentityConfigured(false), _sessionReuseEnabled(false),
-      _sessionCached(false) {
+      _sessionCached(false), _recordKeysConfigured(false),
+      _recordProtectionBusy(false) {
   mbedtls_ssl_init(&_ssl);
   mbedtls_ssl_config_init(&_sslConfig);
   mbedtls_x509_crt_init(&_caChain);
@@ -261,6 +314,120 @@ bool TlsClientSession::bindCryptoProvider(TlsCryptoProvider &provider) {
   return true;
 }
 
+bool TlsClientSession::configureAesGcmRecordKeys(
+    const TlsAesGcmRecordKeys &keys) {
+  if (operationActive() || _recordProtectionBusy)
+    return false;
+
+  _recordKeys = keys;
+  _recordKeysConfigured = true;
+  return true;
+}
+
+bool TlsClientSession::protectAesGcmRecordAsync(
+    TlsRecordDirection direction, TlsRecordContentType type,
+    uint64_t sequenceNumber, const uint8_t *plaintext, size_t length,
+    uint8_t *output, size_t outputCapacity, size_t &outputLength,
+    TlsAesGcm128Callback callback, void *context) {
+  if (_cryptoProvider == nullptr || !_recordKeysConfigured ||
+      _recordProtectionBusy || callback == nullptr || output == nullptr ||
+      !validRecordType(type) || length > MaxTlsPlaintextLength ||
+      (plaintext == nullptr && length != 0)) {
+    return false;
+  }
+
+  const size_t protectedLength =
+      TlsGcmExplicitNonceLength + length + TlsGcmTagLength;
+  if (outputCapacity < protectedLength)
+    return false;
+
+  const uint8_t *key = direction == TlsRecordDirection::ClientWrite
+                           ? _recordKeys.clientWriteKey
+                           : _recordKeys.serverWriteKey;
+  const uint8_t *fixedIv = direction == TlsRecordDirection::ClientWrite
+                               ? _recordKeys.clientWriteIv
+                               : _recordKeys.serverWriteIv;
+  storeUint64(output, sequenceNumber);
+  buildTls12GcmNonce(_recordNonce, fixedIv, output);
+  buildTls12GcmAad(_recordAad, sequenceNumber, type, length);
+
+  _recordCallback = callback;
+  _recordCallbackContext = context;
+  _recordOutputLength = &outputLength;
+  _recordPendingLength = protectedLength;
+  _recordProtectionBusy = true;
+
+  const bool submitted = _cryptoProvider->aesGcm128EncryptAsync(
+      key, _recordNonce, _recordAad, sizeof(_recordAad), plaintext,
+      length == 0 ? nullptr : &output[TlsGcmExplicitNonceLength], length,
+      &output[TlsGcmExplicitNonceLength + length],
+      TlsClientSession::handleRecordProtectionComplete, this);
+  if (!submitted) {
+    _recordCallback = nullptr;
+    _recordCallbackContext = nullptr;
+    _recordOutputLength = nullptr;
+    _recordPendingLength = 0;
+    mbedtls_platform_zeroize(_recordNonce, sizeof(_recordNonce));
+    mbedtls_platform_zeroize(_recordAad, sizeof(_recordAad));
+    _recordProtectionBusy = false;
+  }
+
+  return submitted;
+}
+
+bool TlsClientSession::unprotectAesGcmRecordAsync(
+    TlsRecordDirection direction, TlsRecordContentType type,
+    uint64_t sequenceNumber, const uint8_t *input, size_t inputLength,
+    uint8_t *plaintext, size_t plaintextCapacity, size_t &plaintextLength,
+    TlsAesGcm128Callback callback, void *context) {
+  if (_cryptoProvider == nullptr || !_recordKeysConfigured ||
+      _recordProtectionBusy || callback == nullptr || input == nullptr ||
+      !validRecordType(type) ||
+      inputLength < TlsGcmExplicitNonceLength + TlsGcmTagLength) {
+    return false;
+  }
+
+  const size_t ciphertextLength =
+      inputLength - TlsGcmExplicitNonceLength - TlsGcmTagLength;
+  if (ciphertextLength > MaxTlsPlaintextLength ||
+      plaintextCapacity < ciphertextLength ||
+      (plaintext == nullptr && ciphertextLength != 0)) {
+    return false;
+  }
+
+  const uint8_t *key = direction == TlsRecordDirection::ClientWrite
+                           ? _recordKeys.clientWriteKey
+                           : _recordKeys.serverWriteKey;
+  const uint8_t *fixedIv = direction == TlsRecordDirection::ClientWrite
+                               ? _recordKeys.clientWriteIv
+                               : _recordKeys.serverWriteIv;
+  buildTls12GcmNonce(_recordNonce, fixedIv, input);
+  buildTls12GcmAad(_recordAad, sequenceNumber, type, ciphertextLength);
+
+  _recordCallback = callback;
+  _recordCallbackContext = context;
+  _recordOutputLength = &plaintextLength;
+  _recordPendingLength = ciphertextLength;
+  _recordProtectionBusy = true;
+
+  const bool submitted = _cryptoProvider->aesGcm128DecryptAsync(
+      key, _recordNonce, _recordAad, sizeof(_recordAad),
+      &input[TlsGcmExplicitNonceLength], plaintext, ciphertextLength,
+      &input[inputLength - TlsGcmTagLength],
+      TlsClientSession::handleRecordProtectionComplete, this);
+  if (!submitted) {
+    _recordCallback = nullptr;
+    _recordCallbackContext = nullptr;
+    _recordOutputLength = nullptr;
+    _recordPendingLength = 0;
+    mbedtls_platform_zeroize(_recordNonce, sizeof(_recordNonce));
+    mbedtls_platform_zeroize(_recordAad, sizeof(_recordAad));
+    _recordProtectionBusy = false;
+  }
+
+  return submitted;
+}
+
 TlsAsyncStatus TlsClientSession::handshakeAsync(Callback callback,
                                                 void *context) {
   if (operationActive())
@@ -374,6 +541,13 @@ void TlsClientSession::abort() {
   _operation = TlsOperation::None;
   _callback = nullptr;
   _callbackContext = nullptr;
+  _recordCallback = nullptr;
+  _recordCallbackContext = nullptr;
+  _recordOutputLength = nullptr;
+  _recordPendingLength = 0;
+  mbedtls_platform_zeroize(_recordNonce, sizeof(_recordNonce));
+  mbedtls_platform_zeroize(_recordAad, sizeof(_recordAad));
+  _recordProtectionBusy = false;
   _readBuffer = nullptr;
   _writeBuffer = nullptr;
   _requestedLength = 0;
@@ -662,6 +836,30 @@ void TlsClientSession::handleCryptoReady(bool success, void *context) {
 
   session->_cryptoReady = success;
   session->_cryptoFailed = !success;
+}
+
+void TlsClientSession::handleRecordProtectionComplete(bool success,
+                                                      void *context) {
+  auto *session = static_cast<TlsClientSession *>(context);
+  if (session == nullptr || !session->_recordProtectionBusy)
+    return;
+
+  TlsAesGcm128Callback callback = session->_recordCallback;
+  void *callbackContext = session->_recordCallbackContext;
+  if (success && session->_recordOutputLength != nullptr)
+    *session->_recordOutputLength = session->_recordPendingLength;
+
+  session->_recordCallback = nullptr;
+  session->_recordCallbackContext = nullptr;
+  session->_recordOutputLength = nullptr;
+  session->_recordPendingLength = 0;
+  mbedtls_platform_zeroize(session->_recordNonce,
+                           sizeof(session->_recordNonce));
+  mbedtls_platform_zeroize(session->_recordAad, sizeof(session->_recordAad));
+  session->_recordProtectionBusy = false;
+
+  if (callback != nullptr)
+    callback(success, callbackContext);
 }
 
 int TlsClientSession::bioSend(void *context, const unsigned char *buffer,

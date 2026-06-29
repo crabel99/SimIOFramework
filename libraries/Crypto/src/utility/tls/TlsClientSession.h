@@ -167,6 +167,33 @@ enum class TlsOperation : uint8_t {
   CloseNotify,
 };
 
+enum class TlsRecordDirection : uint8_t {
+  ClientWrite,
+  ServerWrite,
+};
+
+enum class TlsRecordContentType : uint8_t {
+  ChangeCipherSpec = 20,
+  Alert = 21,
+  Handshake = 22,
+  ApplicationData = 23,
+};
+
+/**
+ * @brief TLS 1.2 AES-128-GCM traffic keys for one client session.
+ *
+ * These values are produced by the TLS key schedule. `clientWrite*` protects
+ * outbound client records and `serverWrite*` authenticates inbound server
+ * records. Static IVs are the four-byte TLS 1.2 GCM salt; the explicit eight
+ * bytes come from the record sequence number.
+ */
+struct TlsAesGcmRecordKeys {
+  uint8_t clientWriteKey[16] = {};
+  uint8_t serverWriteKey[16] = {};
+  uint8_t clientWriteIv[4] = {};
+  uint8_t serverWriteIv[4] = {};
+};
+
 enum class TlsVerificationPolicy : uint8_t {
   Required,
 };
@@ -304,6 +331,42 @@ public:
   bool bindCryptoProvider(TlsCryptoProvider &provider);
 
   /**
+   * @brief Configure TLS 1.2 AES-128-GCM record-protection keys.
+   *
+   * This is the record-layer boundary between TLS protocol state and the async
+   * hardware AES-GCM provider. It stores only traffic keys and fixed IVs;
+   * record sequence numbers remain explicit arguments so callers can enforce
+   * monotonic sequencing at the TLS state-machine layer.
+   */
+  bool configureAesGcmRecordKeys(const TlsAesGcmRecordKeys &keys);
+
+  /**
+   * @brief Protect one TLS 1.2 AES-128-GCM record fragment asynchronously.
+   *
+   * `output` receives explicit_nonce || ciphertext || tag. AAD is constructed
+   * as seq_num || content_type || TLS 1.2 version || plaintext_length, and the
+   * 12-byte GCM nonce is fixed_iv || explicit_nonce. Completion reports through
+   * `callback`; `outputLength` is written only on success.
+   */
+  bool protectAesGcmRecordAsync(
+      TlsRecordDirection direction, TlsRecordContentType type,
+      uint64_t sequenceNumber, const uint8_t *plaintext, size_t length,
+      uint8_t *output, size_t outputCapacity, size_t &outputLength,
+      TlsAesGcm128Callback callback, void *context = nullptr);
+
+  /**
+   * @brief Authenticate and decrypt one TLS 1.2 AES-128-GCM record fragment.
+   *
+   * `input` must contain explicit_nonce || ciphertext || tag. The plaintext
+   * output is valid only when the callback reports success.
+   */
+  bool unprotectAesGcmRecordAsync(
+      TlsRecordDirection direction, TlsRecordContentType type,
+      uint64_t sequenceNumber, const uint8_t *input, size_t inputLength,
+      uint8_t *plaintext, size_t plaintextCapacity, size_t &plaintextLength,
+      TlsAesGcm128Callback callback, void *context = nullptr);
+
+  /**
    * @brief Start async TLS handshake progress.
    *
    * The call validates configuration and stores callback state only. `poll()`
@@ -386,6 +449,7 @@ private:
   TlsAsyncStatus fail(int error);
   TlsAsyncStatus reject(int error);
   static void handleCryptoReady(bool success, void *context);
+  static void handleRecordProtectionComplete(bool success, void *context);
   static int bioSend(void *context, const unsigned char *buffer, size_t length);
   static int bioRecv(void *context, unsigned char *buffer, size_t length);
 
@@ -402,10 +466,17 @@ private:
   mbedtls_x509_crt _clientCertificate;
   mbedtls_pk_context _clientKey;
   mbedtls_ssl_session _savedSession;
+  TlsAesGcmRecordKeys _recordKeys;
   TlsAsyncStatus _status;
   TlsOperation _operation;
   Callback _callback;
   void *_callbackContext;
+  TlsAesGcm128Callback _recordCallback;
+  void *_recordCallbackContext;
+  size_t *_recordOutputLength;
+  size_t _recordPendingLength;
+  uint8_t _recordNonce[12];
+  uint8_t _recordAad[13];
   uint8_t *_readBuffer;
   const uint8_t *_writeBuffer;
   size_t _requestedLength;
@@ -423,6 +494,8 @@ private:
   bool _clientIdentityConfigured;
   bool _sessionReuseEnabled;
   bool _sessionCached;
+  bool _recordKeysConfigured;
+  bool _recordProtectionBusy;
 };
 
 } // namespace Crypto
