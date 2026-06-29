@@ -234,7 +234,7 @@ void pukccPendSvService(uint8_t serviceId, void *context) {
     genericParam->status = pukcc::StatusComputationNotStarted;
     reinterpret_cast<PukclGenericFunction>(functionAddress)(genericParam);
 
-    serviceResult->service = genericParam->service;
+    serviceResult->service = genericServiceId;
     serviceResult->status = genericParam->status;
     serviceResult->specific = genericParam->specific;
     completeAsync(genericServiceId, serviceResult->status);
@@ -343,6 +343,10 @@ uintptr_t pukcc::serviceFunctionAddress(uint8_t serviceId) {
     return ZpEcDsaVerifyFastFunctionAddress;
   case ZpEccMulFastServiceId:
     return ZpEccMulFastFunctionAddress;
+  case ZpEcConvProjToAffineServiceId:
+    return ZpEcConvProjToAffineFunctionAddress;
+  case ZpEcPointIsOnCurveServiceId:
+    return ZpEcPointIsOnCurveFunctionAddress;
   case ZpEccQuickDualMulFastServiceId:
     return ZpEccQuickDualMulFastFunctionAddress;
   case ZpEcDsaQuickVerifyServiceId:

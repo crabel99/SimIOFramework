@@ -5,6 +5,60 @@
 namespace Crypto::MbedTlsPort {
 
 namespace {
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+constexpr uint16_t P256Length = 32u;
+constexpr uint16_t P256CoordinateStorageLength = P256Length + 4u;
+constexpr uint16_t EcdhModulusOffset = 0u;
+constexpr uint16_t EcdhModulusStorageLength = P256Length + 4u;
+constexpr uint16_t EcdhConstantOffset =
+    EcdhModulusOffset + EcdhModulusStorageLength;
+constexpr uint16_t EcdhCurveAOffset = EcdhConstantOffset + P256Length + 12u;
+constexpr uint16_t EcdhCurveBOffset = EcdhCurveAOffset + P256Length + 4u;
+constexpr uint16_t EcdhPointOffset = EcdhCurveBOffset + P256Length + 4u;
+constexpr uint16_t EcdhPointLength = P256Length * 3u + 20u;
+constexpr uint16_t EcdhScalarOffset = EcdhPointOffset + EcdhPointLength;
+constexpr uint16_t EcdhWorkspaceOffset = EcdhScalarOffset + P256Length + 4u;
+constexpr uint16_t EcdhWorkspaceLength = P256Length * 6u;
+constexpr uint16_t EcdhWorkspaceEnd = EcdhWorkspaceOffset + EcdhWorkspaceLength;
+
+const uint8_t P256Prime[P256Length] = {
+    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x00u, 0x00u, 0x00u, 0x01u,
+    0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+    0x00u, 0x00u, 0x00u, 0x00u, 0xFFu, 0xFFu, 0xFFu, 0xFFu,
+    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu};
+const uint8_t P256A[P256Length] = {
+    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x00u, 0x00u, 0x00u, 0x01u,
+    0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+    0x00u, 0x00u, 0x00u, 0x00u, 0xFFu, 0xFFu, 0xFFu, 0xFFu,
+    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFCu};
+const uint8_t P256B[P256Length] = {
+    0x5Au, 0xC6u, 0x35u, 0xD8u, 0xAAu, 0x3Au, 0x93u, 0xE7u,
+    0xB3u, 0xEBu, 0xBDu, 0x55u, 0x76u, 0x98u, 0x86u, 0xBCu,
+    0x65u, 0x1Du, 0x06u, 0xB0u, 0xCCu, 0x53u, 0xB0u, 0xF6u,
+    0x3Bu, 0xCEu, 0x3Cu, 0x3Eu, 0x27u, 0xD2u, 0x60u, 0x4Bu};
+const uint8_t ProjectiveOne[1] = {0x01u};
+
+bool copyCryptoRamToBigEndian(uint16_t offset, uint8_t *destination,
+                              uint16_t length) {
+  if (destination == nullptr || !pukcc::validCryptoRamRange(offset, length))
+    return false;
+
+  volatile uint8_t *source = pukcc::cryptoRam(offset);
+  for (uint16_t index = 0; index < length; ++index)
+    destination[index] = source[length - 1u - index];
+  return true;
+}
+
+void clearCryptoRamRange(uint16_t offset, uint16_t length) {
+  if (!pukcc::validCryptoRamRange(offset, length))
+    return;
+
+  volatile uint8_t *memory = pukcc::cryptoRam(offset);
+  for (uint16_t index = 0; index < length; ++index)
+    memory[index] = 0;
+}
+#endif
+
 void secureZero(void *buffer, size_t length) {
   if (buffer != nullptr && length != 0)
     mbedtls_platform_zeroize(buffer, length);
@@ -463,6 +517,53 @@ bool ctrDrbgInstantiateAsync(CtrDrbgContext &context,
   return true;
 }
 
+bool ctrDrbgInstantiateFromSeedAsync(CtrDrbgContext &context,
+                                     const uint8_t *seedMaterial,
+                                     size_t seedLength,
+                                     const uint8_t *personalization,
+                                     size_t personalizationLength) {
+  if (context.busy || context.callback == nullptr || seedMaterial == nullptr ||
+      seedLength != DrbgSeedContext::SeedSize ||
+      personalizationLength > CtrDrbgContext::MaxPersonalizationSize ||
+      (personalization == nullptr && personalizationLength != 0)) {
+    return false;
+  }
+
+  clearCtrDrbgPersonalization(context);
+  for (size_t index = 0; index < seedLength; ++index)
+    context.seedMaterial[index] = seedMaterial[index];
+  for (size_t index = 0; index < personalizationLength; ++index)
+    context.personalization[index] = personalization[index];
+  context.personalizationLength = personalizationLength;
+  context.seedReadOffset = 0;
+  context.initialized = false;
+  context.busy = true;
+
+  mbedtls_ctr_drbg_free(&context.drbg);
+  mbedtls_ctr_drbg_init(&context.drbg);
+  mbedtls_ctr_drbg_set_prediction_resistance(&context.drbg,
+                                             MBEDTLS_CTR_DRBG_PR_OFF);
+  mbedtls_ctr_drbg_set_entropy_len(&context.drbg, MBEDTLS_CTR_DRBG_ENTROPY_LEN);
+  (void)mbedtls_ctr_drbg_set_nonce_len(
+      &context.drbg, DrbgSeedContext::SeedSize - MBEDTLS_CTR_DRBG_ENTROPY_LEN);
+  const unsigned char *personalizationBuffer =
+      context.personalizationLength == 0 ? nullptr : context.personalization;
+  const bool ready =
+      mbedtls_ctr_drbg_seed(&context.drbg, ctrDrbgEntropyCallback, &context,
+                            personalizationBuffer,
+                            context.personalizationLength) == 0;
+
+  secureZeroArray(context.seedMaterial);
+  clearCtrDrbgPersonalization(context);
+  context.initialized = ready;
+  context.busy = false;
+  if (!ready)
+    mbedtls_ctr_drbg_free(&context.drbg);
+  if (context.callback != nullptr)
+    context.callback(ready, context, context.callbackContext);
+  return ready;
+}
+
 bool ctrDrbgReady(const CtrDrbgContext &context) {
   return context.initialized && !context.busy;
 }
@@ -475,7 +576,13 @@ bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length) {
 }
 
 MbedTlsCryptoProvider::MbedTlsCryptoProvider()
-    : _callback(nullptr), _callbackContext(nullptr) {
+    : _callback(nullptr), _callbackContext(nullptr)
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+      ,
+      _ecdhOperation(), _ecdhSharedSecret(nullptr), _ecdhCallback(nullptr),
+      _ecdhCallbackContext(nullptr), _ecdhBusy(false)
+#endif
+{
   ctrDrbgInit(_drbg);
 }
 
@@ -512,12 +619,129 @@ void MbedTlsCryptoProvider::reset() {
   ctrDrbgFree(_drbg);
   _callback = nullptr;
   _callbackContext = nullptr;
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+  if (_ecdhBusy)
+    Crypto::clearPukccCallback();
+  clearEcdhWorkspace();
+  _ecdhOperation = {};
+  _ecdhSharedSecret = nullptr;
+  _ecdhCallback = nullptr;
+  _ecdhCallbackContext = nullptr;
+  _ecdhBusy = false;
+#endif
 }
 
 bool MbedTlsCryptoProvider::ready() const { return ctrDrbgReady(_drbg); }
 
 bool MbedTlsCryptoProvider::generateRandom(uint8_t *buffer, size_t length) {
   return ctrDrbgGenerate(_drbg, buffer, length);
+}
+
+bool MbedTlsCryptoProvider::ecdhP256SharedSecretAsync(
+    const uint8_t privateScalar[32], const uint8_t peerPublicKey[65],
+    uint8_t sharedSecret[32], Crypto::TlsEcdhP256Callback callback,
+    void *context) {
+#ifndef CRYPTO_HARDWARE_AVAILABLE
+  (void)privateScalar;
+  (void)peerPublicKey;
+  (void)sharedSecret;
+  (void)callback;
+  (void)context;
+  return false;
+#else
+  if (_ecdhBusy || privateScalar == nullptr || peerPublicKey == nullptr ||
+      sharedSecret == nullptr || callback == nullptr ||
+      peerPublicKey[0] != 0x04u) {
+    return false;
+  }
+
+  clearEcdhWorkspace();
+  if (!Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhModulusOffset, EcdhModulusStorageLength, P256Prime,
+          P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhConstantOffset, P256Length + 12u, P256Prime, 0u) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhCurveAOffset, P256Length + 4u, P256A, P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhCurveBOffset, P256Length + 4u, P256B, P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhPointOffset, EcdhPointLength, P256Prime, 0u) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhPointOffset, P256CoordinateStorageLength, peerPublicKey + 1u,
+          P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhPointOffset + P256CoordinateStorageLength,
+          P256CoordinateStorageLength, peerPublicKey + 1u + P256Length,
+          P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhPointOffset + P256CoordinateStorageLength * 2u,
+          P256CoordinateStorageLength, ProjectiveOne, sizeof(ProjectiveOne)) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhScalarOffset, P256Length + 4u, privateScalar, P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhWorkspaceOffset, EcdhWorkspaceLength, P256Prime, 0u)) {
+    clearEcdhWorkspace();
+    return false;
+  }
+
+  _ecdhOperation = {};
+  _ecdhOperation.reductionSetup.modulus =
+      pukcc::cryptoRamNearPointer(EcdhModulusOffset);
+  _ecdhOperation.reductionSetup.reductionConstant =
+      pukcc::cryptoRamNearPointer(EcdhConstantOffset);
+  _ecdhOperation.reductionSetup.modulusLength = P256Length;
+  _ecdhOperation.reductionSetup.scratchR =
+      pukcc::cryptoRamNearPointer(EcdhWorkspaceOffset);
+  _ecdhOperation.reductionSetup.scratchX = pukcc::cryptoRamNearPointer(
+      static_cast<uint16_t>(EcdhWorkspaceOffset + P256Length * 2u + 4u));
+  _ecdhOperation.peerPointValidation.modulus =
+      pukcc::cryptoRamNearPointer(EcdhModulusOffset);
+  _ecdhOperation.peerPointValidation.reductionConstant =
+      pukcc::cryptoRamNearPointer(EcdhConstantOffset);
+  _ecdhOperation.peerPointValidation.modulusLength = P256Length;
+  _ecdhOperation.peerPointValidation.curveA =
+      pukcc::cryptoRamNearPointer(EcdhCurveAOffset);
+  _ecdhOperation.peerPointValidation.curveB =
+      pukcc::cryptoRamNearPointer(EcdhCurveBOffset);
+  _ecdhOperation.peerPointValidation.point =
+      pukcc::cryptoRamNearPointer(EcdhPointOffset);
+  _ecdhOperation.peerPointValidation.workspace =
+      pukcc::cryptoRamNearPointer(EcdhWorkspaceOffset);
+  _ecdhOperation.multiply.point = pukcc::cryptoRamNearPointer(EcdhPointOffset);
+  _ecdhOperation.multiply.modulus =
+      pukcc::cryptoRamNearPointer(EcdhModulusOffset);
+  _ecdhOperation.multiply.reductionConstant =
+      pukcc::cryptoRamNearPointer(EcdhConstantOffset);
+  _ecdhOperation.multiply.scalar =
+      pukcc::cryptoRamNearPointer(EcdhScalarOffset);
+  _ecdhOperation.multiply.curveA =
+      pukcc::cryptoRamNearPointer(EcdhCurveAOffset);
+  _ecdhOperation.multiply.workspace =
+      pukcc::cryptoRamNearPointer(EcdhWorkspaceOffset);
+  _ecdhOperation.multiply.modulusLength = P256Length;
+  _ecdhOperation.multiply.scalarLength = P256Length;
+  _ecdhOperation.affine.modulus =
+      pukcc::cryptoRamNearPointer(EcdhModulusOffset);
+  _ecdhOperation.affine.reductionConstant =
+      pukcc::cryptoRamNearPointer(EcdhConstantOffset);
+  _ecdhOperation.affine.modulusLength = P256Length;
+  _ecdhOperation.affine.point = pukcc::cryptoRamNearPointer(EcdhPointOffset);
+  _ecdhOperation.affine.workspace =
+      pukcc::cryptoRamNearPointer(EcdhWorkspaceOffset);
+
+  _ecdhSharedSecret = sharedSecret;
+  _ecdhCallback = callback;
+  _ecdhCallbackContext = context;
+  _ecdhBusy = true;
+  if (!Crypto::PukccEcc::startEcdhSharedSecretAsync(
+          _ecdhOperation, MbedTlsCryptoProvider::handleEcdhComplete, this)) {
+    finishEcdh(false);
+    return false;
+  }
+
+  return true;
+#endif
 }
 
 void MbedTlsCryptoProvider::handleDrbgReady(bool success,
@@ -535,6 +759,44 @@ void MbedTlsCryptoProvider::handleDrbgReady(bool success,
   if (callback != nullptr)
     callback(success, callbackContext);
 }
+
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+void MbedTlsCryptoProvider::handleEcdhComplete(
+    bool success, pukcc::ServiceResult &result,
+    Crypto::PukccEcc::EcdhSharedSecretOperation &operation, void *user) {
+  (void)result;
+  (void)operation;
+  auto *provider = static_cast<MbedTlsCryptoProvider *>(user);
+  if (provider == nullptr)
+    return;
+
+  provider->finishEcdh(success);
+}
+
+void MbedTlsCryptoProvider::finishEcdh(bool success) {
+  bool completed = false;
+  if (success && _ecdhSharedSecret != nullptr) {
+    completed = copyCryptoRamToBigEndian(EcdhPointOffset, _ecdhSharedSecret,
+                                         P256Length);
+  }
+
+  Crypto::TlsEcdhP256Callback callback = _ecdhCallback;
+  void *callbackContext = _ecdhCallbackContext;
+  _ecdhOperation = {};
+  _ecdhSharedSecret = nullptr;
+  _ecdhCallback = nullptr;
+  _ecdhCallbackContext = nullptr;
+  _ecdhBusy = false;
+  clearEcdhWorkspace();
+
+  if (callback != nullptr)
+    callback(success && completed, callbackContext);
+}
+
+void MbedTlsCryptoProvider::clearEcdhWorkspace() {
+  clearCryptoRamRange(EcdhModulusOffset, EcdhWorkspaceEnd - EcdhModulusOffset);
+}
+#endif
 
 bool registerPukccCallback(Crypto::PukccCallback callback, void *context) {
   return Crypto::registerPukccCallback(callback, context);

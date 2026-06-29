@@ -26,6 +26,7 @@
 namespace Crypto {
 
 using TlsCryptoReadyCallback = void (*)(bool success, void *context);
+using TlsEcdhP256Callback = void (*)(bool success, void *context);
 
 /**
  * @brief Async crypto readiness provider for TLS sessions.
@@ -47,6 +48,27 @@ public:
   virtual void reset() = 0;
   virtual bool ready() const = 0;
   virtual bool generateRandom(uint8_t *buffer, size_t length) = 0;
+  /**
+   * @brief Start async P-256 ECDH shared-secret computation.
+   *
+   * `privateScalar` is the local 32-byte big-endian scalar. `peerPublicKey`
+   * must be the TLS uncompressed form: 0x04 || X || Y. `sharedSecret` receives
+   * the 32-byte big-endian X coordinate only after the callback reports
+   * success. The default implementation fails closed for test providers and
+   * platforms without a hardware ECDH backend.
+   */
+  virtual bool ecdhP256SharedSecretAsync(const uint8_t privateScalar[32],
+                                         const uint8_t peerPublicKey[65],
+                                         uint8_t sharedSecret[32],
+                                         TlsEcdhP256Callback callback,
+                                         void *context) {
+    (void)privateScalar;
+    (void)peerPublicKey;
+    (void)sharedSecret;
+    (void)callback;
+    (void)context;
+    return false;
+  }
 };
 
 enum class TlsAsyncStatus : uint8_t {

@@ -6,6 +6,9 @@
 
 #include <Crypto.h>
 #include <utility/tls/TlsClientSession.h>
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+#include <utility/pukcc/PukccEcc.h>
+#endif
 #include <mbedtls/build_info.h>
 #include <mbedtls/private/ctr_drbg.h>
 
@@ -190,6 +193,11 @@ bool ctrDrbgSetCallback(CtrDrbgContext &context, CtrDrbgCallback callback,
 bool ctrDrbgInstantiateAsync(CtrDrbgContext &context,
                              const uint8_t *personalization = nullptr,
                              size_t personalizationLength = 0);
+bool ctrDrbgInstantiateFromSeedAsync(CtrDrbgContext &context,
+                                     const uint8_t *seedMaterial,
+                                     size_t seedLength,
+                                     const uint8_t *personalization = nullptr,
+                                     size_t personalizationLength = 0);
 bool ctrDrbgReady(const CtrDrbgContext &context);
 bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length);
 
@@ -206,9 +214,10 @@ bool generateExternalRandom(uint8_t *buffer, size_t length);
  * for entropy or hardware completion. TLS protocol state remains owned by
  * `TlsClientSession`; this provider only owns RNG/crypto readiness.
  *
- * The provider does not yet replace Mbed TLS/PSA software ECC, GCM, or DRBG
- * block generation. Those primitives must be moved behind async SAME5x
- * hardware adapters before the secure-client crypto backend is complete.
+ * The provider routes the supported P-256 ECDH shared-secret operation through
+ * async PUKCC hardware and fails closed on invalid peer points before scalar
+ * multiplication. GCM, ECDSA, and DRBG block generation still need exact async
+ * SAME5x hardware mappings before the secure-client crypto backend is complete.
  */
 class MbedTlsCryptoProvider : public Crypto::TlsCryptoProvider {
 public:
@@ -220,14 +229,34 @@ public:
   void reset() override;
   bool ready() const override;
   bool generateRandom(uint8_t *buffer, size_t length) override;
+  bool ecdhP256SharedSecretAsync(const uint8_t privateScalar[32],
+                                 const uint8_t peerPublicKey[65],
+                                 uint8_t sharedSecret[32],
+                                 Crypto::TlsEcdhP256Callback callback,
+                                 void *context) override;
 
 private:
   static void handleDrbgReady(bool success, CtrDrbgContext &context,
                               void *user);
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+  static void handleEcdhComplete(bool success, pukcc::ServiceResult &result,
+                                 Crypto::PukccEcc::EcdhSharedSecretOperation
+                                     &operation,
+                                 void *user);
+  void finishEcdh(bool success);
+  void clearEcdhWorkspace();
+#endif
 
   CtrDrbgContext _drbg;
   Crypto::TlsCryptoReadyCallback _callback;
   void *_callbackContext;
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+  Crypto::PukccEcc::EcdhSharedSecretOperation _ecdhOperation;
+  uint8_t *_ecdhSharedSecret;
+  Crypto::TlsEcdhP256Callback _ecdhCallback;
+  void *_ecdhCallbackContext;
+  bool _ecdhBusy;
+#endif
 };
 
 bool registerPukccCallback(Crypto::PukccCallback callback,

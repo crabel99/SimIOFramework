@@ -73,6 +73,10 @@ public:
       RomJumpTableAddress + 0x2Cu;
   static constexpr uintptr_t ZpEccMulFastFunctionAddress =
       RomJumpTableAddress + 0x40u;
+  static constexpr uintptr_t ZpEcConvProjToAffineFunctionAddress =
+      RomJumpTableAddress + 0x84u;
+  static constexpr uintptr_t ZpEcPointIsOnCurveFunctionAddress =
+      RomJumpTableAddress + 0x8Cu;
   static constexpr uintptr_t ZpEccQuickDualMulFastFunctionAddress =
       RomJumpTableAddress + 0x98u;
   static constexpr uintptr_t ZpEcDsaQuickVerifyFunctionAddress =
@@ -86,7 +90,7 @@ public:
   static constexpr uint8_t SelfTestServiceId = 0x5Bu;
   static constexpr uint8_t FastCopyServiceId = 0x5Cu;
   static constexpr uint8_t GcdServiceId = 0x5Du;
-  static constexpr uint8_t ZpEcRandomiseCoordinateServiceId = 0x5Eu;
+  static constexpr uint8_t ZpEcRandomizeCoordinateServiceId = 0x5Eu;
   static constexpr uint8_t ClearFlagsServiceId = 0x5Fu;
   static constexpr uint8_t ZpEccDblFastServiceId = 0x60u;
   static constexpr uint8_t ZpEcConvAffineToProjectiveServiceId = 0x61u;
@@ -128,6 +132,8 @@ public:
   static constexpr uint16_t StatusFaultDetected = 0xC103u;
   static constexpr uint16_t StatusMalformedKey = 0xC104u;
   static constexpr uint16_t StatusWrongSignature = 0x8002u;
+  static constexpr uint16_t StatusPointAtInfinity = 0x8001u;
+  static constexpr uint16_t StatusPointIsNotOnCurve = 0x8004u;
   static constexpr uint16_t StatusNumberIsNotPrime = 0x4001u;
   static constexpr uint16_t StatusNumberIsPrime = 0x4002u;
   static constexpr uint32_t SelfTestExpectedCheck1 = 0x6E70DDD2u;
