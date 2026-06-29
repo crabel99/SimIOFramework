@@ -208,16 +208,17 @@ bool generateExternalRandom(uint8_t *buffer, size_t length);
 /**
  * @brief Production TLS crypto-readiness provider backed by Mbed TLS.
  *
- * The provider owns the Mbed TLS CTR_DRBG wrapper used by TLS sessions. Starting
- * handshake crypto submits async TRNG-backed seed collection and reports
- * readiness through the `TlsCryptoProvider` callback. It never blocks waiting
- * for entropy or hardware completion. TLS protocol state remains owned by
- * `TlsClientSession`; this provider only owns RNG/crypto readiness.
+ * The provider owns the Mbed TLS CTR_DRBG wrapper used by TLS sessions.
+ * Starting handshake crypto submits async TRNG-backed seed collection and
+ * reports readiness through the `TlsCryptoProvider` callback. It never blocks
+ * waiting for entropy or hardware completion. TLS protocol state remains owned
+ * by `TlsClientSession`; this provider only owns RNG/crypto readiness.
  *
- * The provider routes the supported P-256 ECDH shared-secret operation through
- * async PUKCC hardware and fails closed on invalid peer points before scalar
- * multiplication. GCM, ECDSA, and DRBG block generation still need exact async
- * SAME5x hardware mappings before the secure-client crypto backend is complete.
+ * The provider routes supported P-256 ECDH and ECDSA verification operations
+ * through async PUKCC hardware and fails closed on invalid peer points before
+ * scalar multiplication or signature verification. GCM, ECDSA signing, and
+ * DRBG block generation still need exact async SAME5x hardware mappings before
+ * the secure-client crypto backend is complete.
  */
 class MbedTlsCryptoProvider : public Crypto::TlsCryptoProvider {
 public:
@@ -234,8 +235,23 @@ public:
                                  uint8_t sharedSecret[32],
                                  Crypto::TlsEcdhP256Callback callback,
                                  void *context) override;
+  bool ecdsaP256VerifyAsync(const uint8_t publicKey[65], const uint8_t hash[32],
+                            const uint8_t signature[64],
+                            Crypto::TlsEcdsaP256VerifyCallback callback,
+                            void *context) override;
 
 private:
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+  enum class EcdsaVerifyStep : uint8_t {
+    Idle,
+    ReductionSetup,
+    PublicKeyValidation,
+    Verify,
+    Complete,
+    Error,
+  };
+#endif
+
   static void handleDrbgReady(bool success, CtrDrbgContext &context,
                               void *user);
 #ifdef CRYPTO_HARDWARE_AVAILABLE
@@ -245,6 +261,11 @@ private:
                                  void *user);
   void finishEcdh(bool success);
   void clearEcdhWorkspace();
+  static void handleEcdsaService(pukcc::EventMask events, uint8_t service,
+                                 uint16_t status, void *user);
+  bool submitEcdsaStep();
+  void finishEcdsa(bool success);
+  void clearEcdsaWorkspace();
 #endif
 
   CtrDrbgContext _drbg;
@@ -256,6 +277,14 @@ private:
   Crypto::TlsEcdhP256Callback _ecdhCallback;
   void *_ecdhCallbackContext;
   bool _ecdhBusy;
+  Crypto::PukccEcc::ReductionSetupOperation _ecdsaReductionSetup;
+  Crypto::PukccEcc::PointIsOnCurveOperation _ecdsaPublicKeyValidation;
+  Crypto::PukccEcc::EcdsaVerifyOperation _ecdsaVerify;
+  pukcc::ServiceResult _ecdsaResult;
+  Crypto::TlsEcdsaP256VerifyCallback _ecdsaCallback;
+  void *_ecdsaCallbackContext;
+  EcdsaVerifyStep _ecdsaStep;
+  bool _ecdsaBusy;
 #endif
 };
 

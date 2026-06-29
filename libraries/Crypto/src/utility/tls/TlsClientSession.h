@@ -27,6 +27,7 @@ namespace Crypto {
 
 using TlsCryptoReadyCallback = void (*)(bool success, void *context);
 using TlsEcdhP256Callback = void (*)(bool success, void *context);
+using TlsEcdsaP256VerifyCallback = void (*)(bool success, void *context);
 
 /**
  * @brief Async crypto readiness provider for TLS sessions.
@@ -65,6 +66,27 @@ public:
     (void)privateScalar;
     (void)peerPublicKey;
     (void)sharedSecret;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async P-256 ECDSA signature verification.
+   *
+   * `publicKey` must be the TLS uncompressed form: 0x04 || X || Y. `hash` is a
+   * 32-byte big-endian digest and `signature` is the 64-byte raw P1363
+   * encoding R || S. The default implementation fails closed for test
+   * providers and platforms without a hardware ECDSA backend.
+   */
+  virtual bool ecdsaP256VerifyAsync(const uint8_t publicKey[65],
+                                    const uint8_t hash[32],
+                                    const uint8_t signature[64],
+                                    TlsEcdsaP256VerifyCallback callback,
+                                    void *context) {
+    (void)publicKey;
+    (void)hash;
+    (void)signature;
     (void)callback;
     (void)context;
     return false;
