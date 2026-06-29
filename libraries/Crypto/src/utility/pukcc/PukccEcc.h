@@ -43,6 +43,22 @@ struct EcdsaVerifyOperation {
   uint16_t padding;
 };
 
+struct EcdsaGenerateOperation {
+  pukcc::ServiceParamHeader header;
+  uint16_t basePoint;
+  uint16_t order;
+  uint16_t modulus;
+  uint16_t reductionConstant;
+  uint16_t privateKey;
+  uint16_t scalarNumber;
+  uint16_t curveA;
+  uint16_t hash;
+  uint16_t workspace;
+  uint16_t modulusLength;
+  uint16_t scalarLength;
+  uint16_t padding;
+};
+
 struct EcdhMultiplyOperation {
   pukcc::ServiceParamHeader header;
   uint16_t point;
@@ -119,6 +135,8 @@ bool copyBigEndianToCryptoRam(uint16_t offset, uint16_t destinationLength,
                               const uint8_t *source, uint16_t sourceLength);
 bool startReductionSetupAsync(ReductionSetupOperation &operation,
                               pukcc::ServiceResult &result);
+bool startEcdsaGenerateAsync(EcdsaGenerateOperation &operation,
+                             pukcc::ServiceResult &result);
 bool startEcdsaVerifyAsync(EcdsaVerifyOperation &operation,
                            pukcc::ServiceResult &result);
 bool startEcdhMultiplyAsync(EcdhMultiplyOperation &operation,

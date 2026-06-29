@@ -29,6 +29,11 @@ struct AsyncState {
 
 AsyncState asyncState;
 
+void scrubWord(uint32_t &value) {
+  volatile uint32_t *word = &value;
+  *word = 0;
+}
+
 void trngPendSvService(uint8_t serviceId, void *context) {
   (void)serviceId;
   (void)context;
@@ -43,6 +48,7 @@ void trngPendSvService(uint8_t serviceId, void *context) {
   flags = asyncState.pendingFlags;
   value = asyncState.pendingValue;
   asyncState.pendingFlags = 0;
+  asyncState.pendingValue = 0;
   callback = asyncState.callback;
   callbackContext = asyncState.callbackContext;
   asyncState.busy = false;
@@ -59,6 +65,8 @@ void trngPendSvService(uint8_t serviceId, void *context) {
 
   if (callback != nullptr && events != trng::EventNone)
     callback(events, value, callbackContext);
+
+  scrubWord(value);
 }
 
 bool ensurePendSvServiceRegistered() {
@@ -217,6 +225,7 @@ void trng::handleInterrupt() {
   asyncState.pendingFlags |= handled;
   asyncState.pendingValue = value;
   exitCritical(primask);
+  scrubWord(value);
 
   PendSV::instance().setPending(pendSvServiceId());
 }

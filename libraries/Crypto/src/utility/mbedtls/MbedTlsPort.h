@@ -164,10 +164,13 @@ using RandomCallback =
  * This is not a replacement for Mbed TLS DRBG policy. It is the async boundary
  * that keeps the future DRBG/TLS state machine from blocking inside an RNG
  * callback. Callers prefetch entropy-backed bytes, receive callback completion,
- * and then consume available bytes with `randomRead()`.
+ * and then consume available bytes with `randomRead()`. The pool is sensitive
+ * material: consumed bytes are zeroized immediately, failed fills zeroize the
+ * pool, and `randomFree()` clears any unconsumed bytes. Callers own zeroizing
+ * their destination buffers after use.
  */
 struct RandomContext {
-  static constexpr size_t PoolSize = 64;
+  static constexpr size_t PoolSize = 128;
 
   EntropyContext entropy = {};
   uint8_t pool[PoolSize] = {};
@@ -272,20 +275,20 @@ void clearExternalRandomProvider(Crypto::TlsCryptoProvider *provider);
 bool generateExternalRandom(uint8_t *buffer, size_t length);
 
 /**
- * @brief Production TLS crypto-readiness provider backed by Mbed TLS.
+ * @brief Production TLS crypto-readiness provider backed by async hardware.
  *
- * The provider owns the Mbed TLS CTR_DRBG wrapper used by TLS sessions.
- * Starting handshake crypto submits async TRNG-backed seed collection and
- * reports readiness through the `TlsCryptoProvider` callback. It never blocks
- * waiting for entropy or hardware completion. TLS protocol state remains owned
- * by `TlsClientSession`; this provider only owns RNG/crypto readiness.
+ * Starting handshake crypto submits async TRNG-backed random prefetch and
+ * reports readiness through the `TlsCryptoProvider` callback. `generateRandom`
+ * only consumes already-prefetched bytes and fails closed when the pool is
+ * exhausted; it never calls a software DRBG or waits for entropy. TLS protocol
+ * state remains owned by `TlsClientSession`; this provider only owns
+ * RNG/crypto readiness.
  *
- * The provider routes supported P-256 ECDH and ECDSA verification operations
- * through async PUKCC hardware and fails closed on invalid peer points before
- * scalar multiplication or signature verification. AES-128-GCM record
- * protection is routed through the async AES/GHASH hardware state machine.
- * ECDSA signing and DRBG block generation still need exact async SAME5x
- * hardware mappings before the secure-client crypto backend is complete.
+ * The provider routes supported P-256 ECDH, ECDSA signing, and ECDSA
+ * verification operations through async PUKCC hardware and fails closed on
+ * invalid peer points before scalar multiplication or signature verification.
+ * AES-128-GCM record protection is routed through the async AES/GHASH hardware
+ * state machine.
  */
 class MbedTlsCryptoProvider : public Crypto::TlsCryptoProvider {
 public:
@@ -302,6 +305,11 @@ public:
                                  uint8_t sharedSecret[32],
                                  Crypto::TlsEcdhP256Callback callback,
                                  void *context) override;
+  bool ecdsaP256SignAsync(const uint8_t privateKey[32],
+                          const uint8_t nonceScalar[32],
+                          const uint8_t hash[32], uint8_t signature[64],
+                          Crypto::TlsEcdsaP256SignCallback callback,
+                          void *context) override;
   bool ecdsaP256VerifyAsync(const uint8_t publicKey[65], const uint8_t hash[32],
                             const uint8_t signature[64],
                             Crypto::TlsEcdsaP256VerifyCallback callback,
@@ -329,10 +337,17 @@ private:
     Complete,
     Error,
   };
+  enum class EcdsaSignStep : uint8_t {
+    Idle,
+    ReductionSetup,
+    Generate,
+    Complete,
+    Error,
+  };
 #endif
 
-  static void handleDrbgReady(bool success, CtrDrbgContext &context,
-                              void *user);
+  static void handleRandomReady(bool success, RandomContext &context,
+                                void *user);
 #ifdef CRYPTO_HARDWARE_AVAILABLE
   static void handleEcdhComplete(bool success, pukcc::ServiceResult &result,
                                  Crypto::PukccEcc::EcdhSharedSecretOperation
@@ -345,12 +360,17 @@ private:
   bool submitEcdsaStep();
   void finishEcdsa(bool success);
   void clearEcdsaWorkspace();
+  static void handleEcdsaSignService(pukcc::EventMask events, uint8_t service,
+                                     uint16_t status, void *user);
+  bool submitEcdsaSignStep();
+  void finishEcdsaSign(bool success);
+  void clearEcdsaSignWorkspace();
 #endif
   static void handleGcmComplete(bool success, AesGcm128Context &operation,
                                 void *user);
   void finishGcm(bool success);
 
-  CtrDrbgContext _drbg;
+  RandomContext _random;
   Crypto::TlsCryptoReadyCallback _callback;
   void *_callbackContext;
   AesGcm128Context _gcmOperation;
@@ -363,6 +383,14 @@ private:
   Crypto::TlsEcdhP256Callback _ecdhCallback;
   void *_ecdhCallbackContext;
   bool _ecdhBusy;
+  Crypto::PukccEcc::ReductionSetupOperation _ecdsaSignReductionSetup;
+  Crypto::PukccEcc::EcdsaGenerateOperation _ecdsaSign;
+  pukcc::ServiceResult _ecdsaSignResult;
+  uint8_t *_ecdsaSignature;
+  Crypto::TlsEcdsaP256SignCallback _ecdsaSignCallback;
+  void *_ecdsaSignCallbackContext;
+  EcdsaSignStep _ecdsaSignStep;
+  bool _ecdsaSignBusy;
   Crypto::PukccEcc::ReductionSetupOperation _ecdsaReductionSetup;
   Crypto::PukccEcc::PointIsOnCurveOperation _ecdsaPublicKeyValidation;
   Crypto::PukccEcc::EcdsaVerifyOperation _ecdsaVerify;

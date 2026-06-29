@@ -55,6 +55,32 @@ bool validEcdsaVerifyLayout(const EcdsaVerifyOperation &operation) {
                           static_cast<uint16_t>(modLength * 8u + 44u));
 }
 
+bool validEcdsaGenerateLayout(const EcdsaGenerateOperation &operation) {
+  const uint16_t modLength = operation.modulusLength;
+  const uint16_t scalarLength = operation.scalarLength;
+  if (modLength == 0u || scalarLength == 0u)
+    return false;
+
+  return validNearPointer(operation.basePoint,
+                          static_cast<uint16_t>(modLength * 3u + 12u)) &&
+         validNearPointer(operation.order,
+                          static_cast<uint16_t>(scalarLength + 4u)) &&
+         validNearPointer(operation.modulus,
+                          static_cast<uint16_t>(modLength + 4u)) &&
+         validNearPointer(operation.reductionConstant,
+                          static_cast<uint16_t>(scalarLength + 8u)) &&
+         validNearPointer(operation.privateKey,
+                          static_cast<uint16_t>(scalarLength + 4u)) &&
+         validNearPointer(operation.scalarNumber,
+                          static_cast<uint16_t>(scalarLength + 4u)) &&
+         validNearPointer(operation.curveA,
+                          static_cast<uint16_t>(modLength + 4u)) &&
+         validNearPointer(operation.hash,
+                          static_cast<uint16_t>(scalarLength + 4u)) &&
+         validNearPointer(operation.workspace,
+                          static_cast<uint16_t>(modLength * 8u + 44u));
+}
+
 bool validEcdhMultiplyLayout(const EcdhMultiplyOperation &operation) {
   const uint16_t modLength = operation.modulusLength;
   const uint16_t scalarLength = operation.scalarLength;
@@ -197,6 +223,8 @@ void handleEcdhSharedSecretService(pukcc::EventMask events, uint8_t service,
 
 static_assert(sizeof(EcdsaVerifyOperation) == 40,
               "ECDSA verify parameter block must match the PUKCC ROM ABI");
+static_assert(sizeof(EcdsaGenerateOperation) == 40,
+              "ECDSA generate parameter block must match the PUKCC ROM ABI");
 static_assert(sizeof(EcdhMultiplyOperation) == 32,
               "ECDH multiply parameter block must match the PUKCC ROM ABI");
 static_assert(
@@ -248,6 +276,19 @@ bool startReductionSetupAsync(ReductionSetupOperation &operation,
   operation.header.option = RedModSetupOption;
   return Crypto::pukccServiceAsync(pukcc::RedModServiceId, operation.header,
                                   result);
+}
+
+bool startEcdsaGenerateAsync(EcdsaGenerateOperation &operation,
+                             pukcc::ServiceResult &result) {
+  if (!validEcdsaGenerateLayout(operation)) {
+    reject(result, pukcc::ZpEcDsaGenerateFastServiceId,
+           pukcc::StatusParameterNotInPukccRam);
+    return false;
+  }
+
+  operation.header = {};
+  return Crypto::pukccServiceAsync(pukcc::ZpEcDsaGenerateFastServiceId,
+                                  operation.header, result);
 }
 
 bool startEcdsaVerifyAsync(EcdsaVerifyOperation &operation,

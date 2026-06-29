@@ -27,6 +27,7 @@ namespace Crypto {
 
 using TlsCryptoReadyCallback = void (*)(bool success, void *context);
 using TlsEcdhP256Callback = void (*)(bool success, void *context);
+using TlsEcdsaP256SignCallback = void (*)(bool success, void *context);
 using TlsEcdsaP256VerifyCallback = void (*)(bool success, void *context);
 using TlsAesGcm128Callback = void (*)(bool success, void *context);
 
@@ -67,6 +68,32 @@ public:
     (void)privateScalar;
     (void)peerPublicKey;
     (void)sharedSecret;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async P-256 ECDSA signature generation.
+   *
+   * `privateKey` and `nonceScalar` are 32-byte big-endian scalars. The nonce
+   * scalar must come from the async hardware random path in production; tests
+   * may supply a fixed scalar only to prove deterministic hardware behavior.
+   * `hash` is a 32-byte big-endian digest and `signature` receives the raw
+   * P1363 encoding R || S after the callback reports success. The default
+   * implementation fails closed for test providers and platforms without a
+   * hardware ECDSA signing backend.
+   */
+  virtual bool ecdsaP256SignAsync(const uint8_t privateKey[32],
+                                  const uint8_t nonceScalar[32],
+                                  const uint8_t hash[32],
+                                  uint8_t signature[64],
+                                  TlsEcdsaP256SignCallback callback,
+                                  void *context) {
+    (void)privateKey;
+    (void)nonceScalar;
+    (void)hash;
+    (void)signature;
     (void)callback;
     (void)context;
     return false;
