@@ -115,6 +115,230 @@ void aesContextCallback(aes::EventMask events, void *context) {
     aesContext->callback(events, *aesContext, aesContext->callbackContext);
 }
 
+void loadWordsFromBytes(uint32_t words[4], const uint8_t bytes[16]) {
+  for (uint8_t word = 0; word < 4; ++word) {
+    words[word] = static_cast<uint32_t>(bytes[word * 4u]) |
+                  (static_cast<uint32_t>(bytes[word * 4u + 1u]) << 8u) |
+                  (static_cast<uint32_t>(bytes[word * 4u + 2u]) << 16u) |
+                  (static_cast<uint32_t>(bytes[word * 4u + 3u]) << 24u);
+  }
+}
+
+void storeBytesFromWords(uint8_t bytes[16], const uint32_t words[4]) {
+  for (uint8_t word = 0; word < 4; ++word) {
+    bytes[word * 4u] = static_cast<uint8_t>(words[word] & 0xFFu);
+    bytes[word * 4u + 1u] = static_cast<uint8_t>((words[word] >> 8u) & 0xFFu);
+    bytes[word * 4u + 2u] = static_cast<uint8_t>((words[word] >> 16u) & 0xFFu);
+    bytes[word * 4u + 3u] = static_cast<uint8_t>((words[word] >> 24u) & 0xFFu);
+  }
+}
+
+void incrementGcmCounter(uint8_t counter[16]) {
+  for (int8_t index = 15; index >= 12; --index) {
+    ++counter[index];
+    if (counter[index] != 0)
+      break;
+  }
+}
+
+void storeGcmLengthBlock(uint8_t block[16], uint64_t aadLength,
+                         uint64_t cipherLength) {
+  const uint64_t aadBits = aadLength * 8u;
+  const uint64_t cipherBits = cipherLength * 8u;
+  for (uint8_t index = 0; index < 8; ++index) {
+    block[index] = static_cast<uint8_t>(aadBits >> (56u - index * 8u));
+    block[index + 8u] = static_cast<uint8_t>(cipherBits >> (56u - index * 8u));
+  }
+}
+
+void prepareGhashInput(AesGcm128Context &context, const uint8_t *data,
+                       size_t length) {
+  uint8_t block[16] = {};
+  if (data != nullptr) {
+    for (size_t index = 0; index < length && index < sizeof(block); ++index)
+      block[index] = data[index];
+  }
+
+  for (uint8_t index = 0; index < sizeof(block); ++index)
+    block[index] ^= context.ghash[index];
+  loadWordsFromBytes(context.workInput, block);
+  secureZeroArray(block);
+}
+
+void finishAesGcm(AesGcm128Context &context, bool success) {
+  Crypto::clearAesCallback();
+  context.aes.busy = false;
+  context.busy = false;
+  context.step = success ? AesGcm128Context::Step::Complete
+                         : AesGcm128Context::Step::Error;
+  context.aad = nullptr;
+  context.aadLength = 0;
+  context.aadOffset = 0;
+  context.input = nullptr;
+  context.output = nullptr;
+  context.length = 0;
+  context.payloadOffset = 0;
+  context.tagOut = nullptr;
+  context.tagIn = nullptr;
+  secureZeroArray(context.hashKey);
+  secureZeroArray(context.workInput);
+  secureZeroArray(context.workOutput);
+  secureZeroArray(context.counter);
+  secureZeroArray(context.j0);
+  secureZeroArray(context.ghash);
+
+  if (context.callback != nullptr)
+    context.callback(success, context, context.callbackContext);
+}
+
+bool submitAesGcmEcb(AesGcm128Context &context, AesGcm128Context::Step step,
+                     void (*callback)(aes::EventMask, AesEcb128Context &,
+                                      void *),
+                     const uint32_t input[4]) {
+  context.step = step;
+  if (!aesEcb128SetEncryptKey(context.aes, context.key) ||
+      !aesEcb128SetCallback(context.aes, callback, &context)) {
+    return false;
+  }
+  return aesEcb128CryptAsync(context.aes, input, context.workOutput);
+}
+
+bool submitAesGcmGhash(AesGcm128Context &context, AesGcm128Context::Step step,
+                       void (*callback)(aes::EventMask, void *)) {
+  context.step = step;
+  if (!Crypto::registerAesCallback(callback, &context))
+    return false;
+  return Crypto::galoisMultiplyAsync(context.hashKey, context.workInput,
+                                     context.workOutput);
+}
+
+bool advanceAesGcm(AesGcm128Context &context);
+
+void aesGcmGhashCallback(aes::EventMask events, void *user) {
+  auto *context = static_cast<AesGcm128Context *>(user);
+  if (context == nullptr || !context->busy)
+    return;
+  if ((events & aes::EventGaloisComplete) == 0u) {
+    finishAesGcm(*context, false);
+    return;
+  }
+
+  storeBytesFromWords(context->ghash, context->workOutput);
+  if (context->step == AesGcm128Context::Step::PayloadGhash)
+    context->payloadOffset += ((context->length - context->payloadOffset) > 16u)
+                                  ? 16u
+                                  : (context->length - context->payloadOffset);
+  else if (context->step == AesGcm128Context::Step::Aad)
+    context->aadOffset += ((context->aadLength - context->aadOffset) > 16u)
+                              ? 16u
+                              : (context->aadLength - context->aadOffset);
+
+  if (!advanceAesGcm(*context))
+    finishAesGcm(*context, false);
+}
+
+void aesGcmEcbCallback(aes::EventMask events, AesEcb128Context &aesContext,
+                       void *user) {
+  (void)aesContext;
+  auto *context = static_cast<AesGcm128Context *>(user);
+  if (context == nullptr || !context->busy)
+    return;
+  if ((events & aes::EventComplete) == 0u) {
+    finishAesGcm(*context, false);
+    return;
+  }
+
+  if (context->step == AesGcm128Context::Step::HashSubkey) {
+    for (uint8_t index = 0; index < 4; ++index)
+      context->hashKey[index] = context->workOutput[index];
+    if (!advanceAesGcm(*context))
+      finishAesGcm(*context, false);
+    return;
+  }
+
+  uint8_t stream[16] = {};
+  storeBytesFromWords(stream, context->workOutput);
+
+  if (context->step == AesGcm128Context::Step::PayloadKeystream) {
+    const size_t remaining = context->length - context->payloadOffset;
+    const size_t chunk =
+        remaining > sizeof(stream) ? sizeof(stream) : remaining;
+    for (size_t index = 0; index < chunk; ++index) {
+      const uint8_t in = context->input[context->payloadOffset + index];
+      context->output[context->payloadOffset + index] = in ^ stream[index];
+    }
+
+    const uint8_t *ghashSource = context->encrypt
+                                     ? context->output + context->payloadOffset
+                                     : context->input + context->payloadOffset;
+    prepareGhashInput(*context, ghashSource, chunk);
+    secureZeroArray(stream);
+    if (!submitAesGcmGhash(*context, AesGcm128Context::Step::PayloadGhash,
+                           aesGcmGhashCallback)) {
+      finishAesGcm(*context, false);
+    }
+    return;
+  }
+
+  if (context->step == AesGcm128Context::Step::TagMask) {
+    uint8_t computedTag[16] = {};
+    for (uint8_t index = 0; index < sizeof(computedTag); ++index)
+      computedTag[index] = context->ghash[index] ^ stream[index];
+
+    bool success = true;
+    if (context->encrypt) {
+      for (uint8_t index = 0; index < sizeof(computedTag); ++index)
+        context->tagOut[index] = computedTag[index];
+    } else {
+      uint8_t diff = 0;
+      for (uint8_t index = 0; index < sizeof(computedTag); ++index)
+        diff |= computedTag[index] ^ context->tagIn[index];
+      success = diff == 0;
+      if (!success && context->output != nullptr)
+        secureZero(context->output, context->length);
+    }
+
+    secureZeroArray(computedTag);
+    secureZeroArray(stream);
+    finishAesGcm(*context, success);
+    return;
+  }
+
+  secureZeroArray(stream);
+  finishAesGcm(*context, false);
+}
+
+bool advanceAesGcm(AesGcm128Context &context) {
+  if (context.aadOffset < context.aadLength) {
+    const size_t remaining = context.aadLength - context.aadOffset;
+    const size_t chunk = remaining > 16u ? 16u : remaining;
+    prepareGhashInput(context, context.aad + context.aadOffset, chunk);
+    return submitAesGcmGhash(context, AesGcm128Context::Step::Aad,
+                             aesGcmGhashCallback);
+  }
+
+  if (context.payloadOffset < context.length) {
+    incrementGcmCounter(context.counter);
+    loadWordsFromBytes(context.workInput, context.counter);
+    return submitAesGcmEcb(context, AesGcm128Context::Step::PayloadKeystream,
+                           aesGcmEcbCallback, context.workInput);
+  }
+
+  if (context.step != AesGcm128Context::Step::LengthBlock &&
+      context.step != AesGcm128Context::Step::TagMask) {
+    uint8_t lengthBlock[16] = {};
+    storeGcmLengthBlock(lengthBlock, context.aadLength, context.length);
+    prepareGhashInput(context, lengthBlock, sizeof(lengthBlock));
+    secureZeroArray(lengthBlock);
+    return submitAesGcmGhash(context, AesGcm128Context::Step::LengthBlock,
+                             aesGcmGhashCallback);
+  }
+
+  loadWordsFromBytes(context.workInput, context.j0);
+  return submitAesGcmEcb(context, AesGcm128Context::Step::TagMask,
+                         aesGcmEcbCallback, context.workInput);
+}
+
 void clearEntropyRequest(EntropyContext &context) {
   context.buffer = nullptr;
   context.requestedLength = 0;
@@ -322,6 +546,120 @@ bool aesEcb128CryptAsync(AesEcb128Context &context, const uint32_t input[4],
   }
 
   return submitted;
+}
+
+void aesGcm128Init(AesGcm128Context &context) {
+  aesEcb128Init(context.aes);
+  clearAesKey(context.key);
+  secureZeroArray(context.hashKey);
+  secureZeroArray(context.workInput);
+  secureZeroArray(context.workOutput);
+  secureZeroArray(context.counter);
+  secureZeroArray(context.j0);
+  secureZeroArray(context.ghash);
+  context.aad = nullptr;
+  context.aadLength = 0;
+  context.aadOffset = 0;
+  context.input = nullptr;
+  context.output = nullptr;
+  context.length = 0;
+  context.payloadOffset = 0;
+  context.tagOut = nullptr;
+  context.tagIn = nullptr;
+  context.encrypt = true;
+  context.keyConfigured = false;
+  context.busy = false;
+  context.step = AesGcm128Context::Step::Idle;
+  context.callback = nullptr;
+  context.callbackContext = nullptr;
+}
+
+void aesGcm128Free(AesGcm128Context &context) {
+  if (context.busy)
+    Crypto::clearAesCallback();
+  aesGcm128Init(context);
+}
+
+bool aesGcm128SetKey(AesGcm128Context &context, const uint8_t key[16]) {
+  if (context.busy || key == nullptr)
+    return false;
+
+  loadWordsFromBytes(context.key, key);
+  context.keyConfigured = true;
+  return true;
+}
+
+bool aesGcm128SetCallback(AesGcm128Context &context, AesGcm128Callback callback,
+                          void *callbackContext) {
+  if (context.busy)
+    return false;
+
+  context.callback = callback;
+  context.callbackContext = callbackContext;
+  return callback != nullptr;
+}
+
+bool startAesGcmOperation(AesGcm128Context &context, bool encrypt,
+                          const uint8_t nonce[12], const uint8_t *aad,
+                          size_t aadLength, const uint8_t *input,
+                          uint8_t *output, size_t length, uint8_t *tagOut,
+                          const uint8_t *tagIn) {
+  if (context.busy || !context.keyConfigured || context.callback == nullptr ||
+      nonce == nullptr || (aad == nullptr && aadLength != 0) ||
+      (input == nullptr && length != 0) || (output == nullptr && length != 0) ||
+      (encrypt && tagOut == nullptr) || (!encrypt && tagIn == nullptr)) {
+    return false;
+  }
+
+  secureZeroArray(context.hashKey);
+  secureZeroArray(context.workInput);
+  secureZeroArray(context.workOutput);
+  secureZeroArray(context.counter);
+  secureZeroArray(context.j0);
+  secureZeroArray(context.ghash);
+  for (uint8_t index = 0; index < 12; ++index) {
+    context.j0[index] = nonce[index];
+    context.counter[index] = nonce[index];
+  }
+  context.j0[15] = 1u;
+  context.counter[15] = 1u;
+  context.aad = aad;
+  context.aadLength = aadLength;
+  context.aadOffset = 0;
+  context.input = input;
+  context.output = output;
+  context.length = length;
+  context.payloadOffset = 0;
+  context.tagOut = tagOut;
+  context.tagIn = tagIn;
+  context.encrypt = encrypt;
+  context.busy = true;
+  context.step = AesGcm128Context::Step::HashSubkey;
+
+  const uint32_t zeroBlock[4] = {};
+  if (!submitAesGcmEcb(context, AesGcm128Context::Step::HashSubkey,
+                       aesGcmEcbCallback, zeroBlock)) {
+    finishAesGcm(context, false);
+    return false;
+  }
+
+  return true;
+}
+
+bool aesGcm128EncryptAsync(AesGcm128Context &context, const uint8_t nonce[12],
+                           const uint8_t *aad, size_t aadLength,
+                           const uint8_t *plaintext, uint8_t *ciphertext,
+                           size_t length, uint8_t tag[16]) {
+  return startAesGcmOperation(context, true, nonce, aad, aadLength, plaintext,
+                              ciphertext, length, tag, nullptr);
+}
+
+bool aesGcm128DecryptAsync(AesGcm128Context &context, const uint8_t nonce[12],
+                           const uint8_t *aad, size_t aadLength,
+                           const uint8_t *ciphertext, uint8_t *plaintext,
+                           size_t length, const uint8_t tag[16]) {
+  return startAesGcmOperation(context, false, nonce, aad, aadLength, ciphertext,
+                              plaintext, length, nullptr, tag);
 }
 
 void entropyInit(EntropyContext &context) {
@@ -606,7 +944,8 @@ bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length) {
 }
 
 MbedTlsCryptoProvider::MbedTlsCryptoProvider()
-    : _callback(nullptr), _callbackContext(nullptr)
+    : _callback(nullptr), _callbackContext(nullptr), _gcmOperation(),
+      _gcmCallback(nullptr), _gcmCallbackContext(nullptr), _gcmBusy(false)
 #ifdef CRYPTO_HARDWARE_AVAILABLE
       ,
       _ecdhOperation(), _ecdhSharedSecret(nullptr), _ecdhCallback(nullptr),
@@ -617,6 +956,7 @@ MbedTlsCryptoProvider::MbedTlsCryptoProvider()
 #endif
 {
   ctrDrbgInit(_drbg);
+  aesGcm128Init(_gcmOperation);
 }
 
 MbedTlsCryptoProvider::~MbedTlsCryptoProvider() { reset(); }
@@ -652,6 +992,12 @@ void MbedTlsCryptoProvider::reset() {
   ctrDrbgFree(_drbg);
   _callback = nullptr;
   _callbackContext = nullptr;
+  if (_gcmBusy)
+    Crypto::clearAesCallback();
+  aesGcm128Free(_gcmOperation);
+  _gcmCallback = nullptr;
+  _gcmCallbackContext = nullptr;
+  _gcmBusy = false;
 #ifdef CRYPTO_HARDWARE_AVAILABLE
   if (_ecdhBusy || _ecdsaBusy)
     Crypto::clearPukccCallback();
@@ -911,6 +1257,68 @@ bool MbedTlsCryptoProvider::ecdsaP256VerifyAsync(
 #endif
 }
 
+bool MbedTlsCryptoProvider::aesGcm128EncryptAsync(
+    const uint8_t key[16], const uint8_t nonce[12], const uint8_t *aad,
+    size_t aadLength, const uint8_t *plaintext, uint8_t *ciphertext,
+    size_t length, uint8_t tag[16], Crypto::TlsAesGcm128Callback callback,
+    void *context) {
+  if (_gcmBusy || key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (plaintext == nullptr && length != 0) ||
+      (ciphertext == nullptr && length != 0)) {
+    return false;
+  }
+
+  if (!Crypto::MbedTlsPort::aesGcm128SetKey(_gcmOperation, key) ||
+      !Crypto::MbedTlsPort::aesGcm128SetCallback(
+          _gcmOperation, MbedTlsCryptoProvider::handleGcmComplete, this)) {
+    return false;
+  }
+
+  _gcmCallback = callback;
+  _gcmCallbackContext = context;
+  _gcmBusy = true;
+  if (!Crypto::MbedTlsPort::aesGcm128EncryptAsync(_gcmOperation, nonce, aad,
+                                                  aadLength, plaintext,
+                                                  ciphertext, length, tag)) {
+    finishGcm(false);
+    return false;
+  }
+
+  return true;
+}
+
+bool MbedTlsCryptoProvider::aesGcm128DecryptAsync(
+    const uint8_t key[16], const uint8_t nonce[12], const uint8_t *aad,
+    size_t aadLength, const uint8_t *ciphertext, uint8_t *plaintext,
+    size_t length, const uint8_t tag[16], Crypto::TlsAesGcm128Callback callback,
+    void *context) {
+  if (_gcmBusy || key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (ciphertext == nullptr && length != 0) ||
+      (plaintext == nullptr && length != 0)) {
+    return false;
+  }
+
+  if (!Crypto::MbedTlsPort::aesGcm128SetKey(_gcmOperation, key) ||
+      !Crypto::MbedTlsPort::aesGcm128SetCallback(
+          _gcmOperation, MbedTlsCryptoProvider::handleGcmComplete, this)) {
+    return false;
+  }
+
+  _gcmCallback = callback;
+  _gcmCallbackContext = context;
+  _gcmBusy = true;
+  if (!Crypto::MbedTlsPort::aesGcm128DecryptAsync(_gcmOperation, nonce, aad,
+                                                  aadLength, ciphertext,
+                                                  plaintext, length, tag)) {
+    finishGcm(false);
+    return false;
+  }
+
+  return true;
+}
+
 void MbedTlsCryptoProvider::handleDrbgReady(bool success,
                                             CtrDrbgContext &context,
                                             void *user) {
@@ -923,6 +1331,29 @@ void MbedTlsCryptoProvider::handleDrbgReady(bool success,
   void *callbackContext = provider->_callbackContext;
   provider->_callback = nullptr;
   provider->_callbackContext = nullptr;
+  if (callback != nullptr)
+    callback(success, callbackContext);
+}
+
+void MbedTlsCryptoProvider::handleGcmComplete(bool success,
+                                              AesGcm128Context &operation,
+                                              void *user) {
+  (void)operation;
+  auto *provider = static_cast<MbedTlsCryptoProvider *>(user);
+  if (provider == nullptr)
+    return;
+
+  provider->finishGcm(success);
+}
+
+void MbedTlsCryptoProvider::finishGcm(bool success) {
+  Crypto::TlsAesGcm128Callback callback = _gcmCallback;
+  void *callbackContext = _gcmCallbackContext;
+  _gcmCallback = nullptr;
+  _gcmCallbackContext = nullptr;
+  _gcmBusy = false;
+  Crypto::MbedTlsPort::aesGcm128Free(_gcmOperation);
+
   if (callback != nullptr)
     callback(success, callbackContext);
 }

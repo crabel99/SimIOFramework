@@ -43,6 +43,8 @@ bool encryptEcb128Async(const uint32_t key[4], const uint32_t plaintext[4],
                         uint32_t ciphertext[4]);
 bool decryptEcb128Async(const uint32_t key[4], const uint32_t ciphertext[4],
                         uint32_t plaintext[4]);
+bool galoisMultiplyAsync(const uint32_t hashKey[4], const uint32_t input[4],
+                         uint32_t output[4]);
 
 bool registerTrngCallback(TrngCallback callback, void *context = nullptr);
 void clearTrngCallback();

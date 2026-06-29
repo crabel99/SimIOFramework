@@ -30,9 +30,16 @@ uint8_t expectedKeyWords(aes::KeySize keySize) {
 }
 
 struct AsyncState {
+  enum class OutputKind : uint8_t {
+    None,
+    DataBlock,
+    GhashBlock,
+  };
+
   aes::EventCallback callback = nullptr;
   void *callbackContext = nullptr;
   uint32_t *output = nullptr;
+  OutputKind outputKind = OutputKind::None;
   uint8_t pendingFlags = 0;
   bool serviceRegistered = false;
   bool busy = false;
@@ -47,29 +54,35 @@ void aesPendSvService(uint8_t serviceId, void *context) {
   aes::EventCallback callback = nullptr;
   void *callbackContext = nullptr;
   uint32_t *output = nullptr;
+  AsyncState::OutputKind outputKind = AsyncState::OutputKind::None;
   uint8_t flags = 0;
 
   const uint32_t primask = enterCritical();
   flags = asyncState.pendingFlags;
   asyncState.pendingFlags = 0;
   output = asyncState.output;
+  outputKind = asyncState.outputKind;
   callback = asyncState.callback;
   callbackContext = asyncState.callbackContext;
   exitCritical(primask);
 
   aes::EventMask events = aes::EventNone;
   if ((flags & aes::EncryptionCompleteInterrupt) != 0u) {
-    if (output != nullptr)
+    if (output != nullptr && outputKind == AsyncState::OutputKind::DataBlock)
       aes::readOutputBlock(output);
     events |= aes::EventComplete;
   }
-  if ((flags & aes::GaloisMultiplyCompleteInterrupt) != 0u)
+  if ((flags & aes::GaloisMultiplyCompleteInterrupt) != 0u) {
+    if (output != nullptr && outputKind == AsyncState::OutputKind::GhashBlock)
+      aes::readGhash(output);
     events |= aes::EventGaloisComplete;
+  }
 
   aes::end();
 
   const uint32_t completePrimask = enterCritical();
   asyncState.output = nullptr;
+  asyncState.outputKind = AsyncState::OutputKind::None;
   asyncState.busy = false;
   exitCritical(completePrimask);
 
@@ -177,12 +190,35 @@ void aes::writeInitializationVector(const uint32_t words[4]) {
     regs()->AES_INTVECTV[i] = words[i];
 }
 
+void aes::writeHashKey(const uint32_t words[4]) {
+  for (uint8_t i = 0; i < 4; ++i)
+    regs()->AES_HASHKEY[i] = words[i];
+}
+
+void aes::writeGhash(const uint32_t words[4]) {
+  for (uint8_t i = 0; i < 4; ++i)
+    regs()->AES_GHASH[i] = words[i];
+}
+
+void aes::readGhash(uint32_t words[4]) {
+  for (uint8_t i = 0; i < 4; ++i)
+    words[i] = regs()->AES_GHASH[i];
+}
+
 void aes::beginMessage() {
   regs()->AES_CTRLB = AES_CTRLB_NEWMSG_Msk;
 }
 
 void aes::start() {
   regs()->AES_CTRLB = AES_CTRLB_START_Msk;
+}
+
+void aes::startGaloisMultiply() { regs()->AES_CTRLB = AES_CTRLB_GFMUL_Msk; }
+
+static void startGaloisMultiplyBlock(const uint32_t words[4]) {
+  regs()->AES_CTRLB = AES_CTRLB_GFMUL_Msk;
+  aes::writeInputBlock(words);
+  regs()->AES_CTRLB = AES_CTRLB_GFMUL_Msk | AES_CTRLB_START_Msk;
 }
 
 bool aes::operationComplete() {
@@ -213,6 +249,7 @@ bool aes::registerEventCallback(EventCallback callback, void *context) {
   asyncState.callback = callback;
   asyncState.callbackContext = context;
   asyncState.pendingFlags = 0;
+  asyncState.outputKind = AsyncState::OutputKind::None;
   exitCritical(primask);
   return true;
 }
@@ -222,7 +259,12 @@ void aes::clearEventCallback() {
   asyncState.callback = nullptr;
   asyncState.callbackContext = nullptr;
   asyncState.pendingFlags = 0;
+  asyncState.output = nullptr;
+  asyncState.outputKind = AsyncState::OutputKind::None;
+  asyncState.busy = false;
   exitCritical(primask);
+  disableInterrupts(EncryptionCompleteInterrupt |
+                    GaloisMultiplyCompleteInterrupt);
   PendSV::instance().clearService(pendSvServiceId());
   asyncState.serviceRegistered = false;
 }
@@ -241,6 +283,7 @@ bool aes::startEcb128Async(Direction direction, const uint32_t key[4],
   }
   asyncState.busy = true;
   asyncState.output = output;
+  asyncState.outputKind = AsyncState::OutputKind::DataBlock;
   asyncState.pendingFlags = 0;
   exitCritical(primask);
 
@@ -251,6 +294,7 @@ bool aes::startEcb128Async(Direction direction, const uint32_t key[4],
     primask = enterCritical();
     asyncState.busy = false;
     asyncState.output = nullptr;
+    asyncState.outputKind = AsyncState::OutputKind::None;
     exitCritical(primask);
     return false;
   }
@@ -263,6 +307,37 @@ bool aes::startEcb128Async(Direction direction, const uint32_t key[4],
   NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
   NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
   start();
+  return true;
+}
+
+bool aes::startGaloisMultiplyAsync(const uint32_t hashKey[4],
+                                   const uint32_t input[4],
+                                   uint32_t output[4]) {
+  if (hashKey == nullptr || input == nullptr || output == nullptr)
+    return false;
+  if (!ensurePendSvServiceRegistered())
+    return false;
+
+  uint32_t primask = enterCritical();
+  if (asyncState.busy || asyncState.callback == nullptr) {
+    exitCritical(primask);
+    return false;
+  }
+  asyncState.busy = true;
+  asyncState.output = output;
+  asyncState.outputKind = AsyncState::OutputKind::GhashBlock;
+  asyncState.pendingFlags = 0;
+  exitCritical(primask);
+
+  begin();
+  configure(Mode::Gcm, KeySize::Bits128, Direction::Encrypt);
+  writeHashKey(hashKey);
+  clearInterruptFlags(EncryptionCompleteInterrupt |
+                      GaloisMultiplyCompleteInterrupt);
+  enableInterrupts(GaloisMultiplyCompleteInterrupt);
+  NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
+  NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
+  startGaloisMultiplyBlock(input);
   return true;
 }
 

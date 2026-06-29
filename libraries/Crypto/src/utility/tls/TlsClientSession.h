@@ -28,6 +28,7 @@ namespace Crypto {
 using TlsCryptoReadyCallback = void (*)(bool success, void *context);
 using TlsEcdhP256Callback = void (*)(bool success, void *context);
 using TlsEcdsaP256VerifyCallback = void (*)(bool success, void *context);
+using TlsAesGcm128Callback = void (*)(bool success, void *context);
 
 /**
  * @brief Async crypto readiness provider for TLS sessions.
@@ -87,6 +88,61 @@ public:
     (void)publicKey;
     (void)hash;
     (void)signature;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async AES-128-GCM encryption.
+   *
+   * This is the TLS record-protection primitive for the supported
+   * ECDHE-ECDSA-AES128-GCM-SHA256 profile. `nonce` is the 12-byte TLS GCM
+   * nonce, `aad` is authenticated but not encrypted, and `tag` receives the
+   * 16-byte authentication tag only after the callback reports success.
+   * Implementations must fail closed rather than falling back to blocking
+   * software when the hardware-backed path is unavailable.
+   */
+  virtual bool
+  aesGcm128EncryptAsync(const uint8_t key[16], const uint8_t nonce[12],
+                        const uint8_t *aad, size_t aadLength,
+                        const uint8_t *plaintext, uint8_t *ciphertext,
+                        size_t length, uint8_t tag[16],
+                        TlsAesGcm128Callback callback, void *context) {
+    (void)key;
+    (void)nonce;
+    (void)aad;
+    (void)aadLength;
+    (void)plaintext;
+    (void)ciphertext;
+    (void)length;
+    (void)tag;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async AES-128-GCM decryption and authentication.
+   *
+   * The plaintext output is valid only when the callback reports success. A tag
+   * mismatch must fail closed and leave callers responsible for discarding any
+   * partially written plaintext buffer.
+   */
+  virtual bool
+  aesGcm128DecryptAsync(const uint8_t key[16], const uint8_t nonce[12],
+                        const uint8_t *aad, size_t aadLength,
+                        const uint8_t *ciphertext, uint8_t *plaintext,
+                        size_t length, const uint8_t tag[16],
+                        TlsAesGcm128Callback callback, void *context) {
+    (void)key;
+    (void)nonce;
+    (void)aad;
+    (void)aadLength;
+    (void)ciphertext;
+    (void)plaintext;
+    (void)length;
+    (void)tag;
     (void)callback;
     (void)context;
     return false;

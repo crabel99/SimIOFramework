@@ -92,10 +92,18 @@ public:
   static void readOutputBlock(uint32_t words[4]);
   /** @brief Load one 128-bit initialization vector. */
   static void writeInitializationVector(const uint32_t words[4]);
+  /** @brief Load one 128-bit GCM hash subkey. */
+  static void writeHashKey(const uint32_t words[4]);
+  /** @brief Load the 128-bit Galois hash accumulator/input. */
+  static void writeGhash(const uint32_t words[4]);
+  /** @brief Read the 128-bit Galois hash accumulator/output. */
+  static void readGhash(uint32_t words[4]);
   /** @brief Mark the next block as the beginning of a new AES message. */
   static void beginMessage();
   /** @brief Start a manual AES operation. */
   static void start();
+  /** @brief Start a manual Galois-field multiply operation. */
+  static void startGaloisMultiply();
   /** @brief Report whether the current AES block operation has completed. */
   static bool operationComplete();
   /** @brief Return currently latched AES interrupt flags. */
@@ -127,6 +135,18 @@ public:
    */
   static bool startEcb128Async(Direction direction, const uint32_t key[4],
                                const uint32_t input[4], uint32_t output[4]);
+  /**
+   * @brief Start one async GCM field multiply.
+   *
+   * `hashKey`, `input`, and `output` are 128-bit register-order word arrays.
+   * The operation programs `HASHKEY`, loads the operand through `INDATA`,
+   * starts the hardware GFMUL operation, and reads `GHASH` into `output`
+   * before delivering
+   * `EventGaloisComplete` from the AES PendSV service.
+   */
+  static bool startGaloisMultiplyAsync(const uint32_t hashKey[4],
+                                       const uint32_t input[4],
+                                       uint32_t output[4]);
   /** @brief Return true while an async AES operation owns the peripheral. */
   static bool asyncBusy();
   /** @brief Capture AES IRQ state and schedule PendSV completion dispatch. */

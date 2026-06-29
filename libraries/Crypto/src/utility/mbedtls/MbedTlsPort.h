@@ -59,6 +59,72 @@ bool aesEcb128SetCallback(AesEcb128Context &context,
 bool aesEcb128CryptAsync(AesEcb128Context &context, const uint32_t input[4],
                          uint32_t output[4]);
 
+struct AesGcm128Context;
+
+using AesGcm128Callback = void (*)(bool success, AesGcm128Context &context,
+                                   void *user);
+
+/**
+ * @brief Async AES-128-GCM one-shot operation context.
+ *
+ * The context implements GCM as a hardware-backed state machine: AES-ECB
+ * encrypts counter blocks, AES GFMUL advances GHASH, and the wrapper performs
+ * only counter increment, XOR, padding, and tag comparison. Callers submit one
+ * complete GCM record and receive completion from callbacks; no software AES or
+ * software field multiplication is permitted on this path.
+ */
+struct AesGcm128Context {
+  enum class Step : uint8_t {
+    Idle,
+    HashSubkey,
+    Aad,
+    PayloadKeystream,
+    PayloadGhash,
+    LengthBlock,
+    TagMask,
+    Complete,
+    Error,
+  };
+
+  AesEcb128Context aes = {};
+  uint32_t key[4] = {};
+  uint32_t hashKey[4] = {};
+  uint32_t workInput[4] = {};
+  uint32_t workOutput[4] = {};
+  uint8_t counter[16] = {};
+  uint8_t j0[16] = {};
+  uint8_t ghash[16] = {};
+  const uint8_t *aad = nullptr;
+  size_t aadLength = 0;
+  size_t aadOffset = 0;
+  const uint8_t *input = nullptr;
+  uint8_t *output = nullptr;
+  size_t length = 0;
+  size_t payloadOffset = 0;
+  uint8_t *tagOut = nullptr;
+  const uint8_t *tagIn = nullptr;
+  bool encrypt = true;
+  bool keyConfigured = false;
+  bool busy = false;
+  Step step = Step::Idle;
+  AesGcm128Callback callback = nullptr;
+  void *callbackContext = nullptr;
+};
+
+void aesGcm128Init(AesGcm128Context &context);
+void aesGcm128Free(AesGcm128Context &context);
+bool aesGcm128SetKey(AesGcm128Context &context, const uint8_t key[16]);
+bool aesGcm128SetCallback(AesGcm128Context &context, AesGcm128Callback callback,
+                          void *callbackContext = nullptr);
+bool aesGcm128EncryptAsync(AesGcm128Context &context, const uint8_t nonce[12],
+                           const uint8_t *aad, size_t aadLength,
+                           const uint8_t *plaintext, uint8_t *ciphertext,
+                           size_t length, uint8_t tag[16]);
+bool aesGcm128DecryptAsync(AesGcm128Context &context, const uint8_t nonce[12],
+                           const uint8_t *aad, size_t aadLength,
+                           const uint8_t *ciphertext, uint8_t *plaintext,
+                           size_t length, const uint8_t tag[16]);
+
 struct EntropyContext;
 
 using EntropyCallback =
@@ -216,9 +282,10 @@ bool generateExternalRandom(uint8_t *buffer, size_t length);
  *
  * The provider routes supported P-256 ECDH and ECDSA verification operations
  * through async PUKCC hardware and fails closed on invalid peer points before
- * scalar multiplication or signature verification. GCM, ECDSA signing, and
- * DRBG block generation still need exact async SAME5x hardware mappings before
- * the secure-client crypto backend is complete.
+ * scalar multiplication or signature verification. AES-128-GCM record
+ * protection is routed through the async AES/GHASH hardware state machine.
+ * ECDSA signing and DRBG block generation still need exact async SAME5x
+ * hardware mappings before the secure-client crypto backend is complete.
  */
 class MbedTlsCryptoProvider : public Crypto::TlsCryptoProvider {
 public:
@@ -239,6 +306,18 @@ public:
                             const uint8_t signature[64],
                             Crypto::TlsEcdsaP256VerifyCallback callback,
                             void *context) override;
+  bool aesGcm128EncryptAsync(const uint8_t key[16], const uint8_t nonce[12],
+                             const uint8_t *aad, size_t aadLength,
+                             const uint8_t *plaintext, uint8_t *ciphertext,
+                             size_t length, uint8_t tag[16],
+                             Crypto::TlsAesGcm128Callback callback,
+                             void *context) override;
+  bool aesGcm128DecryptAsync(const uint8_t key[16], const uint8_t nonce[12],
+                             const uint8_t *aad, size_t aadLength,
+                             const uint8_t *ciphertext, uint8_t *plaintext,
+                             size_t length, const uint8_t tag[16],
+                             Crypto::TlsAesGcm128Callback callback,
+                             void *context) override;
 
 private:
 #ifdef CRYPTO_HARDWARE_AVAILABLE
@@ -267,10 +346,17 @@ private:
   void finishEcdsa(bool success);
   void clearEcdsaWorkspace();
 #endif
+  static void handleGcmComplete(bool success, AesGcm128Context &operation,
+                                void *user);
+  void finishGcm(bool success);
 
   CtrDrbgContext _drbg;
   Crypto::TlsCryptoReadyCallback _callback;
   void *_callbackContext;
+  AesGcm128Context _gcmOperation;
+  Crypto::TlsAesGcm128Callback _gcmCallback;
+  void *_gcmCallbackContext;
+  bool _gcmBusy;
 #ifdef CRYPTO_HARDWARE_AVAILABLE
   Crypto::PukccEcc::EcdhSharedSecretOperation _ecdhOperation;
   uint8_t *_ecdhSharedSecret;

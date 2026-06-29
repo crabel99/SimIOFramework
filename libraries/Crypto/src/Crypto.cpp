@@ -40,6 +40,11 @@ bool decryptEcb128Async(const uint32_t key[4], const uint32_t ciphertext[4],
                                            ciphertext, plaintext);
 }
 
+bool galoisMultiplyAsync(const uint32_t hashKey[4], const uint32_t input[4],
+                         uint32_t output[4]) {
+  return hasAES() && aes::startGaloisMultiplyAsync(hashKey, input, output);
+}
+
 bool registerTrngCallback(TrngCallback callback, void *context) {
   return hasTRNG() && trng::registerEventCallback(callback, context);
 }
