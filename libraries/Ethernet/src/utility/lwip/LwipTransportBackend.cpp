@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr size_t kTcpBufferSize = 1536;
+constexpr size_t kTcpBufferSize = 8192;
 constexpr size_t kUdpBufferSize = 1536;
 
 struct SockAddrParts {
@@ -72,6 +72,20 @@ struct LwipTransportBackend::TcpHandle {
   bool connecting = false;
   bool dnsPending = false;
   uint16_t dnsPort = 0;
+  uint32_t receiveCallbacks = 0;
+  size_t totalReceived = 0;
+  size_t totalDelivered = 0;
+  size_t droppedBytes = 0;
+  size_t lastReceiveLength = 0;
+  uint32_t writeCalls = 0;
+  size_t totalWriteRequested = 0;
+  size_t totalWriteAccepted = 0;
+  size_t writeRejectedBytes = 0;
+  size_t lastWriteRequested = 0;
+  size_t lastWriteAccepted = 0;
+  size_t lastSendBuffer = 0;
+  int lastTcpWriteError = 0;
+  int lastTcpOutputError = 0;
   uint8_t rx[kTcpBufferSize];
   size_t rxLength = 0;
   size_t rxIndex = 0;
@@ -99,6 +113,26 @@ void resetTcpReceiveBuffer(LwipTransportBackend::TcpHandle *state) {
 
   state->rxLength = 0;
   state->rxIndex = 0;
+}
+
+void resetTcpDiagnostics(LwipTransportBackend::TcpHandle *state) {
+  if (state == nullptr)
+    return;
+
+  state->receiveCallbacks = 0;
+  state->totalReceived = 0;
+  state->totalDelivered = 0;
+  state->droppedBytes = 0;
+  state->lastReceiveLength = 0;
+  state->writeCalls = 0;
+  state->totalWriteRequested = 0;
+  state->totalWriteAccepted = 0;
+  state->writeRejectedBytes = 0;
+  state->lastWriteRequested = 0;
+  state->lastWriteAccepted = 0;
+  state->lastSendBuffer = 0;
+  state->lastTcpWriteError = 0;
+  state->lastTcpOutputError = 0;
 }
 
 err_t startTcpConnect(LwipTransportBackend::TcpHandle *tcp, IPAddress ip,
@@ -151,6 +185,8 @@ err_t receiveTcpData(void *arg, tcp_pcb *pcb, pbuf *packet, err_t err) {
   }
 
   const size_t receivedLength = packet->tot_len;
+  state->receiveCallbacks++;
+  state->lastReceiveLength = receivedLength;
   size_t availableSpace = kTcpBufferSize - state->rxLength;
   size_t bytesToCopy = receivedLength;
   if (bytesToCopy > availableSpace)
@@ -159,8 +195,11 @@ err_t receiveTcpData(void *arg, tcp_pcb *pcb, pbuf *packet, err_t err) {
   if (bytesToCopy > 0) {
     pbuf_copy_partial(packet, &state->rx[state->rxLength], bytesToCopy, 0);
     state->rxLength += bytesToCopy;
+    state->totalReceived += bytesToCopy;
     tcp_recved(pcb, static_cast<u16_t>(bytesToCopy));
   }
+  if (bytesToCopy < receivedLength)
+    state->droppedBytes += receivedLength - bytesToCopy;
 
   pbuf_free(packet);
   return bytesToCopy == receivedLength ? ERR_OK : ERR_MEM;
@@ -177,6 +216,7 @@ void handleTcpError(void *arg, err_t err) {
   state->connected = false;
   state->connecting = false;
   resetTcpReceiveBuffer(state);
+  resetTcpDiagnostics(state);
 }
 
 err_t tcpConnected(void *arg, tcp_pcb *pcb, err_t err) {
@@ -225,6 +265,7 @@ err_t acceptTcpConnection(void *arg, tcp_pcb *newPcb, err_t err) {
   state->connected = true;
   state->connecting = false;
   resetTcpReceiveBuffer(state);
+  resetTcpDiagnostics(state);
   armTcpCallbacks(state, newPcb);
   tcp_accepted(newPcb);
   return ERR_OK;
@@ -302,6 +343,11 @@ void LwipTransportBackend::releaseSocket(void *handle) {
 }
 
 bool LwipTransportBackend::tlsAvailable() const { return _secure != nullptr; }
+
+LwipTransportBackend::TcpDiagnostics
+LwipTransportBackend::secureTcpDiagnostics() const {
+  return diagnosticsFor(_secure);
+}
 
 bool LwipTransportBackend::beginServer(uint16_t port) {
   stopServer(_serverPort);
@@ -420,22 +466,49 @@ size_t LwipTransportBackend::write(void *handle, uint8_t value) {
 size_t LwipTransportBackend::write(void *handle, const uint8_t *buffer,
                                 size_t size) {
   TcpHandle *tcp = asTcpHandle(handle);
-  if (tcp == nullptr || tcp->pcb == nullptr || !tcp->connected ||
-      buffer == nullptr || size == 0)
+  if (tcp == nullptr)
     return 0;
 
-  if (size > tcp_sndbuf(tcp->pcb))
-    size = tcp_sndbuf(tcp->pcb);
-  if (size == 0)
-    return 0;
+  const size_t requestedSize = size;
+  tcp->writeCalls++;
+  tcp->lastWriteRequested = requestedSize;
+  tcp->lastWriteAccepted = 0;
+  tcp->totalWriteRequested += requestedSize;
 
-  if (tcp_write(tcp->pcb, buffer, static_cast<u16_t>(size),
-                TCP_WRITE_FLAG_COPY) != ERR_OK)
+  if (tcp->pcb == nullptr || !tcp->connected || buffer == nullptr ||
+      size == 0) {
+    tcp->writeRejectedBytes += requestedSize;
     return 0;
+  }
 
-  if (tcp_output(tcp->pcb) != ERR_OK)
+  tcp->lastSendBuffer = tcp_sndbuf(tcp->pcb);
+  if (size > tcp->lastSendBuffer)
+    size = tcp->lastSendBuffer;
+  if (size == 0) {
+    tcp->writeRejectedBytes += requestedSize;
     return 0;
+  }
 
+  const err_t writeError =
+      tcp_write(tcp->pcb, buffer, static_cast<u16_t>(size),
+                TCP_WRITE_FLAG_COPY);
+  tcp->lastTcpWriteError = writeError;
+  if (writeError != ERR_OK) {
+    tcp->writeRejectedBytes += requestedSize;
+    return 0;
+  }
+
+  const err_t outputError = tcp_output(tcp->pcb);
+  tcp->lastTcpOutputError = outputError;
+  if (outputError != ERR_OK) {
+    tcp->writeRejectedBytes += requestedSize;
+    return 0;
+  }
+
+  tcp->lastWriteAccepted = size;
+  tcp->totalWriteAccepted += size;
+  if (size < requestedSize)
+    tcp->writeRejectedBytes += requestedSize - size;
   return size;
 }
 
@@ -465,6 +538,7 @@ int LwipTransportBackend::read(void *handle, uint8_t *buffer, size_t size) {
 
   memcpy(buffer, &tcp->rx[tcp->rxIndex], bytesToRead);
   tcp->rxIndex += bytesToRead;
+  tcp->totalDelivered += bytesToRead;
   if (tcp->rxIndex >= tcp->rxLength)
     resetTcpReceiveBuffer(tcp);
 
@@ -490,7 +564,7 @@ uint8_t LwipTransportBackend::connected(void *handle) {
   if (tcp == nullptr || tcp->pcb == nullptr)
     return 0;
 
-  return tcp->connected || tcp->connecting ? 1 : 0;
+  return tcp->connected ? 1 : 0;
 }
 
 uint8_t LwipTransportBackend::begin(uint16_t port) {
@@ -703,6 +777,33 @@ void LwipTransportBackend::closeTcpHandle(TcpHandle *handle) {
   handle->dnsPending = false;
   handle->dnsPort = 0;
   resetTcpReceiveBuffer(handle);
+  resetTcpDiagnostics(handle);
+}
+
+LwipTransportBackend::TcpDiagnostics
+LwipTransportBackend::diagnosticsFor(const TcpHandle *handle) const {
+  TcpDiagnostics diagnostics;
+  if (handle == nullptr)
+    return diagnostics;
+
+  diagnostics.receiveCallbacks = handle->receiveCallbacks;
+  diagnostics.totalReceived = handle->totalReceived;
+  diagnostics.totalDelivered = handle->totalDelivered;
+  diagnostics.droppedBytes = handle->droppedBytes;
+  diagnostics.lastReceiveLength = handle->lastReceiveLength;
+  diagnostics.bufferedBytes =
+      handle->rxLength > handle->rxIndex ? handle->rxLength - handle->rxIndex
+                                         : 0;
+  diagnostics.writeCalls = handle->writeCalls;
+  diagnostics.totalWriteRequested = handle->totalWriteRequested;
+  diagnostics.totalWriteAccepted = handle->totalWriteAccepted;
+  diagnostics.writeRejectedBytes = handle->writeRejectedBytes;
+  diagnostics.lastWriteRequested = handle->lastWriteRequested;
+  diagnostics.lastWriteAccepted = handle->lastWriteAccepted;
+  diagnostics.lastSendBuffer = handle->lastSendBuffer;
+  diagnostics.lastTcpWriteError = handle->lastTcpWriteError;
+  diagnostics.lastTcpOutputError = handle->lastTcpOutputError;
+  return diagnostics;
 }
 
 size_t LwipTransportBackend::writeServerToAccepted(const uint8_t *buffer,

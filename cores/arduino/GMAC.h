@@ -205,6 +205,7 @@ public:
   static bool queueTransmitFrame(const TransmitFragment *fragments,
                                  uint8_t fragmentCount);
   static uint8_t reclaimTransmitDescriptors();
+  static uint8_t lastReclaimedTransmitDescriptors();
   static bool receivedFrameSize(uint16_t *length);
   static bool peekReceivedFrame(uint8_t **buffer, uint16_t *length);
   static bool readReceivedFrame(uint8_t *buffer, uint16_t capacity,

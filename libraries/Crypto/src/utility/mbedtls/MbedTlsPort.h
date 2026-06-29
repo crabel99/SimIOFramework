@@ -162,6 +162,11 @@ using CtrDrbgCallback =
  * material through `DrbgSeedContext`, then calls Mbed TLS with a non-blocking
  * entropy callback that copies already-ready bytes. Random generation is
  * fail-fast and bounded; it never waits on TRNG or hardware completion.
+ *
+ * This is a bring-up boundary, not final hardware acceleration. Entropy
+ * collection is async TRNG-backed, but the CTR_DRBG block computations still
+ * execute inside Mbed TLS software until an exact async AES-backed DRBG path is
+ * added and tested.
  */
 struct CtrDrbgContext {
   static constexpr size_t MaxPersonalizationSize = 64;
@@ -200,6 +205,10 @@ bool generateExternalRandom(uint8_t *buffer, size_t length);
  * readiness through the `TlsCryptoProvider` callback. It never blocks waiting
  * for entropy or hardware completion. TLS protocol state remains owned by
  * `TlsClientSession`; this provider only owns RNG/crypto readiness.
+ *
+ * The provider does not yet replace Mbed TLS/PSA software ECC, GCM, or DRBG
+ * block generation. Those primitives must be moved behind async SAME5x
+ * hardware adapters before the secure-client crypto backend is complete.
  */
 class MbedTlsCryptoProvider : public Crypto::TlsCryptoProvider {
 public:

@@ -56,6 +56,7 @@
       "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_rsa.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_util_internal.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/sha256.c>",
+      "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/sha512.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/core/psa_crypto.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/core/psa_crypto_client.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/core/psa_crypto_random.c>",

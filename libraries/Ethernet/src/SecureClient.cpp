@@ -8,7 +8,8 @@ SecureClient::SecureClient()
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
-      _tlsSessionReuseEnabled(false), _hostname{}, _cryptoProvider(nullptr),
+      _tlsSessionReuseEnabled(false), _tlsHandshakePending(false), _hostname{},
+      _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(EthernetSocket &socket)
@@ -17,7 +18,8 @@ SecureClient::SecureClient(EthernetSocket &socket)
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
-      _tlsSessionReuseEnabled(false), _hostname{}, _cryptoProvider(nullptr),
+      _tlsSessionReuseEnabled(false), _tlsHandshakePending(false), _hostname{},
+      _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {
   _tlsTransport.bind(currentSocket());
   _tlsSession.bindTransport(_tlsTransport);
@@ -29,7 +31,8 @@ SecureClient::SecureClient(TransportProvider &provider)
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
-      _tlsSessionReuseEnabled(false), _hostname{}, _cryptoProvider(nullptr),
+      _tlsSessionReuseEnabled(false), _tlsHandshakePending(false), _hostname{},
+      _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(SecureClient &&other)
@@ -42,7 +45,8 @@ SecureClient::SecureClient(SecureClient &&other)
       _clientPrivateKeyLength(other._clientPrivateKeyLength),
       _alpnProtocols(other._alpnProtocols),
       _tlsOperationPollLimit(other._tlsOperationPollLimit),
-      _tlsSessionReuseEnabled(other._tlsSessionReuseEnabled), _hostname{},
+      _tlsSessionReuseEnabled(other._tlsSessionReuseEnabled),
+      _tlsHandshakePending(other._tlsHandshakePending), _hostname{},
       _cryptoProvider(other._cryptoProvider),
       _lastTlsCallbackStatus(other._lastTlsCallbackStatus) {
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
@@ -75,6 +79,7 @@ SecureClient &SecureClient::operator=(SecureClient &&other) {
   _alpnProtocols = other._alpnProtocols;
   _tlsOperationPollLimit = other._tlsOperationPollLimit;
   _tlsSessionReuseEnabled = other._tlsSessionReuseEnabled;
+  _tlsHandshakePending = other._tlsHandshakePending;
   memset(_hostname, 0, sizeof(_hostname));
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
   _hostname[sizeof(_hostname) - 1] = '\0';
@@ -110,10 +115,14 @@ int SecureClient::connect(IPAddress ip, uint16_t port) {
     return 0;
   }
 
-  if (!startTlsHandshake()) {
-    stop();
-    _lastError = SecureClientTlsHandshakeStartFailed;
-    return 0;
+  _tlsHandshakePending = true;
+  if (EthernetClient::connected()) {
+    _tlsHandshakePending = false;
+    if (!startTlsHandshake()) {
+      stop();
+      _lastError = SecureClientTlsHandshakeStartFailed;
+      return 0;
+    }
   }
 
   _lastError = SecureClientNoError;
@@ -136,10 +145,14 @@ int SecureClient::connect(const char *host, uint16_t port) {
     return 0;
   }
 
-  if (!startTlsHandshake()) {
-    stop();
-    _lastError = SecureClientTlsHandshakeStartFailed;
-    return 0;
+  _tlsHandshakePending = true;
+  if (EthernetClient::connected()) {
+    _tlsHandshakePending = false;
+    if (!startTlsHandshake()) {
+      stop();
+      _lastError = SecureClientTlsHandshakeStartFailed;
+      return 0;
+    }
   }
 
   _lastError = SecureClientNoError;
@@ -260,6 +273,20 @@ Crypto::TlsAsyncStatus SecureClient::tlsStatus() const {
 
 int SecureClient::tlsLastError() const { return _tlsSession.lastError(); }
 
+int SecureClient::tlsLastMbedTlsResult() const {
+  return _tlsSession.lastMbedTlsResult();
+}
+
+int SecureClient::tlsHandshakeState() const {
+  return _tlsSession.handshakeState();
+}
+
+Crypto::TlsOperation SecureClient::tlsOperation() const {
+  return _tlsSession.operation();
+}
+
+bool SecureClient::tlsHandshakePending() const { return _tlsHandshakePending; }
+
 uint32_t SecureClient::tlsVerificationResult() const {
   return _tlsSession.verificationResult();
 }
@@ -354,6 +381,7 @@ void SecureClient::flush() {
 }
 
 void SecureClient::stop() {
+  _tlsHandshakePending = false;
   _tlsSession.abort();
   clearTlsStreamBuffers();
   _tlsTransport.clear();
@@ -459,6 +487,24 @@ bool SecureClient::startTlsHandshake() {
 }
 
 Crypto::TlsAsyncStatus SecureClient::advanceTlsOperation() {
+  if (_tlsHandshakePending) {
+    EthernetSocket *socket = currentSocket();
+    if (socket == nullptr || !socket->carrierUp()) {
+      _tlsHandshakePending = false;
+      _lastError = SecureClientConnectFailed;
+      return Crypto::TlsAsyncStatus::Error;
+    }
+
+    if (!EthernetClient::connected())
+      return Crypto::TlsAsyncStatus::Busy;
+
+    _tlsHandshakePending = false;
+    if (!startTlsHandshake()) {
+      _lastError = SecureClientTlsHandshakeStartFailed;
+      return Crypto::TlsAsyncStatus::Error;
+    }
+  }
+
   const Crypto::TlsOperation operation = _tlsSession.operation();
   const Crypto::TlsAsyncStatus status = _tlsSession.poll();
   if (_tlsRxPending && status == Crypto::TlsAsyncStatus::Complete) {
@@ -562,6 +608,7 @@ void SecureClient::clearTlsState() {
   _clientPrivateKeyLength = 0;
   _alpnProtocols = nullptr;
   _tlsSessionReuseEnabled = false;
+  _tlsHandshakePending = false;
   memset(_hostname, 0, sizeof(_hostname));
   _cryptoProvider = nullptr;
   _lastTlsCallbackStatus = Crypto::TlsAsyncStatus::Idle;

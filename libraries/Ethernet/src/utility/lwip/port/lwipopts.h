@@ -39,7 +39,9 @@
 #define LWIP_TIMERS 1
 
 #define MEM_ALIGNMENT 4
+#ifndef MEM_SIZE
 #define MEM_SIZE (24 * 1024)
+#endif
 #if defined(NATIVE_TEST)
 #define MEM_LIBC_MALLOC 1
 #define MEMP_MEM_MALLOC 1
@@ -47,24 +49,50 @@
 #define MEM_LIBC_MALLOC 0
 #define MEMP_MEM_MALLOC 0
 #endif
+#ifndef MEMP_NUM_PBUF
 #define MEMP_NUM_PBUF 16
+#endif
+#ifndef MEMP_NUM_UDP_PCB
 #define MEMP_NUM_UDP_PCB 8
+#endif
+#ifndef MEMP_NUM_TCP_PCB
 #define MEMP_NUM_TCP_PCB 6
+#endif
+#ifndef MEMP_NUM_TCP_PCB_LISTEN
 #define MEMP_NUM_TCP_PCB_LISTEN 4
+#endif
+#ifndef MEMP_NUM_TCP_SEG
 #define MEMP_NUM_TCP_SEG 24
+#endif
+#ifndef MEMP_NUM_SYS_TIMEOUT
 #define MEMP_NUM_SYS_TIMEOUT 12
+#endif
 
+#ifndef PBUF_POOL_SIZE
 #define PBUF_POOL_SIZE 16
+#endif
+#ifndef PBUF_POOL_BUFSIZE
 #define PBUF_POOL_BUFSIZE 1536
+#endif
 
 #define TCP_MSS 1460
+#ifndef TCP_SND_BUF
 #define TCP_SND_BUF (4 * TCP_MSS)
+#endif
+#ifndef TCP_WND
 #define TCP_WND (4 * TCP_MSS)
+#endif
+#ifndef TCP_SND_QUEUELEN
 #define TCP_SND_QUEUELEN 16
+#endif
 #define TCP_LISTEN_BACKLOG 1
 
+#ifndef DNS_TABLE_SIZE
 #define DNS_TABLE_SIZE 4
+#endif
+#ifndef DNS_MAX_NAME_LENGTH
 #define DNS_MAX_NAME_LENGTH 128
+#endif
 
 #define LWIP_STATS 0
 #define LWIP_PROVIDE_ERRNO 1

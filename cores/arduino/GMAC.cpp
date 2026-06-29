@@ -40,6 +40,7 @@ struct GmacEventState {
   volatile gmac::EventMask pendingEvents = gmac::EventNone;
   volatile uint32_t pendingReceiveStatus = 0;
   volatile uint32_t pendingTransmitStatus = 0;
+  volatile uint8_t lastReclaimedTransmitDescriptors = 0;
   gmac::EventCallback callback = nullptr;
   void *callbackContext = nullptr;
   bool serviceRegistered = false;
@@ -123,8 +124,12 @@ void gmacPendSvService(uint8_t serviceId, void *) {
   callbackContext = eventState.callbackContext;
   exitCritical(primask);
 
-  if ((events & gmac::EventTxComplete) != 0)
-    gmac::reclaimTransmitDescriptors();
+  if ((events & gmac::EventTxComplete) != 0) {
+    const uint8_t reclaimed = gmac::reclaimTransmitDescriptors();
+    const uint32_t reclaimPrimask = enterCritical();
+    eventState.lastReclaimedTransmitDescriptors = reclaimed;
+    exitCritical(reclaimPrimask);
+  }
 
   if ((events & gmac::EventError) != 0)
     events |= recoverHardwareErrors(errorStatus);
@@ -527,6 +532,7 @@ bool gmac::configureFrameBuffers(Descriptor *rxDescriptors,
   frameState.txWriteIndex = 0;
   frameState.txCleanIndex = 0;
   frameState.txQueuedCount = 0;
+  eventState.lastReclaimedTransmitDescriptors = 0;
 
   regs->GMAC_RBQB =
       static_cast<uint32_t>(reinterpret_cast<uintptr_t>(rxDescriptors)) &
@@ -625,6 +631,7 @@ bool gmac::recoverTransmit() {
   frameState.txWriteIndex = 0;
   frameState.txCleanIndex = 0;
   frameState.txQueuedCount = 0;
+  eventState.lastReclaimedTransmitDescriptors = 0;
   regs->GMAC_TBQB = descriptorBase;
   regs->GMAC_TSR = GMAC_TSR_Msk;
   regs->GMAC_NCR &= ~GMAC_NCR_THALT_Msk;
@@ -778,6 +785,14 @@ uint8_t gmac::reclaimTransmitDescriptors() {
     }
   }
 
+  return reclaimed;
+}
+
+uint8_t gmac::lastReclaimedTransmitDescriptors() {
+  const uint32_t primask = enterCritical();
+  const uint8_t reclaimed = eventState.lastReclaimedTransmitDescriptors;
+  eventState.lastReclaimedTransmitDescriptors = 0;
+  exitCritical(primask);
   return reclaimed;
 }
 

@@ -39,7 +39,10 @@ public:
    * The call fails closed when TLS is unavailable, the provider cannot acquire a
    * secure socket, carrier is down, or connection setup fails. Provider-owned
    * secure sockets are released on failure, `stop()`, destruction, and move
-   * assignment through the inherited `EthernetClient` ownership contract.
+   * assignment through the inherited `EthernetClient` ownership contract. A
+   * successful return means the TCP connect was accepted; `pollTls()` starts
+   * the TLS handshake after the provider reports the TCP connection is
+   * established.
    */
   int connect(IPAddress ip, uint16_t port) override;
   int connect(const char *host, uint16_t port) override;
@@ -125,6 +128,10 @@ public:
 
   Crypto::TlsAsyncStatus tlsStatus() const;
   int tlsLastError() const;
+  int tlsLastMbedTlsResult() const;
+  int tlsHandshakeState() const;
+  Crypto::TlsOperation tlsOperation() const;
+  bool tlsHandshakePending() const;
   uint32_t tlsVerificationResult() const;
   bool tlsHandshakeComplete() const;
   /**
@@ -217,6 +224,7 @@ private:
   const char *const *_alpnProtocols;
   uint16_t _tlsOperationPollLimit;
   bool _tlsSessionReuseEnabled;
+  bool _tlsHandshakePending;
   char _hostname[128];
   Crypto::TlsCryptoProvider *_cryptoProvider;
   SocketTlsTransport _tlsTransport;

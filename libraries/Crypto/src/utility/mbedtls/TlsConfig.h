@@ -30,6 +30,7 @@
 #define MBEDTLS_SSL_ALPN
 #define MBEDTLS_SSL_PROTO_TLS1_2
 #define MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
+#define MBEDTLS_ECP_RESTARTABLE
 #define MBEDTLS_X509_CRT_PARSE_C
 #define MBEDTLS_X509_USE_C
 #define MBEDTLS_SSL_IN_CONTENT_LEN 1024
@@ -38,8 +39,10 @@
   MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
 
 /* Mbed TLS 4.x delegates cryptographic feature selection to PSA. Keep the
- * initial SecureClient profile narrow and software-backed unless a SimIO async
- * hardware mapping is exact.
+ * initial SecureClient profile narrow. Built-in software PSA modules are
+ * bring-up scaffolding only for primitives that the SAME5x can perform in async
+ * hardware; final supported paths must be routed through exact SimIO hardware
+ * adapters instead of blocking or software fallback helpers.
  */
 #define MBEDTLS_PSA_CRYPTO_C
 #define MBEDTLS_PSA_CRYPTO_CLIENT

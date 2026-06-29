@@ -113,6 +113,16 @@ public:
   EthernetLwipPort &lwipPort() { return _lwipPort; }
 
   /**
+   * @brief Access the concrete lwIP transport backend for diagnostics.
+   *
+   * This remains below the public Arduino API boundary. It is intended for
+   * focused stack tests and bring-up diagnostics that need backend counters
+   * without exposing lwIP protocol control blocks.
+   */
+  LwipTransportBackend &transportBackend() { return _socketBackend; }
+  const LwipTransportBackend &transportBackend() const { return _socketBackend; }
+
+  /**
    * @brief Return the provider boundary consumed by public TCP/UDP/TLS facades.
    *
    * Callers may pass this explicitly to `EthernetClient`, `EthernetServer`,

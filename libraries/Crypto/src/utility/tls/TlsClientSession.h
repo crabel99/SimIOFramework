@@ -93,7 +93,12 @@ struct TlsClientPolicy {
   TlsCipherSuite cipherSuite = TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256;
 };
 
-constexpr uint16_t DefaultTlsOperationPollLimit = 256;
+constexpr uint16_t DefaultTlsOperationPollLimit = 20000;
+#ifndef SIMIO_TLS_ECC_OPERATION_BUDGET
+#define SIMIO_TLS_ECC_OPERATION_BUDGET 32
+#endif
+constexpr uint32_t DefaultTlsEccOperationBudget =
+    SIMIO_TLS_ECC_OPERATION_BUDGET;
 
 class TlsClientSession {
 public:
@@ -158,7 +163,8 @@ public:
    *
    * Each active handshake/read/write/close-notify operation may consume at most
    * `pollLimit` calls to `poll()`. The limit must be nonzero and can only be
-   * changed while idle. Expired operations fail closed and invoke the pending
+   * changed while idle. Expired operations, including a handshake stalled while
+   * waiting for async crypto readiness, fail closed and invoke the pending
    * operation callback with `TlsAsyncStatus::Error`.
    */
   bool configureOperationPollLimit(uint16_t pollLimit);
@@ -227,6 +233,22 @@ public:
 
   /**
    * @brief Advance one bounded unit of TLS work.
+   *
+   * ECC-heavy handshake phases are bounded with Mbed TLS/PSA interruptable
+   * crypto. When certificate verification, ECDSA verification/signing, or
+   * restartable PSA ECC reaches `DefaultTlsEccOperationBudget`, `poll()`
+   * returns `TlsAsyncStatus::Busy` with `lastMbedTlsResult()` set to
+   * `MBEDTLS_ERR_SSL_CRYPTO_IN_PROGRESS`. Callers must run the surrounding
+   * network/peripheral service loop and call `poll()` again to resume the same
+   * Mbed TLS operation. This is the TLS-level contract that prevents
+   * ECDHE/ECDSA work from monopolizing the cooperative runtime. Boards may
+   * raise `SIMIO_TLS_ECC_OPERATION_BUDGET` to trade longer bounded poll slices
+   * for fewer resumes while keeping TLS progress cooperative.
+   *
+   * This budget is a temporary containment mechanism for Mbed TLS/PSA software
+   * ECC during bring-up. Final SAME5x builds must route exact ECDH/ECDSA
+   * mappings through async PUKCC adapters instead of relying on software ECC
+   * resumes for normal secure-client operation.
    */
   TlsAsyncStatus poll();
 
@@ -238,6 +260,7 @@ public:
   TlsAsyncStatus status() const { return _status; }
   TlsOperation operation() const { return _operation; }
   int lastError() const { return _lastError; }
+  int lastMbedTlsResult() const { return _lastMbedTlsResult; }
   uint32_t verificationResult() const { return _verificationResult; }
   bool configured() const;
   bool handshakeComplete() const { return _handshakeComplete; }
@@ -246,6 +269,7 @@ public:
    */
   bool peerCloseNotified() const { return _peerCloseNotified; }
   size_t bytesTransferred() const { return _bytesTransferred; }
+  int handshakeState() const { return _ssl.MBEDTLS_PRIVATE(state); }
 
 private:
   bool operationActive() const;
@@ -289,6 +313,7 @@ private:
   uint16_t _operationPollLimit;
   uint16_t _operationPollCount;
   int _lastError;
+  int _lastMbedTlsResult;
   uint32_t _verificationResult;
   bool _handshakeComplete;
   bool _cryptoReady;

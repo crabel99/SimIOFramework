@@ -16,8 +16,15 @@
 
 namespace {
 EthernetPhy defaultPhy;
-constexpr uint8_t kRxDescriptorCount = 4;
-constexpr uint8_t kTxDescriptorCount = 1;
+#ifndef SIMIO_ETHERNET_RX_DESCRIPTOR_COUNT
+#define SIMIO_ETHERNET_RX_DESCRIPTOR_COUNT 32
+#endif
+#ifndef SIMIO_ETHERNET_TX_DESCRIPTOR_COUNT
+#define SIMIO_ETHERNET_TX_DESCRIPTOR_COUNT 8
+#endif
+
+constexpr uint8_t kRxDescriptorCount = SIMIO_ETHERNET_RX_DESCRIPTOR_COUNT;
+constexpr uint8_t kTxDescriptorCount = SIMIO_ETHERNET_TX_DESCRIPTOR_COUNT;
 constexpr uint16_t kFrameBufferSize = 1536;
 
 alignas(4) gmac::Descriptor rxDescriptors[kRxDescriptorCount];
@@ -32,7 +39,10 @@ uint8_t rxQueueWriteIndex = 0;
 uint8_t rxQueueCount = 0;
 EthernetClass::FrameReceiveCallback frameReceiveCallback = nullptr;
 void *frameReceiveCallbackContext = nullptr;
-bool txBufferInUse = false;
+bool txSlotInUse[kTxDescriptorCount] = {};
+uint8_t txSlotWriteIndex = 0;
+uint8_t txSlotCleanIndex = 0;
+uint8_t txSlotCount = 0;
 
 uint32_t enterCritical() {
   const uint32_t primask = __get_PRIMASK();
@@ -52,11 +62,40 @@ uint8_t nextQueueIndex(uint8_t index) {
   return index;
 }
 
+uint8_t nextTransmitSlotIndex(uint8_t index) {
+  ++index;
+  if (index >= kTxDescriptorCount)
+    return 0;
+
+  return index;
+}
+
 void clearReceiveQueue() {
   const uint32_t primask = enterCritical();
   rxQueueReadIndex = 0;
   rxQueueWriteIndex = 0;
   rxQueueCount = 0;
+  exitCritical(primask);
+}
+
+void clearTransmitSlots() {
+  const uint32_t primask = enterCritical();
+  for (uint8_t i = 0; i < kTxDescriptorCount; ++i)
+    txSlotInUse[i] = false;
+  txSlotWriteIndex = 0;
+  txSlotCleanIndex = 0;
+  txSlotCount = 0;
+  exitCritical(primask);
+}
+
+void releaseTransmitSlots(uint8_t count) {
+  const uint32_t primask = enterCritical();
+  while (count > 0 && txSlotCount > 0) {
+    txSlotInUse[txSlotCleanIndex] = false;
+    txSlotCleanIndex = nextTransmitSlotIndex(txSlotCleanIndex);
+    --txSlotCount;
+    --count;
+  }
   exitCritical(primask);
 }
 
@@ -214,9 +253,7 @@ bool isUsableMac(const uint8_t mac[6]) {
 
 bool configureEthernetFrameBuffers() {
   clearReceiveQueue();
-  const uint32_t primask = enterCritical();
-  txBufferInUse = false;
-  exitCritical(primask);
+  clearTransmitSlots();
   return gmac::configureFrameBuffers(&rxDescriptors[0], kRxDescriptorCount,
                                      &rxBuffers[0][0], kFrameBufferSize,
                                      &txDescriptors[0], kTxDescriptorCount);
@@ -253,10 +290,7 @@ EthernetClass::~EthernetClass() {
     gmac::disableFrameIo();
     gmac::clearEventCallback();
     clearReceiveQueue();
-
-    const uint32_t primask = enterCritical();
-    txBufferInUse = false;
-    exitCritical(primask);
+    clearTransmitSlots();
 
     _begun = false;
   }
@@ -416,9 +450,10 @@ void EthernetClass::handleGmacEvents(gmac::EventMask events) {
     clearReceiveQueue();
 
   if ((events & (gmac::EventTxComplete | gmac::EventTxRecovered)) != 0) {
-    const uint32_t primask = enterCritical();
-    txBufferInUse = false;
-    exitCritical(primask);
+    if ((events & gmac::EventTxRecovered) != 0)
+      clearTransmitSlots();
+    else
+      releaseTransmitSlots(gmac::lastReclaimedTransmitDescriptors());
   }
 
   if ((events & gmac::EventManagementComplete) != 0)
@@ -451,17 +486,22 @@ bool EthernetClass::writeFrame(const uint8_t *buffer, uint16_t length) {
     return false;
 
   uint32_t primask = enterCritical();
-  if (txBufferInUse) {
+  if (txSlotCount >= kTxDescriptorCount) {
     exitCritical(primask);
     return false;
   }
-  txBufferInUse = true;
+  const uint8_t slot = txSlotWriteIndex;
+  txSlotInUse[slot] = true;
+  txSlotWriteIndex = nextTransmitSlotIndex(txSlotWriteIndex);
+  ++txSlotCount;
   exitCritical(primask);
 
-  memcpy(&txBuffers[0][0], buffer, length);
-  if (!gmac::queueTransmitBuffer(&txBuffers[0][0], length)) {
+  memcpy(&txBuffers[slot][0], buffer, length);
+  if (!gmac::queueTransmitBuffer(&txBuffers[slot][0], length)) {
     primask = enterCritical();
-    txBufferInUse = false;
+    txSlotInUse[slot] = false;
+    txSlotWriteIndex = slot;
+    --txSlotCount;
     exitCritical(primask);
     return false;
   }

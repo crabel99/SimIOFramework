@@ -24,6 +24,23 @@ class LwipTransportBackend : public LwipTcpSocketBackend,
 public:
   struct TcpHandle;
   struct UdpState;
+  struct TcpDiagnostics {
+    uint32_t receiveCallbacks = 0;
+    size_t totalReceived = 0;
+    size_t totalDelivered = 0;
+    size_t droppedBytes = 0;
+    size_t lastReceiveLength = 0;
+    size_t bufferedBytes = 0;
+    uint32_t writeCalls = 0;
+    size_t totalWriteRequested = 0;
+    size_t totalWriteAccepted = 0;
+    size_t writeRejectedBytes = 0;
+    size_t lastWriteRequested = 0;
+    size_t lastWriteAccepted = 0;
+    size_t lastSendBuffer = 0;
+    int lastTcpWriteError = 0;
+    int lastTcpOutputError = 0;
+  };
 
   LwipTransportBackend();
   ~LwipTransportBackend() override;
@@ -53,6 +70,15 @@ public:
                      size_t size) override;
 
   bool carrierUp(void *handle) const override;
+
+  /**
+   * @brief Return receive-path diagnostics for the secure TCP slot.
+   *
+   * This is an internal bring-up/testing aid. It reports provider-owned TCP
+   * staging-buffer behavior without exposing lwIP PCB objects or changing the
+   * public Arduino `SecureClient` API contract.
+   */
+  TcpDiagnostics secureTcpDiagnostics() const;
 
   /**
    * @brief Start a bounded TCP connect attempt.
@@ -111,5 +137,6 @@ private:
 
   TcpHandle *asTcpHandle(void *handle) const;
   void closeTcpHandle(TcpHandle *handle);
+  TcpDiagnostics diagnosticsFor(const TcpHandle *handle) const;
   size_t writeServerToAccepted(const uint8_t *buffer, size_t size);
 };

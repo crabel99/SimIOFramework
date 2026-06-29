@@ -55,6 +55,12 @@ bool alpnListSupported(const char *const *protocols) {
   return false;
 }
 
+void configureInterruptableCryptoBudget() {
+#if defined(MBEDTLS_ECP_RESTARTABLE)
+  psa_interruptible_set_max_ops(DefaultTlsEccOperationBudget);
+#endif
+}
+
 class ExternalRandomProviderGuard {
 public:
   explicit ExternalRandomProviderGuard(TlsCryptoProvider *provider)
@@ -77,13 +83,11 @@ private:
 TlsClientSession::TlsClientSession()
     : _transport(nullptr), _cryptoProvider(nullptr), _trustAnchors(nullptr),
       _trustAnchorLength(0), _hostname(nullptr), _alpnProtocols(nullptr),
-      _policy(),
-      _status(TlsAsyncStatus::Idle), _operation(TlsOperation::None),
-      _callback(nullptr),
-      _callbackContext(nullptr), _readBuffer(nullptr), _writeBuffer(nullptr),
-      _requestedLength(0), _bytesTransferred(0),
-      _operationPollLimit(DefaultTlsOperationPollLimit),
-      _operationPollCount(0), _lastError(0), _verificationResult(0),
+      _policy(), _status(TlsAsyncStatus::Idle), _operation(TlsOperation::None),
+      _callback(nullptr), _callbackContext(nullptr), _readBuffer(nullptr),
+      _writeBuffer(nullptr), _requestedLength(0), _bytesTransferred(0),
+      _operationPollLimit(DefaultTlsOperationPollLimit), _operationPollCount(0),
+      _lastError(0), _lastMbedTlsResult(0), _verificationResult(0),
       _handshakeComplete(false), _cryptoReady(false), _cryptoFailed(false),
       _tlsConfigured(false), _peerCloseNotified(false),
       _clientIdentityConfigured(false), _sessionReuseEnabled(false),
@@ -324,16 +328,20 @@ TlsAsyncStatus TlsClientSession::closeNotifyAsync(Callback callback,
 TlsAsyncStatus TlsClientSession::poll() {
   if (_transport == nullptr)
     return fail(TlsErrorTransportUnavailable);
-  if (operationActive()) {
+
+  auto consumeOperationPoll = [this]() -> bool {
     if (_operationPollCount >= _operationPollLimit)
-      return fail(TlsErrorOperationDeadlineExceeded);
+      return false;
     ++_operationPollCount;
-  }
+    return true;
+  };
 
   switch (_operation) {
   case TlsOperation::Handshake:
     if (!_transport->carrierUp() || _transport->connected() == 0)
       return fail(TlsErrorTransportDisconnected);
+    if (!consumeOperationPoll())
+      return fail(TlsErrorOperationDeadlineExceeded);
     if (_cryptoFailed)
       return fail(TlsErrorCryptoFailed);
     if (!_cryptoReady) {
@@ -344,10 +352,16 @@ TlsAsyncStatus TlsClientSession::poll() {
       return fail(TlsErrorMbedTlsSetupFailed);
     return pollHandshake();
   case TlsOperation::Read:
+    if (!consumeOperationPoll())
+      return fail(TlsErrorOperationDeadlineExceeded);
     return pollRead();
   case TlsOperation::Write:
+    if (!consumeOperationPoll())
+      return fail(TlsErrorOperationDeadlineExceeded);
     return pollWrite();
   case TlsOperation::CloseNotify:
+    if (!consumeOperationPoll())
+      return fail(TlsErrorOperationDeadlineExceeded);
     return pollCloseNotify();
   case TlsOperation::None:
   default:
@@ -364,6 +378,7 @@ void TlsClientSession::abort() {
   _writeBuffer = nullptr;
   _requestedLength = 0;
   _bytesTransferred = 0;
+  _lastMbedTlsResult = 0;
   _handshakeComplete = false;
   _cryptoReady = false;
   _cryptoFailed = false;
@@ -397,6 +412,7 @@ bool TlsClientSession::startOperation(TlsOperation operation, Callback callback,
   _bytesTransferred = 0;
   _operationPollCount = 0;
   _lastError = 0;
+  _lastMbedTlsResult = 0;
   _status = TlsAsyncStatus::Busy;
   if (operation == TlsOperation::Handshake)
     _peerCloseNotified = false;
@@ -436,6 +452,10 @@ bool TlsClientSession::prepareMbedTlsSession() {
   mbedtls_ssl_conf_min_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
   mbedtls_ssl_conf_max_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
   mbedtls_ssl_conf_ciphersuites(&_sslConfig, StrictTls12CipherSuites);
+#if defined(MBEDTLS_SSL_SESSION_TICKETS)
+  mbedtls_ssl_conf_session_tickets(&_sslConfig,
+                                   MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
+#endif
   mbedtls_ssl_conf_ca_chain(&_sslConfig, &_caChain, nullptr);
   if (_alpnProtocols != nullptr) {
     result = mbedtls_ssl_conf_alpn_protocols(&_sslConfig, _alpnProtocols);
@@ -494,7 +514,13 @@ TlsAsyncStatus TlsClientSession::pollHandshake() {
   if (!randomGuard.active())
     return fail(TlsErrorCryptoUnavailable);
 
-  const int result = mbedtls_ssl_handshake(&_ssl);
+  configureInterruptableCryptoBudget();
+  const int result = mbedtls_ssl_handshake_step(&_ssl);
+  _lastMbedTlsResult = result;
+  if (result == 0 && !mbedtls_ssl_is_handshake_over(&_ssl)) {
+    _status = TlsAsyncStatus::Busy;
+    return _status;
+  }
   if (result == 0) {
     _verificationResult = mbedtls_ssl_get_verify_result(&_ssl);
     _handshakeComplete = true;
@@ -520,7 +546,9 @@ TlsAsyncStatus TlsClientSession::pollRead() {
   if (!randomGuard.active())
     return fail(TlsErrorCryptoUnavailable);
 
+  configureInterruptableCryptoBudget();
   const int result = mbedtls_ssl_read(&_ssl, _readBuffer, _requestedLength);
+  _lastMbedTlsResult = result;
   if (result > 0) {
     _bytesTransferred = static_cast<size_t>(result);
     return finish(TlsAsyncStatus::Complete);
@@ -543,7 +571,9 @@ TlsAsyncStatus TlsClientSession::pollWrite() {
   if (!randomGuard.active())
     return fail(TlsErrorCryptoUnavailable);
 
+  configureInterruptableCryptoBudget();
   const int result = mbedtls_ssl_write(&_ssl, _writeBuffer, _requestedLength);
+  _lastMbedTlsResult = result;
   if (result > 0) {
     _bytesTransferred = static_cast<size_t>(result);
     return finish(TlsAsyncStatus::Complete);
@@ -557,7 +587,9 @@ TlsAsyncStatus TlsClientSession::pollCloseNotify() {
   if (!randomGuard.active())
     return fail(TlsErrorCryptoUnavailable);
 
+  configureInterruptableCryptoBudget();
   const int result = mbedtls_ssl_close_notify(&_ssl);
+  _lastMbedTlsResult = result;
   if (result == MBEDTLS_ERR_SSL_WANT_READ ||
       result == MBEDTLS_ERR_SSL_WANT_WRITE) {
     return handleMbedTlsResult(result);
@@ -586,6 +618,12 @@ TlsAsyncStatus TlsClientSession::handleMbedTlsResult(int result) {
     _status = TlsAsyncStatus::WantWrite;
     return _status;
   }
+#if defined(MBEDTLS_ECP_RESTARTABLE)
+  if (result == MBEDTLS_ERR_SSL_CRYPTO_IN_PROGRESS) {
+    _status = TlsAsyncStatus::Busy;
+    return _status;
+  }
+#endif
   if (result == MBEDTLS_ERR_NET_CONN_RESET)
     return fail(TlsErrorTransportDisconnected);
 
