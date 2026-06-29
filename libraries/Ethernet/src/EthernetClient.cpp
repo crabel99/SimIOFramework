@@ -112,29 +112,28 @@ size_t EthernetClient::write(const uint8_t *buffer, size_t size) {
 }
 
 int EthernetClient::available() {
-  if (_socket == nullptr || !_socket->connected())
+  if (_socket == nullptr)
     return 0;
 
   return _socket->available();
 }
 
 int EthernetClient::read() {
-  if (_socket == nullptr || !_socket->connected())
+  if (_socket == nullptr)
     return -1;
 
   return _socket->read();
 }
 
 int EthernetClient::read(uint8_t *buffer, size_t size) {
-  if (_socket == nullptr || buffer == nullptr || size == 0 ||
-      !_socket->connected())
+  if (_socket == nullptr || buffer == nullptr || size == 0)
     return 0;
 
   return _socket->read(buffer, size);
 }
 
 int EthernetClient::peek() {
-  if (_socket == nullptr || !_socket->connected())
+  if (_socket == nullptr)
     return -1;
 
   return _socket->peek();

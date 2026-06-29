@@ -58,7 +58,11 @@ public:
   int connect(const char *host, uint16_t port) override;
 
   /**
-   * @brief Delegate stream operations only while the socket reports connected.
+   * @brief Delegate stream operations through the attached socket.
+   *
+   * Writes fail closed unless the socket reports connected. Reads, peek, and
+   * available still delegate after remote close so bytes already accepted by
+   * the backend can be drained before the public client is stopped/released.
    */
   size_t write(uint8_t value) override;
   size_t write(const uint8_t *buffer, size_t size) override;
