@@ -51,7 +51,9 @@ bool registerTrngCallback(TrngCallback callback, void *context) {
 
 void clearTrngCallback() { trng::clearEventCallback(); }
 
-bool randomWordAsync() { return hasTRNG() && trng::requestWordAsync(); }
+bool randomWordAsync(bool stopAfterWord) {
+  return hasTRNG() && trng::requestWordAsync(false, stopAfterWord);
+}
 
 bool registerPukccCallback(PukccCallback callback, void *context) {
   return hasPUKCC() && pukcc::registerEventCallback(callback, context);

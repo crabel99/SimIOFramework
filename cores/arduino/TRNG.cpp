@@ -24,6 +24,7 @@ struct AsyncState {
   uint32_t pendingValue = 0;
   bool serviceRegistered = false;
   bool busy = false;
+  bool stopAfterWord = true;
 };
 
 AsyncState asyncState;
@@ -36,6 +37,7 @@ void trngPendSvService(uint8_t serviceId, void *context) {
   void *callbackContext = nullptr;
   uint8_t flags = 0;
   uint32_t value = 0;
+  bool stopAfterWord = true;
 
   const uint32_t primask = enterCritical();
   flags = asyncState.pendingFlags;
@@ -44,9 +46,12 @@ void trngPendSvService(uint8_t serviceId, void *context) {
   callback = asyncState.callback;
   callbackContext = asyncState.callbackContext;
   asyncState.busy = false;
+  stopAfterWord = asyncState.stopAfterWord;
+  asyncState.stopAfterWord = true;
   exitCritical(primask);
 
-  trng::end();
+  if (stopAfterWord)
+    trng::end();
 
   trng::EventMask events = trng::EventNone;
   if ((flags & trng::DataReadyInterrupt) != 0u)
@@ -157,12 +162,13 @@ void trng::clearEventCallback() {
   asyncState.pendingFlags = 0;
   asyncState.pendingValue = 0;
   asyncState.busy = false;
+  asyncState.stopAfterWord = true;
   exitCritical(primask);
   PendSV::instance().clearService(pendSvServiceId());
   asyncState.serviceRegistered = false;
 }
 
-bool trng::requestWordAsync(bool runStandby) {
+bool trng::requestWordAsync(bool runStandby, bool stopAfterWord) {
   if (!ensurePendSvServiceRegistered())
     return false;
 
@@ -172,12 +178,15 @@ bool trng::requestWordAsync(bool runStandby) {
     return false;
   }
   asyncState.busy = true;
+  asyncState.stopAfterWord = stopAfterWord;
   asyncState.pendingFlags = 0;
   asyncState.pendingValue = 0;
   exitCritical(primask);
 
-  begin(runStandby);
-  clearInterruptFlags(DataReadyInterrupt);
+  enableClock();
+  const bool alreadyEnabled = enabled();
+  if (!alreadyEnabled)
+    begin(runStandby);
   enableInterrupts(DataReadyInterrupt);
   NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
   NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));

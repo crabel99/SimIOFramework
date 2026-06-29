@@ -348,6 +348,7 @@ void clearEntropyRequest(EntropyContext &context) {
 
 void finishEntropy(EntropyContext &context, bool success) {
   context.busy = false;
+  trng::end();
   Crypto::clearTrngCallback();
   if (context.callback != nullptr)
     context.callback(success, context, context.callbackContext);
@@ -384,7 +385,7 @@ void entropyTrngCallback(trng::EventMask events, uint32_t value, void *context) 
     return;
   }
 
-  if (!Crypto::randomWordAsync())
+  if (!Crypto::randomWordAsync(false))
     finishEntropy(*entropyContext, false);
 }
 
@@ -697,7 +698,8 @@ bool entropyRequestAsync(EntropyContext &context, uint8_t *buffer,
   context.busy = true;
 
   if (!Crypto::registerTrngCallback(entropyTrngCallback, &context) ||
-      !Crypto::randomWordAsync()) {
+      !Crypto::randomWordAsync(false)) {
+    trng::end();
     clearEntropyRequest(context);
     Crypto::clearTrngCallback();
     return false;

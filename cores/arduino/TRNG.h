@@ -28,6 +28,13 @@
  * consumer-side buffering; higher layers must call `begin()` before requesting
  * data and must handle `read()` returning false when the hardware has not
  * produced a word yet.
+ *
+ * Per the SAME5x datasheet, TRNG has no enable synchronization step. Once
+ * enabled, it produces a 32-bit word every 84 CLK_TRNG_APB cycles and sets
+ * INTFLAG.DATARDY when DATA is valid. DATA reset contents are undefined, so
+ * callers must treat DATARDY as the validity contract. Reading DATA clears
+ * DATARDY; there is no software entropy conditioning, startup discard, or DRBG
+ * policy in this peripheral wrapper.
  */
 class trng {
 public:
@@ -82,11 +89,14 @@ public:
    * @brief Request one random word without blocking.
    *
    * Starts TRNG generation and enables DATARDY interrupt. The callback receives
-   * the word from PendSV context and the peripheral is stopped before callback
-   * dispatch. Returns false when no callback is registered or a request is
-   * already active.
+   * the word from PendSV context. By default the peripheral is stopped before
+   * callback dispatch; callers collecting multiple consecutive entropy words
+   * may pass `stopAfterWord = false` and then either submit the next request
+   * from the callback or explicitly stop the peripheral when collection is done.
+   * Returns false when no callback is registered or a request is already active.
    */
-  static bool requestWordAsync(bool runStandby = false);
+  static bool requestWordAsync(bool runStandby = false,
+                               bool stopAfterWord = true);
   /** @brief Return true while one async TRNG request is outstanding. */
   static bool asyncBusy();
   /** @brief Capture DATARDY IRQ state and schedule PendSV callback dispatch. */

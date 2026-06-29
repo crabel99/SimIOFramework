@@ -48,7 +48,7 @@ bool galoisMultiplyAsync(const uint32_t hashKey[4], const uint32_t input[4],
 
 bool registerTrngCallback(TrngCallback callback, void *context = nullptr);
 void clearTrngCallback();
-bool randomWordAsync();
+bool randomWordAsync(bool stopAfterWord = true);
 
 bool registerPukccCallback(PukccCallback callback, void *context = nullptr);
 void clearPukccCallback();
