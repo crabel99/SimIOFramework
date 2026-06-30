@@ -28,14 +28,22 @@ enum class NetworkTimeClientError : uint8_t {
   ClockRejected = 11,
 };
 
+enum class NetworkTimeAuthentication : uint8_t {
+  None = 0,
+  AuthenticatedSource = 1,
+};
+
 /**
  * @brief Bounded SNTP client that applies received time through NetworkClock.
  *
  * The client sends one UDP SNTP request and returns immediately. Call `poll()`
  * from the network service loop until it returns `Updated` or `Failed`.
- * The caller selects whether an accepted response is manual/provisional or
- * trusted; `NetworkClock` enforces that manual time cannot overwrite trusted
- * time after promotion.
+ * Plain SNTP/NTP may only establish manual/provisional time. Trusted promotion
+ * requires `NetworkTimeAuthentication::AuthenticatedSource`, which is a marker
+ * that the caller has constrained and authenticated the time source through a
+ * product policy such as a pinned HTTPS endpoint, NTS bootstrap, signed
+ * response, or provisioning channel. `NetworkClock` still enforces that manual
+ * time cannot overwrite trusted time after promotion.
  */
 class NetworkTimeClient {
 public:
@@ -47,7 +55,16 @@ public:
 
   bool beginRequest(IPAddress server, uint16_t serverPort = DefaultServerPort,
                     NetworkTimeState state = NetworkTimeState::Manual,
-                    uint16_t localPort = DefaultLocalPort);
+                    uint16_t localPort = DefaultLocalPort,
+                    NetworkTimeAuthentication authentication =
+                        NetworkTimeAuthentication::None);
+  bool beginAuthenticatedRequest(IPAddress server,
+                                 uint16_t serverPort = DefaultServerPort,
+                                 uint16_t localPort = DefaultLocalPort) {
+    return beginRequest(server, serverPort, NetworkTimeState::Trusted,
+                        localPort,
+                        NetworkTimeAuthentication::AuthenticatedSource);
+  }
   NetworkTimeClientStatus poll();
   void stop();
 

@@ -24,13 +24,19 @@ NetworkTimeClient::NetworkTimeClient(TransportProvider &provider,
 
 bool NetworkTimeClient::beginRequest(IPAddress server, uint16_t serverPort,
                                      NetworkTimeState state,
-                                     uint16_t localPort) {
+                                     uint16_t localPort,
+                                     NetworkTimeAuthentication authentication) {
   if (active()) {
     _lastError = NetworkTimeClientError::Busy;
     return false;
   }
   if (server == IPAddress() || serverPort == 0 ||
       state == NetworkTimeState::Unset) {
+    _lastError = NetworkTimeClientError::InvalidArgument;
+    return false;
+  }
+  if (state == NetworkTimeState::Trusted &&
+      authentication != NetworkTimeAuthentication::AuthenticatedSource) {
     _lastError = NetworkTimeClientError::InvalidArgument;
     return false;
   }
