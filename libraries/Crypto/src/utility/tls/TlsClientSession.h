@@ -39,12 +39,11 @@ using TlsAesGcm128Callback = void (*)(bool success, void *context);
  * progress can run. They must return immediately from `beginHandshakeCrypto()`
  * and later report completion through the callback. The callback only marks
  * readiness; TLS protocol progress still happens from `TlsClientSession::poll()`.
- * New operation code should request randomness with `randomBytesAsync()` so
- * the hardware TRNG writes directly into operation-owned sensitive buffers.
- * The synchronous `generateRandom()` API exists only for compatibility with
- * legacy Mbed TLS callback points that cannot yield; it must consume only
- * already-prepared bytes and must never start entropy collection or block
- * waiting for hardware.
+ * New operation code must request randomness with `randomBytesAsync()` so the
+ * hardware TRNG writes directly into operation-owned sensitive buffers. The
+ * synchronous `generateRandom()` compatibility hook exists only in
+ * `SIMIO_MBEDTLS_TEST_SYNC_COMPAT` builds for legacy Mbed TLS callback tests;
+ * production builds do not expose that fallback path.
  */
 class TlsCryptoProvider {
 public:
@@ -54,7 +53,9 @@ public:
                                     void *context) = 0;
   virtual void reset() = 0;
   virtual bool ready() const = 0;
+#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
   virtual bool generateRandom(uint8_t *buffer, size_t length) = 0;
+#endif
 
   /**
    * @brief Fill an operation-owned sensitive buffer from async hardware random.
@@ -90,6 +91,25 @@ public:
     (void)privateScalar;
     (void)peerPublicKey;
     (void)sharedSecret;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async P-256 public-key derivation.
+   *
+   * `privateScalar` is the local 32-byte big-endian scalar. `publicKey`
+   * receives the TLS uncompressed form: 0x04 || X || Y. The default
+   * implementation fails closed for providers without a hardware scalar
+   * multiply backend.
+   */
+  virtual bool ecdhP256PublicKeyAsync(const uint8_t privateScalar[32],
+                                      uint8_t publicKey[65],
+                                      TlsEcdhP256Callback callback,
+                                      void *context) {
+    (void)privateScalar;
+    (void)publicKey;
     (void)callback;
     (void)context;
     return false;
@@ -374,8 +394,9 @@ public:
   /**
    * @brief Bind the async crypto provider used before TLS handshake progress.
    *
-   * A production provider owns the Mbed TLS DRBG/session crypto setup. Tests may
-   * inject a mock provider to verify state-machine behavior without hardware.
+   * A production provider owns TLS crypto readiness and direct async primitive
+   * dispatch. Tests may inject a mock provider to verify state-machine behavior
+   * without hardware.
    */
   bool bindCryptoProvider(TlsCryptoProvider &provider);
 
@@ -420,9 +441,8 @@ public:
    *
    * The call validates configuration and stores callback state only. `poll()`
    * reports `WaitingCrypto` until the bound `TlsCryptoProvider` has completed
-   * async seed/DRBG readiness, then advances one bounded Mbed TLS handshake
-   * step per call and reports `WantRead`/`WantWrite` when the transport cannot
-   * progress.
+   * readiness, then advances one bounded Mbed TLS handshake step per call and
+   * reports `WantRead`/`WantWrite` when the transport cannot progress.
    */
   TlsAsyncStatus handshakeAsync(Callback callback, void *context = nullptr);
 

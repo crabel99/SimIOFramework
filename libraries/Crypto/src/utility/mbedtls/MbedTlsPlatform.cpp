@@ -35,12 +35,14 @@ void clearExternalRandomProvider(Crypto::TlsCryptoProvider *provider) {
     externalRandomProvider = nullptr;
 }
 
+#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
 bool generateExternalRandom(uint8_t *buffer, size_t length) {
   if (externalRandomProvider == nullptr || buffer == nullptr || length == 0)
     return false;
 
   return externalRandomProvider->generateRandom(buffer, length);
 }
+#endif
 } // namespace Crypto::MbedTlsPort
 
 extern "C" {
@@ -53,6 +55,50 @@ static void simio_mbedtls_zeroize(void *buffer, size_t length) {
   volatile uint8_t *bytes = static_cast<volatile uint8_t *>(buffer);
   while (length-- > 0u)
     *bytes++ = 0u;
+}
+
+int simio_mbedtls_random_start(uint8_t *buffer, size_t length,
+                               simio_mbedtls_async_callback_t callback,
+                               void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      buffer == nullptr || length == 0 || callback == nullptr) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    simio_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->randomBytesAsync(
+          buffer, length,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            simio_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
 }
 
 int simio_mbedtls_ecdh_p256_start(const uint8_t privateScalar[32],
@@ -81,6 +127,50 @@ int simio_mbedtls_ecdh_p256_start(const uint8_t privateScalar[32],
   const bool submitted =
       Crypto::MbedTlsPort::externalRandomProvider->ecdhP256SharedSecretAsync(
           privateScalar, peerPublicKey, sharedSecret,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            simio_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
+int simio_mbedtls_ecdh_p256_public_key_start(
+    const uint8_t privateScalar[32], uint8_t publicKey[65],
+    simio_mbedtls_async_callback_t callback, void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      privateScalar == nullptr || publicKey == nullptr || callback == nullptr) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    simio_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->ecdhP256PublicKeyAsync(
+          privateScalar, publicKey,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
             simio_mbedtls_async_callback_t completed =
@@ -388,9 +478,15 @@ extern "C" psa_status_t mbedtls_psa_external_get_random(
   if (output == nullptr || outputLength == nullptr || outputSize == 0)
     return PSA_ERROR_INVALID_ARGUMENT;
 
+#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
   if (!Crypto::MbedTlsPort::generateExternalRandom(output, outputSize))
     return PSA_ERROR_INSUFFICIENT_ENTROPY;
 
   *outputLength = outputSize;
   return PSA_SUCCESS;
+#else
+  (void)output;
+  (void)outputSize;
+  return PSA_ERROR_INSUFFICIENT_ENTROPY;
+#endif
 }

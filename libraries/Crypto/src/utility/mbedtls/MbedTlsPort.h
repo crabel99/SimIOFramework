@@ -10,7 +10,6 @@
 #include <utility/pukcc/PukccEcc.h>
 #endif
 #include <mbedtls/build_info.h>
-#include <mbedtls/private/ctr_drbg.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -153,136 +152,22 @@ bool entropySetCallback(EntropyContext &context, EntropyCallback callback,
 bool entropyRequestAsync(EntropyContext &context, uint8_t *buffer,
                          size_t length);
 
-struct RandomContext;
-
-using RandomCallback =
-    void (*)(bool success, RandomContext &context, void *user);
-
-/**
- * @brief Async random-byte prefetch context for TLS consumers.
- *
- * This is not a replacement for Mbed TLS DRBG policy. It is the async boundary
- * that keeps the future DRBG/TLS state machine from blocking inside an RNG
- * callback. Callers prefetch entropy-backed bytes, receive callback completion,
- * and then consume available bytes with `randomRead()`. The pool is sensitive
- * material: consumed bytes are zeroized immediately, failed fills zeroize the
- * pool, and `randomFree()` clears any unconsumed bytes. Callers own zeroizing
- * their destination buffers after use.
- */
-struct RandomContext {
-  static constexpr size_t PoolSize = 128;
-
-  EntropyContext entropy = {};
-  uint8_t pool[PoolSize] = {};
-  size_t availableLength = 0;
-  size_t readOffset = 0;
-  bool busy = false;
-  RandomCallback callback = nullptr;
-  void *callbackContext = nullptr;
-};
-
-void randomInit(RandomContext &context);
-void randomFree(RandomContext &context);
-bool randomSetCallback(RandomContext &context, RandomCallback callback,
-                       void *callbackContext = nullptr);
-bool randomPrefetchAsync(RandomContext &context, size_t length);
-size_t randomAvailable(const RandomContext &context);
-bool randomRead(RandomContext &context, uint8_t *buffer, size_t length);
-
-struct DrbgSeedContext;
-
-using DrbgSeedCallback =
-    void (*)(bool success, DrbgSeedContext &context, void *user);
-
-/**
- * @brief Async seed-material context for Mbed TLS DRBG setup.
- *
- * This context does not implement a DRBG. It gathers entropy-backed seed
- * material asynchronously so the later Mbed TLS CTR_DRBG seed step can run from
- * already-available bytes. If the seed material is not ready, the TLS state
- * machine must report WaitingCrypto instead of calling a blocking entropy
- * callback.
- */
-struct DrbgSeedContext {
-  static constexpr size_t SeedSize = 48;
-
-  RandomContext random = {};
-  uint8_t seed[SeedSize] = {};
-  bool ready = false;
-  bool busy = false;
-  DrbgSeedCallback callback = nullptr;
-  void *callbackContext = nullptr;
-};
-
-void drbgSeedInit(DrbgSeedContext &context);
-void drbgSeedFree(DrbgSeedContext &context);
-bool drbgSeedSetCallback(DrbgSeedContext &context, DrbgSeedCallback callback,
-                         void *callbackContext = nullptr);
-bool drbgSeedAsync(DrbgSeedContext &context);
-bool drbgSeedRead(DrbgSeedContext &context, uint8_t *buffer, size_t length);
-
-struct CtrDrbgContext;
-
-using CtrDrbgCallback =
-    void (*)(bool success, CtrDrbgContext &context, void *user);
-
-/**
- * @brief Async-safe Mbed TLS CTR_DRBG wrapper.
- *
- * The underlying CTR_DRBG implementation is Mbed TLS. This wrapper only
- * controls when Mbed TLS is allowed to run: instantiation first collects seed
- * material through `DrbgSeedContext`, then calls Mbed TLS with a non-blocking
- * entropy callback that copies already-ready bytes. Random generation is
- * fail-fast and bounded; it never waits on TRNG or hardware completion.
- *
- * This is a bring-up boundary, not final hardware acceleration. Entropy
- * collection is async TRNG-backed, but the CTR_DRBG block computations still
- * execute inside Mbed TLS software until an exact async AES-backed DRBG path is
- * added and tested.
- */
-struct CtrDrbgContext {
-  static constexpr size_t MaxPersonalizationSize = 64;
-
-  DrbgSeedContext seed = {};
-  mbedtls_ctr_drbg_context drbg = {};
-  uint8_t seedMaterial[DrbgSeedContext::SeedSize] = {};
-  uint8_t personalization[MaxPersonalizationSize] = {};
-  size_t seedReadOffset = 0;
-  size_t personalizationLength = 0;
-  bool initialized = false;
-  bool busy = false;
-  CtrDrbgCallback callback = nullptr;
-  void *callbackContext = nullptr;
-};
-
-void ctrDrbgInit(CtrDrbgContext &context);
-void ctrDrbgFree(CtrDrbgContext &context);
-bool ctrDrbgSetCallback(CtrDrbgContext &context, CtrDrbgCallback callback,
-                        void *callbackContext = nullptr);
-bool ctrDrbgInstantiateAsync(CtrDrbgContext &context,
-                             const uint8_t *personalization = nullptr,
-                             size_t personalizationLength = 0);
-bool ctrDrbgInstantiateFromSeedAsync(CtrDrbgContext &context,
-                                     const uint8_t *seedMaterial,
-                                     size_t seedLength,
-                                     const uint8_t *personalization = nullptr,
-                                     size_t personalizationLength = 0);
-bool ctrDrbgReady(const CtrDrbgContext &context);
-bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length);
-
 bool setExternalRandomProvider(Crypto::TlsCryptoProvider *provider);
 void clearExternalRandomProvider(Crypto::TlsCryptoProvider *provider);
+#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
 bool generateExternalRandom(uint8_t *buffer, size_t length);
+#endif
 
 /**
  * @brief Production TLS crypto-readiness provider backed by async hardware.
  *
  * `randomBytesAsync()` is the production random contract: it fills
  * operation-owned buffers directly from TRNG callback completions without a
- * reusable provider pool. Starting handshake crypto still submits a bounded
- * TRNG-backed prefetch only for legacy Mbed TLS callback points that cannot
- * yield. `generateRandom()` consumes that transitional pool and fails closed
- * when it is exhausted; it never calls a software DRBG or waits for entropy.
+ * reusable provider pool. The concrete hardware provider never prefetches TRNG
+ * bytes for handshake readiness and never services synchronous random requests;
+ * those fail closed. Test builds may enable `SIMIO_MBEDTLS_TEST_SYNC_COMPAT`
+ * so native mock providers can exercise legacy Mbed TLS callback points, but
+ * that compatibility path is not implemented by this hardware provider.
  * TLS protocol state remains owned by `TlsClientSession`; this provider only
  * owns RNG/crypto readiness.
  *
@@ -301,7 +186,9 @@ public:
                             void *context) override;
   void reset() override;
   bool ready() const override;
+#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
   bool generateRandom(uint8_t *buffer, size_t length) override;
+#endif
   bool randomBytesAsync(uint8_t *buffer, size_t length,
                         Crypto::TlsRandomCallback callback,
                         void *context) override;
@@ -310,6 +197,10 @@ public:
                                  uint8_t sharedSecret[32],
                                  Crypto::TlsEcdhP256Callback callback,
                                  void *context) override;
+  bool ecdhP256PublicKeyAsync(const uint8_t privateScalar[32],
+                              uint8_t publicKey[65],
+                              Crypto::TlsEcdhP256Callback callback,
+                              void *context) override;
   bool ecdsaP256SignAsync(const uint8_t privateKey[32],
                           const uint8_t nonceScalar[32],
                           const uint8_t hash[32], uint8_t signature[64],
@@ -351,12 +242,14 @@ private:
   };
 #endif
 
-  static void handleRandomReady(bool success, RandomContext &context,
-                                void *user);
   static void handleDirectRandomReady(bool success, EntropyContext &context,
                                       void *user);
   void finishDirectRandom(bool success);
 #ifdef CRYPTO_HARDWARE_AVAILABLE
+  bool submitEcdhPublicKeyStep();
+  static void handleEcdhPublicKeyService(pukcc::EventMask events,
+                                         uint8_t service, uint16_t status,
+                                         void *user);
   static void handleEcdhComplete(bool success, pukcc::ServiceResult &result,
                                  Crypto::PukccEcc::EcdhSharedSecretOperation
                                      &operation,
@@ -378,7 +271,6 @@ private:
                                 void *user);
   void finishGcm(bool success);
 
-  RandomContext _random;
   EntropyContext _directRandom;
   Crypto::TlsRandomCallback _directRandomCallback;
   void *_directRandomCallbackContext;
@@ -392,6 +284,7 @@ private:
 #ifdef CRYPTO_HARDWARE_AVAILABLE
   Crypto::PukccEcc::EcdhSharedSecretOperation _ecdhOperation;
   uint8_t *_ecdhSharedSecret;
+  uint8_t *_ecdhPublicKey;
   Crypto::TlsEcdhP256Callback _ecdhCallback;
   void *_ecdhCallbackContext;
   bool _ecdhBusy;

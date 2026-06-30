@@ -2,6 +2,8 @@
 
 #include <mbedtls/platform_util.h>
 
+#include <string.h>
+
 namespace Crypto::MbedTlsPort {
 
 namespace {
@@ -414,98 +416,6 @@ void entropyTrngCallback(trng::EventMask events, uint32_t value, void *context) 
     finishEntropy(*entropyContext, false);
 }
 
-void randomEntropyCallback(bool success, EntropyContext &entropy, void *context) {
-  auto *randomContext = static_cast<RandomContext *>(context);
-  if (randomContext == nullptr || !randomContext->busy)
-    return;
-
-  randomContext->busy = false;
-  randomContext->readOffset = 0;
-  randomContext->availableLength = success ? entropy.producedLength : 0;
-  if (!success)
-    secureZeroArray(randomContext->pool);
-  if (randomContext->callback != nullptr)
-    randomContext->callback(success, *randomContext,
-                            randomContext->callbackContext);
-}
-
-void drbgSeedRandomCallback(bool success, RandomContext &random, void *context) {
-  auto *seedContext = static_cast<DrbgSeedContext *>(context);
-  if (seedContext == nullptr || !seedContext->busy)
-    return;
-
-  seedContext->ready = false;
-  if (success) {
-    seedContext->ready =
-        randomRead(random, seedContext->seed, DrbgSeedContext::SeedSize);
-  }
-
-  seedContext->busy = false;
-  if (seedContext->callback != nullptr)
-    seedContext->callback(seedContext->ready, *seedContext,
-                          seedContext->callbackContext);
-}
-
-int ctrDrbgEntropyCallback(void *context, unsigned char *buffer,
-                           size_t length) {
-  auto *drbgContext = static_cast<CtrDrbgContext *>(context);
-  if (drbgContext == nullptr || buffer == nullptr ||
-      drbgContext->seedReadOffset + length > DrbgSeedContext::SeedSize) {
-    return MBEDTLS_ERR_CTR_DRBG_ENTROPY_SOURCE_FAILED;
-  }
-
-  for (size_t index = 0; index < length; ++index) {
-    const size_t seedIndex = drbgContext->seedReadOffset + index;
-    buffer[index] = drbgContext->seedMaterial[seedIndex];
-    drbgContext->seedMaterial[seedIndex] = 0;
-  }
-  drbgContext->seedReadOffset += length;
-  return 0;
-}
-
-void clearCtrDrbgPersonalization(CtrDrbgContext &context) {
-  secureZeroArray(context.personalization);
-  context.personalizationLength = 0;
-}
-
-void ctrDrbgSeedCallback(bool success, DrbgSeedContext &seedContext,
-                         void *context) {
-  auto *drbgContext = static_cast<CtrDrbgContext *>(context);
-  if (drbgContext == nullptr || !drbgContext->busy)
-    return;
-
-  bool ready = false;
-  if (success &&
-      drbgSeedRead(seedContext, drbgContext->seedMaterial,
-                   DrbgSeedContext::SeedSize)) {
-    mbedtls_ctr_drbg_free(&drbgContext->drbg);
-    mbedtls_ctr_drbg_init(&drbgContext->drbg);
-    mbedtls_ctr_drbg_set_prediction_resistance(&drbgContext->drbg,
-                                               MBEDTLS_CTR_DRBG_PR_OFF);
-    mbedtls_ctr_drbg_set_entropy_len(&drbgContext->drbg,
-                                     MBEDTLS_CTR_DRBG_ENTROPY_LEN);
-    (void)mbedtls_ctr_drbg_set_nonce_len(
-        &drbgContext->drbg,
-        DrbgSeedContext::SeedSize - MBEDTLS_CTR_DRBG_ENTROPY_LEN);
-    drbgContext->seedReadOffset = 0;
-    const unsigned char *personalization =
-        drbgContext->personalizationLength == 0
-            ? nullptr
-            : drbgContext->personalization;
-    ready = mbedtls_ctr_drbg_seed(&drbgContext->drbg, ctrDrbgEntropyCallback,
-                                  drbgContext, personalization,
-                                  drbgContext->personalizationLength) == 0;
-  }
-
-  secureZeroArray(drbgContext->seedMaterial);
-  clearCtrDrbgPersonalization(*drbgContext);
-  drbgContext->initialized = ready;
-  drbgContext->busy = false;
-  if (!ready)
-    mbedtls_ctr_drbg_free(&drbgContext->drbg);
-  if (drbgContext->callback != nullptr)
-    drbgContext->callback(ready, *drbgContext, drbgContext->callbackContext);
-}
 } // namespace
 
 void aesEcb128Init(AesEcb128Context &context) {
@@ -735,244 +645,6 @@ bool entropyRequestAsync(EntropyContext &context, uint8_t *buffer,
   return true;
 }
 
-void randomInit(RandomContext &context) {
-  entropyInit(context.entropy);
-  secureZeroArray(context.pool);
-  context.availableLength = 0;
-  context.readOffset = 0;
-  context.busy = false;
-  context.callback = nullptr;
-  context.callbackContext = nullptr;
-}
-
-void randomFree(RandomContext &context) {
-  if (context.busy)
-    entropyFree(context.entropy);
-  randomInit(context);
-}
-
-bool randomSetCallback(RandomContext &context, RandomCallback callback,
-                       void *callbackContext) {
-  if (context.busy)
-    return false;
-
-  context.callback = callback;
-  context.callbackContext = callbackContext;
-  return callback != nullptr;
-}
-
-bool randomPrefetchAsync(RandomContext &context, size_t length) {
-  if (context.busy || context.callback == nullptr || length == 0 ||
-      length > RandomContext::PoolSize) {
-    return false;
-  }
-
-  context.availableLength = 0;
-  context.readOffset = 0;
-  context.busy = true;
-  if (!entropySetCallback(context.entropy, randomEntropyCallback, &context) ||
-      !entropyRequestAsync(context.entropy, context.pool, length)) {
-    context.busy = false;
-    context.availableLength = 0;
-    context.readOffset = 0;
-    secureZeroArray(context.pool);
-    entropyFree(context.entropy);
-    return false;
-  }
-
-  return true;
-}
-
-size_t randomAvailable(const RandomContext &context) {
-  if (context.availableLength < context.readOffset)
-    return 0;
-
-  return context.availableLength - context.readOffset;
-}
-
-bool randomRead(RandomContext &context, uint8_t *buffer, size_t length) {
-  if (context.busy || buffer == nullptr || length == 0 ||
-      length > randomAvailable(context)) {
-    return false;
-  }
-
-  for (size_t index = 0; index < length; ++index)
-    buffer[index] = context.pool[context.readOffset + index];
-
-  secureZero(context.pool + context.readOffset, length);
-  context.readOffset += length;
-  return true;
-}
-
-void drbgSeedInit(DrbgSeedContext &context) {
-  randomInit(context.random);
-  secureZeroArray(context.seed);
-  context.ready = false;
-  context.busy = false;
-  context.callback = nullptr;
-  context.callbackContext = nullptr;
-}
-
-void drbgSeedFree(DrbgSeedContext &context) {
-  if (context.busy)
-    randomFree(context.random);
-  drbgSeedInit(context);
-}
-
-bool drbgSeedSetCallback(DrbgSeedContext &context, DrbgSeedCallback callback,
-                         void *callbackContext) {
-  if (context.busy)
-    return false;
-
-  context.callback = callback;
-  context.callbackContext = callbackContext;
-  return callback != nullptr;
-}
-
-bool drbgSeedAsync(DrbgSeedContext &context) {
-  if (context.busy || context.callback == nullptr)
-    return false;
-
-  context.ready = false;
-  context.busy = true;
-  if (!randomSetCallback(context.random, drbgSeedRandomCallback, &context) ||
-      !randomPrefetchAsync(context.random, DrbgSeedContext::SeedSize)) {
-    context.busy = false;
-    randomFree(context.random);
-    return false;
-  }
-
-  return true;
-}
-
-bool drbgSeedRead(DrbgSeedContext &context, uint8_t *buffer, size_t length) {
-  if (!context.ready || context.busy || buffer == nullptr ||
-      length != DrbgSeedContext::SeedSize) {
-    return false;
-  }
-
-  for (size_t index = 0; index < DrbgSeedContext::SeedSize; ++index)
-    buffer[index] = context.seed[index];
-
-  secureZeroArray(context.seed);
-  context.ready = false;
-  return true;
-}
-
-void ctrDrbgInit(CtrDrbgContext &context) {
-  drbgSeedInit(context.seed);
-  mbedtls_ctr_drbg_init(&context.drbg);
-  secureZeroArray(context.seedMaterial);
-  clearCtrDrbgPersonalization(context);
-  context.seedReadOffset = 0;
-  context.initialized = false;
-  context.busy = false;
-  context.callback = nullptr;
-  context.callbackContext = nullptr;
-}
-
-void ctrDrbgFree(CtrDrbgContext &context) {
-  if (context.busy)
-    drbgSeedFree(context.seed);
-  mbedtls_ctr_drbg_free(&context.drbg);
-  ctrDrbgInit(context);
-}
-
-bool ctrDrbgSetCallback(CtrDrbgContext &context, CtrDrbgCallback callback,
-                        void *callbackContext) {
-  if (context.busy)
-    return false;
-
-  context.callback = callback;
-  context.callbackContext = callbackContext;
-  return callback != nullptr;
-}
-
-bool ctrDrbgInstantiateAsync(CtrDrbgContext &context,
-                             const uint8_t *personalization,
-                             size_t personalizationLength) {
-  if (context.busy || context.callback == nullptr ||
-      personalizationLength > CtrDrbgContext::MaxPersonalizationSize ||
-      (personalization == nullptr && personalizationLength != 0)) {
-    return false;
-  }
-
-  clearCtrDrbgPersonalization(context);
-  for (size_t index = 0; index < personalizationLength; ++index)
-    context.personalization[index] = personalization[index];
-  context.personalizationLength = personalizationLength;
-  context.seedReadOffset = 0;
-  context.initialized = false;
-  context.busy = true;
-
-  if (!drbgSeedSetCallback(context.seed, ctrDrbgSeedCallback, &context) ||
-      !drbgSeedAsync(context.seed)) {
-    context.busy = false;
-    drbgSeedFree(context.seed);
-    return false;
-  }
-
-  return true;
-}
-
-bool ctrDrbgInstantiateFromSeedAsync(CtrDrbgContext &context,
-                                     const uint8_t *seedMaterial,
-                                     size_t seedLength,
-                                     const uint8_t *personalization,
-                                     size_t personalizationLength) {
-  if (context.busy || context.callback == nullptr || seedMaterial == nullptr ||
-      seedLength != DrbgSeedContext::SeedSize ||
-      personalizationLength > CtrDrbgContext::MaxPersonalizationSize ||
-      (personalization == nullptr && personalizationLength != 0)) {
-    return false;
-  }
-
-  clearCtrDrbgPersonalization(context);
-  for (size_t index = 0; index < seedLength; ++index)
-    context.seedMaterial[index] = seedMaterial[index];
-  for (size_t index = 0; index < personalizationLength; ++index)
-    context.personalization[index] = personalization[index];
-  context.personalizationLength = personalizationLength;
-  context.seedReadOffset = 0;
-  context.initialized = false;
-  context.busy = true;
-
-  mbedtls_ctr_drbg_free(&context.drbg);
-  mbedtls_ctr_drbg_init(&context.drbg);
-  mbedtls_ctr_drbg_set_prediction_resistance(&context.drbg,
-                                             MBEDTLS_CTR_DRBG_PR_OFF);
-  mbedtls_ctr_drbg_set_entropy_len(&context.drbg, MBEDTLS_CTR_DRBG_ENTROPY_LEN);
-  (void)mbedtls_ctr_drbg_set_nonce_len(
-      &context.drbg, DrbgSeedContext::SeedSize - MBEDTLS_CTR_DRBG_ENTROPY_LEN);
-  const unsigned char *personalizationBuffer =
-      context.personalizationLength == 0 ? nullptr : context.personalization;
-  const bool ready =
-      mbedtls_ctr_drbg_seed(&context.drbg, ctrDrbgEntropyCallback, &context,
-                            personalizationBuffer,
-                            context.personalizationLength) == 0;
-
-  secureZeroArray(context.seedMaterial);
-  clearCtrDrbgPersonalization(context);
-  context.initialized = ready;
-  context.busy = false;
-  if (!ready)
-    mbedtls_ctr_drbg_free(&context.drbg);
-  if (context.callback != nullptr)
-    context.callback(ready, context, context.callbackContext);
-  return ready;
-}
-
-bool ctrDrbgReady(const CtrDrbgContext &context) {
-  return context.initialized && !context.busy;
-}
-
-bool ctrDrbgGenerate(CtrDrbgContext &context, uint8_t *buffer, size_t length) {
-  if (!ctrDrbgReady(context) || buffer == nullptr || length == 0)
-    return false;
-
-  return mbedtls_ctr_drbg_random(&context.drbg, buffer, length) == 0;
-}
-
 MbedTlsCryptoProvider::MbedTlsCryptoProvider()
     : _directRandom(), _directRandomCallback(nullptr),
       _directRandomCallbackContext(nullptr), _directRandomBusy(false),
@@ -980,8 +652,8 @@ MbedTlsCryptoProvider::MbedTlsCryptoProvider()
       _gcmCallback(nullptr), _gcmCallbackContext(nullptr), _gcmBusy(false)
 #ifdef CRYPTO_HARDWARE_AVAILABLE
       ,
-      _ecdhOperation(), _ecdhSharedSecret(nullptr), _ecdhCallback(nullptr),
-      _ecdhCallbackContext(nullptr), _ecdhBusy(false),
+      _ecdhOperation(), _ecdhSharedSecret(nullptr), _ecdhPublicKey(nullptr),
+      _ecdhCallback(nullptr), _ecdhCallbackContext(nullptr), _ecdhBusy(false),
       _ecdsaSignReductionSetup(), _ecdsaSign(), _ecdsaSignResult(),
       _ecdsaSignature(nullptr), _ecdsaSignCallback(nullptr),
       _ecdsaSignCallbackContext(nullptr), _ecdsaSignStep(EcdsaSignStep::Idle),
@@ -992,7 +664,6 @@ MbedTlsCryptoProvider::MbedTlsCryptoProvider()
       _ecdsaStep(EcdsaVerifyStep::Idle), _ecdsaBusy(false)
 #endif
 {
-  randomInit(_random);
   entropyInit(_directRandom);
   aesGcm128Init(_gcmOperation);
 }
@@ -1001,33 +672,14 @@ MbedTlsCryptoProvider::~MbedTlsCryptoProvider() { reset(); }
 
 bool MbedTlsCryptoProvider::beginHandshakeCrypto(
     Crypto::TlsCryptoReadyCallback callback, void *context) {
-  if (callback == nullptr || _random.busy)
+  if (callback == nullptr)
     return false;
 
-  _callback = callback;
-  _callbackContext = context;
-  if (randomAvailable(_random) != 0) {
-    Crypto::TlsCryptoReadyCallback readyCallback = _callback;
-    void *readyContext = _callbackContext;
-    _callback = nullptr;
-    _callbackContext = nullptr;
-    readyCallback(true, readyContext);
-    return true;
-  }
-
-  if (!randomSetCallback(_random, MbedTlsCryptoProvider::handleRandomReady,
-                         this) ||
-      !randomPrefetchAsync(_random, RandomContext::PoolSize)) {
-    _callback = nullptr;
-    _callbackContext = nullptr;
-    return false;
-  }
-
+  callback(true, context);
   return true;
 }
 
 void MbedTlsCryptoProvider::reset() {
-  randomFree(_random);
   entropyFree(_directRandom);
   _directRandomCallback = nullptr;
   _directRandomCallbackContext = nullptr;
@@ -1048,6 +700,7 @@ void MbedTlsCryptoProvider::reset() {
   clearEcdsaWorkspace();
   _ecdhOperation = {};
   _ecdhSharedSecret = nullptr;
+  _ecdhPublicKey = nullptr;
   _ecdhCallback = nullptr;
   _ecdhCallbackContext = nullptr;
   _ecdhBusy = false;
@@ -1071,12 +724,16 @@ void MbedTlsCryptoProvider::reset() {
 }
 
 bool MbedTlsCryptoProvider::ready() const {
-  return !_random.busy && randomAvailable(_random) != 0;
+  return true;
 }
 
+#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
 bool MbedTlsCryptoProvider::generateRandom(uint8_t *buffer, size_t length) {
-  return randomRead(_random, buffer, length);
+  (void)buffer;
+  (void)length;
+  return false;
 }
+#endif
 
 bool MbedTlsCryptoProvider::randomBytesAsync(
     uint8_t *buffer, size_t length, Crypto::TlsRandomCallback callback,
@@ -1205,6 +862,96 @@ bool MbedTlsCryptoProvider::ecdhP256SharedSecretAsync(
   _ecdhBusy = true;
   if (!Crypto::PukccEcc::startEcdhSharedSecretAsync(
           _ecdhOperation, MbedTlsCryptoProvider::handleEcdhComplete, this)) {
+    finishEcdh(false);
+    return false;
+  }
+
+  return true;
+#endif
+}
+
+bool MbedTlsCryptoProvider::ecdhP256PublicKeyAsync(
+    const uint8_t privateScalar[32], uint8_t publicKey[65],
+    Crypto::TlsEcdhP256Callback callback, void *context) {
+#ifndef CRYPTO_HARDWARE_AVAILABLE
+  (void)privateScalar;
+  (void)publicKey;
+  (void)callback;
+  (void)context;
+  return false;
+#else
+  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || privateScalar == nullptr ||
+      publicKey == nullptr || callback == nullptr)
+    return false;
+
+  clearEcdhWorkspace();
+  if (!Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhModulusOffset, EcdhModulusStorageLength, P256Prime,
+          P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhConstantOffset, P256Length + 12u, P256Prime, 0u) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhCurveAOffset, P256Length + 4u, P256A, P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhPointOffset, EcdhPointLength, P256Prime, 0u) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhPointOffset, P256CoordinateStorageLength, P256Gx,
+          P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhPointOffset + P256CoordinateStorageLength,
+          P256CoordinateStorageLength, P256Gy, P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhPointOffset + P256CoordinateStorageLength * 2u,
+          P256CoordinateStorageLength, ProjectiveOne, sizeof(ProjectiveOne)) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhScalarOffset, P256Length + 4u, privateScalar, P256Length) ||
+      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          EcdhWorkspaceOffset, EcdhWorkspaceLength, P256Prime, 0u)) {
+    clearEcdhWorkspace();
+    return false;
+  }
+
+  _ecdhOperation = {};
+  _ecdhOperation.reductionSetup.modulus =
+      pukcc::cryptoRamNearPointer(EcdhModulusOffset);
+  _ecdhOperation.reductionSetup.reductionConstant =
+      pukcc::cryptoRamNearPointer(EcdhConstantOffset);
+  _ecdhOperation.reductionSetup.modulusLength = P256Length;
+  _ecdhOperation.reductionSetup.scratchR =
+      pukcc::cryptoRamNearPointer(EcdhWorkspaceOffset);
+  _ecdhOperation.reductionSetup.scratchX = pukcc::cryptoRamNearPointer(
+      static_cast<uint16_t>(EcdhWorkspaceOffset + P256Length * 2u + 4u));
+  _ecdhOperation.multiply.point = pukcc::cryptoRamNearPointer(EcdhPointOffset);
+  _ecdhOperation.multiply.modulus =
+      pukcc::cryptoRamNearPointer(EcdhModulusOffset);
+  _ecdhOperation.multiply.reductionConstant =
+      pukcc::cryptoRamNearPointer(EcdhConstantOffset);
+  _ecdhOperation.multiply.scalar =
+      pukcc::cryptoRamNearPointer(EcdhScalarOffset);
+  _ecdhOperation.multiply.curveA =
+      pukcc::cryptoRamNearPointer(EcdhCurveAOffset);
+  _ecdhOperation.multiply.workspace =
+      pukcc::cryptoRamNearPointer(EcdhWorkspaceOffset);
+  _ecdhOperation.multiply.modulusLength = P256Length;
+  _ecdhOperation.multiply.scalarLength = P256Length;
+  _ecdhOperation.affine.modulus =
+      pukcc::cryptoRamNearPointer(EcdhModulusOffset);
+  _ecdhOperation.affine.reductionConstant =
+      pukcc::cryptoRamNearPointer(EcdhConstantOffset);
+  _ecdhOperation.affine.modulusLength = P256Length;
+  _ecdhOperation.affine.point = pukcc::cryptoRamNearPointer(EcdhPointOffset);
+  _ecdhOperation.affine.workspace =
+      pukcc::cryptoRamNearPointer(EcdhWorkspaceOffset);
+
+  _ecdhPublicKey = publicKey;
+  _ecdhCallback = callback;
+  _ecdhCallbackContext = context;
+  _ecdhBusy = true;
+  _ecdhOperation.step = Crypto::PukccEcc::EcdhSharedSecretStep::ReductionSetup;
+
+  if (!Crypto::registerPukccCallback(
+          MbedTlsCryptoProvider::handleEcdhPublicKeyService, this) ||
+      !submitEcdhPublicKeyStep()) {
     finishEcdh(false);
     return false;
   }
@@ -1502,22 +1249,6 @@ bool MbedTlsCryptoProvider::aesGcm128DecryptAsync(
   return true;
 }
 
-void MbedTlsCryptoProvider::handleRandomReady(bool success,
-                                              RandomContext &context,
-                                              void *user) {
-  (void)context;
-  auto *provider = static_cast<MbedTlsCryptoProvider *>(user);
-  if (provider == nullptr)
-    return;
-
-  Crypto::TlsCryptoReadyCallback callback = provider->_callback;
-  void *callbackContext = provider->_callbackContext;
-  provider->_callback = nullptr;
-  provider->_callbackContext = nullptr;
-  if (callback != nullptr)
-    callback(success, callbackContext);
-}
-
 void MbedTlsCryptoProvider::handleDirectRandomReady(bool success,
                                                     EntropyContext &context,
                                                     void *user) {
@@ -1571,6 +1302,65 @@ void MbedTlsCryptoProvider::finishGcm(bool success) {
 }
 
 #ifdef CRYPTO_HARDWARE_AVAILABLE
+bool MbedTlsCryptoProvider::submitEcdhPublicKeyStep() {
+  switch (_ecdhOperation.step) {
+  case Crypto::PukccEcc::EcdhSharedSecretStep::ReductionSetup:
+    return Crypto::PukccEcc::startReductionSetupAsync(
+        _ecdhOperation.reductionSetup, _ecdhOperation.result);
+  case Crypto::PukccEcc::EcdhSharedSecretStep::ScalarMultiply:
+    return Crypto::PukccEcc::startEcdhMultiplyAsync(_ecdhOperation.multiply,
+                                                    _ecdhOperation.result);
+  case Crypto::PukccEcc::EcdhSharedSecretStep::ProjectiveToAffine:
+    return Crypto::PukccEcc::startProjectiveToAffineAsync(
+        _ecdhOperation.affine, _ecdhOperation.result);
+  case Crypto::PukccEcc::EcdhSharedSecretStep::Idle:
+  case Crypto::PukccEcc::EcdhSharedSecretStep::PeerPointValidation:
+  case Crypto::PukccEcc::EcdhSharedSecretStep::Complete:
+  case Crypto::PukccEcc::EcdhSharedSecretStep::Error:
+    return false;
+  }
+
+  return false;
+}
+
+void MbedTlsCryptoProvider::handleEcdhPublicKeyService(pukcc::EventMask events,
+                                                       uint8_t service,
+                                                       uint16_t status,
+                                                       void *user) {
+  (void)service;
+  auto *provider = static_cast<MbedTlsCryptoProvider *>(user);
+  if (provider == nullptr || !provider->_ecdhBusy)
+    return;
+
+  if ((events & pukcc::EventComplete) == 0 || status != pukcc::StatusOk) {
+    provider->finishEcdh(false);
+    return;
+  }
+
+  switch (provider->_ecdhOperation.step) {
+  case Crypto::PukccEcc::EcdhSharedSecretStep::ReductionSetup:
+    provider->_ecdhOperation.step =
+        Crypto::PukccEcc::EcdhSharedSecretStep::ScalarMultiply;
+    break;
+  case Crypto::PukccEcc::EcdhSharedSecretStep::ScalarMultiply:
+    provider->_ecdhOperation.step =
+        Crypto::PukccEcc::EcdhSharedSecretStep::ProjectiveToAffine;
+    break;
+  case Crypto::PukccEcc::EcdhSharedSecretStep::ProjectiveToAffine:
+    provider->finishEcdh(true);
+    return;
+  case Crypto::PukccEcc::EcdhSharedSecretStep::Idle:
+  case Crypto::PukccEcc::EcdhSharedSecretStep::PeerPointValidation:
+  case Crypto::PukccEcc::EcdhSharedSecretStep::Complete:
+  case Crypto::PukccEcc::EcdhSharedSecretStep::Error:
+    provider->finishEcdh(false);
+    return;
+  }
+
+  if (!provider->submitEcdhPublicKeyStep())
+    provider->finishEcdh(false);
+}
+
 void MbedTlsCryptoProvider::handleEcdhComplete(
     bool success, pukcc::ServiceResult &result,
     Crypto::PukccEcc::EcdhSharedSecretOperation &operation, void *user) {
@@ -1585,7 +1375,16 @@ void MbedTlsCryptoProvider::handleEcdhComplete(
 
 void MbedTlsCryptoProvider::finishEcdh(bool success) {
   bool completed = false;
-  if (success && _ecdhSharedSecret != nullptr) {
+  if (success && _ecdhPublicKey != nullptr) {
+    _ecdhPublicKey[0] = 0x04u;
+    completed =
+        copyCryptoRamToBigEndian(EcdhPointOffset, _ecdhPublicKey + 1u,
+                                 P256Length) &&
+        copyCryptoRamToBigEndian(
+            static_cast<uint16_t>(EcdhPointOffset +
+                                  P256CoordinateStorageLength),
+            _ecdhPublicKey + 1u + P256Length, P256Length);
+  } else if (success && _ecdhSharedSecret != nullptr) {
     completed = copyCryptoRamToBigEndian(EcdhPointOffset, _ecdhSharedSecret,
                                          P256Length);
   }
@@ -1594,6 +1393,7 @@ void MbedTlsCryptoProvider::finishEcdh(bool success) {
   void *callbackContext = _ecdhCallbackContext;
   _ecdhOperation = {};
   _ecdhSharedSecret = nullptr;
+  _ecdhPublicKey = nullptr;
   _ecdhCallback = nullptr;
   _ecdhCallbackContext = nullptr;
   _ecdhBusy = false;
