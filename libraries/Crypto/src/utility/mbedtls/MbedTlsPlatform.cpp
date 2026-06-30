@@ -18,6 +18,8 @@
 namespace Crypto::MbedTlsPort {
 namespace {
 Crypto::TlsCryptoProvider *externalRandomProvider = nullptr;
+bool trustedTimeConfigured = false;
+mbedtls_time_t trustedTime = 0;
 } // namespace
 
 bool setExternalRandomProvider(Crypto::TlsCryptoProvider *provider) {
@@ -35,6 +37,23 @@ void clearExternalRandomProvider(Crypto::TlsCryptoProvider *provider) {
     externalRandomProvider = nullptr;
 }
 
+bool setTrustedTime(uint64_t unixTime) {
+  trustedTime = static_cast<mbedtls_time_t>(unixTime);
+  trustedTimeConfigured = true;
+  return true;
+}
+
+void clearTrustedTime() {
+  trustedTimeConfigured = false;
+  trustedTime = 0;
+}
+
+bool hasTrustedTime() { return trustedTimeConfigured; }
+
+mbedtls_time_t currentTrustedTime() {
+  return trustedTimeConfigured ? trustedTime : 0;
+}
+
 #if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
 bool generateExternalRandom(uint8_t *buffer, size_t length) {
   if (externalRandomProvider == nullptr || buffer == nullptr || length == 0)
@@ -47,6 +66,13 @@ bool generateExternalRandom(uint8_t *buffer, size_t length) {
 
 extern "C" {
 typedef void (*simio_mbedtls_async_callback_t)(int success, void *context);
+
+time_t simio_mbedtls_time(time_t *time) {
+  const mbedtls_time_t now = Crypto::MbedTlsPort::currentTrustedTime();
+  if (time != nullptr)
+    *time = static_cast<time_t>(now);
+  return static_cast<time_t>(now);
+}
 
 static void simio_mbedtls_zeroize(void *buffer, size_t length) {
   if (buffer == nullptr)
@@ -560,12 +586,59 @@ extern "C" struct tm *mbedtls_platform_gmtime_r(const mbedtls_time_t *time,
 
 #if defined(_WIN32)
   return gmtime_s(timeBuffer, time) == 0 ? timeBuffer : nullptr;
-#elif defined(ARDUINO)
-  (void)time;
-  (void)timeBuffer;
-  return nullptr;
+#else
+#if defined(ARDUINO)
+  int64_t seconds = static_cast<int64_t>(*time);
+  int64_t days = seconds / 86400;
+  int64_t remaining = seconds % 86400;
+  if (remaining < 0) {
+    remaining += 86400;
+    --days;
+  }
+
+  const int hour = static_cast<int>(remaining / 3600);
+  remaining %= 3600;
+  const int minute = static_cast<int>(remaining / 60);
+  const int second = static_cast<int>(remaining % 60);
+
+  const int weekday = static_cast<int>((days + 4) % 7);
+  const int normalizedWeekday = weekday < 0 ? weekday + 7 : weekday;
+
+  int64_t z = days + 719468;
+  const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const unsigned doe = static_cast<unsigned>(z - era * 146097);
+  const unsigned yoe =
+      (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  int year = static_cast<int>(yoe) + static_cast<int>(era) * 400;
+  const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const unsigned mp = (5 * doy + 2) / 153;
+  const unsigned day = doy - (153 * mp + 2) / 5 + 1;
+  const int month = static_cast<int>(mp) + (mp < 10 ? 3 : -9);
+  year += month <= 2 ? 1 : 0;
+
+  const bool leap =
+      (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0));
+  static constexpr unsigned monthDaysBefore[] = {
+      0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+  unsigned yearDay =
+      monthDaysBefore[static_cast<unsigned>(month - 1)] + day - 1;
+  if (leap && month > 2)
+    ++yearDay;
+
+  memset(timeBuffer, 0, sizeof(*timeBuffer));
+  timeBuffer->tm_sec = second;
+  timeBuffer->tm_min = minute;
+  timeBuffer->tm_hour = hour;
+  timeBuffer->tm_mday = static_cast<int>(day);
+  timeBuffer->tm_mon = static_cast<int>(month) - 1;
+  timeBuffer->tm_year = year - 1900;
+  timeBuffer->tm_wday = normalizedWeekday;
+  timeBuffer->tm_yday = static_cast<int>(yearDay);
+  timeBuffer->tm_isdst = 0;
+  return timeBuffer;
 #else
   return gmtime_r(time, timeBuffer);
+#endif
 #endif
 }
 

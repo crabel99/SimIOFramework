@@ -7,8 +7,10 @@ SecureClient::SecureClient()
       _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
+      _trustedUnixTime(0),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
-      _tlsSessionReuseEnabled(false), _tlsHandshakePending(false), _hostname{},
+      _tlsSessionReuseEnabled(false), _tlsHandshakePending(false),
+      _trustedTimeConfigured(false), _hostname{},
       _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
@@ -17,8 +19,10 @@ SecureClient::SecureClient(EthernetSocket &socket)
       _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
+      _trustedUnixTime(0),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
-      _tlsSessionReuseEnabled(false), _tlsHandshakePending(false), _hostname{},
+      _tlsSessionReuseEnabled(false), _tlsHandshakePending(false),
+      _trustedTimeConfigured(false), _hostname{},
       _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {
   _tlsTransport.bind(currentSocket());
@@ -30,8 +34,10 @@ SecureClient::SecureClient(TransportProvider &provider)
       _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
+      _trustedUnixTime(0),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
-      _tlsSessionReuseEnabled(false), _tlsHandshakePending(false), _hostname{},
+      _tlsSessionReuseEnabled(false), _tlsHandshakePending(false),
+      _trustedTimeConfigured(false), _hostname{},
       _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
@@ -44,9 +50,11 @@ SecureClient::SecureClient(SecureClient &&other)
       _clientPrivateKey(other._clientPrivateKey),
       _clientPrivateKeyLength(other._clientPrivateKeyLength),
       _alpnProtocols(other._alpnProtocols),
+      _trustedUnixTime(other._trustedUnixTime),
       _tlsOperationPollLimit(other._tlsOperationPollLimit),
       _tlsSessionReuseEnabled(other._tlsSessionReuseEnabled),
-      _tlsHandshakePending(other._tlsHandshakePending), _hostname{},
+      _tlsHandshakePending(other._tlsHandshakePending),
+      _trustedTimeConfigured(other._trustedTimeConfigured), _hostname{},
       _cryptoProvider(other._cryptoProvider),
       _lastTlsCallbackStatus(other._lastTlsCallbackStatus) {
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
@@ -77,9 +85,11 @@ SecureClient &SecureClient::operator=(SecureClient &&other) {
   _clientPrivateKey = other._clientPrivateKey;
   _clientPrivateKeyLength = other._clientPrivateKeyLength;
   _alpnProtocols = other._alpnProtocols;
+  _trustedUnixTime = other._trustedUnixTime;
   _tlsOperationPollLimit = other._tlsOperationPollLimit;
   _tlsSessionReuseEnabled = other._tlsSessionReuseEnabled;
   _tlsHandshakePending = other._tlsHandshakePending;
+  _trustedTimeConfigured = other._trustedTimeConfigured;
   memset(_hostname, 0, sizeof(_hostname));
   strncpy(_hostname, other._hostname, sizeof(_hostname) - 1);
   _hostname[sizeof(_hostname) - 1] = '\0';
@@ -219,6 +229,30 @@ bool SecureClient::setAlpnProtocols(const char *const *protocols) {
 const char *SecureClient::negotiatedAlpnProtocol() const {
   return _tlsSession.negotiatedAlpnProtocol();
 }
+
+bool SecureClient::setTrustedTime(uint64_t unixTime) {
+  if (!_tlsSession.configureTrustedTime(unixTime))
+    return false;
+
+  _trustedUnixTime = unixTime;
+  _trustedTimeConfigured = true;
+  return true;
+}
+
+void SecureClient::clearTrustedTime() {
+  _tlsSession.clearTrustedTime();
+  if (_tlsSession.trustedTimeConfigured())
+    return;
+
+  _trustedUnixTime = 0;
+  _trustedTimeConfigured = false;
+}
+
+bool SecureClient::trustedTimeConfigured() const {
+  return _trustedTimeConfigured;
+}
+
+uint64_t SecureClient::trustedUnixTime() const { return _trustedUnixTime; }
 
 bool SecureClient::setCryptoProvider(Crypto::TlsCryptoProvider &provider) {
   _cryptoProvider = &provider;
@@ -482,7 +516,8 @@ void SecureClient::SocketTlsTransport::stop() {
 
 bool SecureClient::tlsConfigurationReady() const {
   return _trustAnchors != nullptr && _trustAnchorLength != 0 &&
-         _hostname[0] != '\0' && _cryptoProvider != nullptr;
+         _hostname[0] != '\0' && _cryptoProvider != nullptr &&
+         _trustedTimeConfigured;
 }
 
 bool SecureClient::prepareTlsSession() {
@@ -505,6 +540,9 @@ bool SecureClient::prepareTlsSession() {
           _clientPrivateKeyLength))
     return false;
   if (!_tlsSession.configureAlpnProtocols(_alpnProtocols))
+    return false;
+  if (_trustedTimeConfigured &&
+      !_tlsSession.configureTrustedTime(_trustedUnixTime))
     return false;
   if (_hostname[0] != '\0' && !_tlsSession.setHostname(_hostname))
     return false;
@@ -643,8 +681,10 @@ void SecureClient::clearTlsState() {
   _clientPrivateKey = nullptr;
   _clientPrivateKeyLength = 0;
   _alpnProtocols = nullptr;
+  _trustedUnixTime = 0;
   _tlsSessionReuseEnabled = false;
   _tlsHandshakePending = false;
+  _trustedTimeConfigured = false;
   memset(_hostname, 0, sizeof(_hostname));
   _cryptoProvider = nullptr;
   _lastTlsCallbackStatus = Crypto::TlsAsyncStatus::Idle;

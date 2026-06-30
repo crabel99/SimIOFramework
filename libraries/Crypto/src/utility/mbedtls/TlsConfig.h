@@ -11,9 +11,22 @@
  * primitive implementations in this file.
  */
 
+#include <time.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern time_t simio_mbedtls_time(time_t *time);
+#ifdef __cplusplus
+}
+#endif
+
 #define MBEDTLS_PLATFORM_C
 #define MBEDTLS_ERROR_C
 #define MBEDTLS_AES_C
+#define MBEDTLS_HAVE_TIME
+#define MBEDTLS_HAVE_TIME_DATE
+#define MBEDTLS_PLATFORM_TIME_MACRO simio_mbedtls_time
 
 #define MBEDTLS_PSA_CRYPTO_RNG_STRENGTH 256
 

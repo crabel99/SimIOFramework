@@ -84,6 +84,18 @@ public:
   const char *negotiatedAlpnProtocol() const;
 
   /**
+   * @brief Configure trusted UTC Unix time for TLS certificate validity.
+   *
+   * Secure connections fail closed until this is set. Ethernet does not infer
+   * trust from uptime or unauthenticated wall-clock sources; callers must pass
+   * time from an authenticated source appropriate for the product.
+   */
+  bool setTrustedTime(uint64_t unixTime);
+  void clearTrustedTime();
+  bool trustedTimeConfigured() const;
+  uint64_t trustedUnixTime() const;
+
+  /**
    * @brief Bind the async TLS crypto provider.
    */
   bool setCryptoProvider(Crypto::TlsCryptoProvider &provider);
@@ -231,9 +243,11 @@ private:
   const uint8_t *_clientPrivateKey;
   size_t _clientPrivateKeyLength;
   const char *const *_alpnProtocols;
+  uint64_t _trustedUnixTime;
   uint16_t _tlsOperationPollLimit;
   bool _tlsSessionReuseEnabled;
   bool _tlsHandshakePending;
+  bool _trustedTimeConfigured;
   char _hostname[128];
   Crypto::TlsCryptoProvider *_cryptoProvider;
   SocketTlsTransport _tlsTransport;

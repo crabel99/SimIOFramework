@@ -604,6 +604,20 @@ public:
   const char *negotiatedAlpnProtocol() const;
 
   /**
+   * @brief Configure trusted UTC Unix time for certificate validity checks.
+   *
+   * TLS handshakes fail closed until a caller provides a trusted timestamp.
+   * This is intentionally separate from transport setup because Ethernet and
+   * other peripherals may obtain time from different authenticated sources.
+   * The value is passed to the local Mbed TLS platform hook before certificate
+   * verification so not-before/not-after checks are enabled in production.
+   */
+  bool configureTrustedTime(uint64_t unixTime);
+  void clearTrustedTime();
+  bool trustedTimeConfigured() const { return _trustedTimeConfigured; }
+  uint64_t trustedUnixTime() const { return _trustedUnixTime; }
+
+  /**
    * @brief Configure the strict TLS policy used for future handshakes.
    *
    * This call fails while an operation is active. The current implementation
@@ -797,6 +811,7 @@ private:
   size_t _trustAnchorLength;
   const char *_hostname;
   const char *const *_alpnProtocols;
+  uint64_t _trustedUnixTime;
   TlsClientPolicy _policy;
   mbedtls_ssl_context _ssl;
   mbedtls_ssl_config _sslConfig;
@@ -838,6 +853,7 @@ private:
   bool _cryptoFailed;
   bool _tlsConfigured;
   bool _peerCloseNotified;
+  bool _trustedTimeConfigured;
   bool _clientIdentityConfigured;
   bool _sessionReuseEnabled;
   bool _sessionCached;

@@ -10,6 +10,9 @@ namespace Crypto {
 namespace MbedTlsPort {
 bool setExternalRandomProvider(Crypto::TlsCryptoProvider *provider);
 void clearExternalRandomProvider(Crypto::TlsCryptoProvider *provider);
+bool setTrustedTime(uint64_t unixTime);
+void clearTrustedTime();
+bool hasTrustedTime();
 } // namespace MbedTlsPort
 
 namespace {
@@ -22,6 +25,8 @@ constexpr int TlsErrorCryptoFailed = -6;
 constexpr int TlsErrorMbedTlsSetupFailed = -7;
 constexpr int TlsErrorMbedTlsIoFailed = -8;
 constexpr int TlsErrorOperationDeadlineExceeded = -9;
+constexpr int TlsErrorTrustedTimeUnavailable = -10;
+constexpr uint64_t MinTrustedUnixTime = 946684800ULL;
 constexpr size_t MaxAlpnProtocols = 8;
 constexpr size_t TlsGcmExplicitNonceLength = 8;
 constexpr size_t TlsGcmTagLength = 16;
@@ -133,7 +138,7 @@ private:
 TlsClientSession::TlsClientSession()
     : _transport(nullptr), _cryptoProvider(nullptr), _trustAnchors(nullptr),
       _trustAnchorLength(0), _hostname(nullptr), _alpnProtocols(nullptr),
-      _policy(), _status(TlsAsyncStatus::Idle), _operation(TlsOperation::None),
+      _trustedUnixTime(0), _policy(), _status(TlsAsyncStatus::Idle), _operation(TlsOperation::None),
       _callback(nullptr), _callbackContext(nullptr), _recordCallback(nullptr),
       _recordCallbackContext(nullptr), _recordOutputLength(nullptr),
       _recordPendingLength(0), _recordNonce{}, _recordAad{},
@@ -146,7 +151,8 @@ TlsClientSession::TlsClientSession()
       _operationPollCount(0), _lastError(0), _lastMbedTlsResult(0),
       _verificationResult(0), _handshakeComplete(false), _cryptoReady(false),
       _cryptoFailed(false), _tlsConfigured(false), _peerCloseNotified(false),
-      _clientIdentityConfigured(false), _sessionReuseEnabled(false),
+      _trustedTimeConfigured(false), _clientIdentityConfigured(false),
+      _sessionReuseEnabled(false),
       _sessionCached(false), _recordKeysConfigured(false),
       _recordProtectionBusy(false) {
   mbedtls_ssl_init(&_ssl);
@@ -255,6 +261,26 @@ const char *TlsClientSession::negotiatedAlpnProtocol() const {
     return nullptr;
 
   return mbedtls_ssl_get_alpn_protocol(&_ssl);
+}
+
+bool TlsClientSession::configureTrustedTime(uint64_t unixTime) {
+  if (operationActive() || unixTime < MinTrustedUnixTime)
+    return false;
+
+  _trustedUnixTime = unixTime;
+  _trustedTimeConfigured = true;
+  _tlsConfigured = false;
+  return true;
+}
+
+void TlsClientSession::clearTrustedTime() {
+  if (operationActive())
+    return;
+
+  _trustedUnixTime = 0;
+  _trustedTimeConfigured = false;
+  _tlsConfigured = false;
+  MbedTlsPort::clearTrustedTime();
 }
 
 bool TlsClientSession::configurePolicy(const TlsClientPolicy &policy) {
@@ -578,7 +604,7 @@ void TlsClientSession::abort() {
 bool TlsClientSession::configured() const {
   return _transport != nullptr && _trustAnchors != nullptr &&
          _trustAnchorLength != 0 && _hostname != nullptr &&
-         _cryptoProvider != nullptr;
+         _cryptoProvider != nullptr && _trustedTimeConfigured;
 }
 
 bool TlsClientSession::operationActive() const {
@@ -622,8 +648,14 @@ bool TlsClientSession::prepareMbedTlsSession() {
   if (_tlsConfigured)
     return true;
   if (_trustAnchors == nullptr || _trustAnchorLength == 0 ||
-      _hostname == nullptr)
+      _hostname == nullptr || !_trustedTimeConfigured)
     return false;
+
+  if (!MbedTlsPort::setTrustedTime(_trustedUnixTime) ||
+      !MbedTlsPort::hasTrustedTime()) {
+    _lastError = TlsErrorTrustedTimeUnavailable;
+    return false;
+  }
 
   resetMbedTlsSession();
 
