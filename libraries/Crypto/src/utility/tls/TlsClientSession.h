@@ -31,6 +31,24 @@ using TlsEcdhP256Callback = void (*)(bool success, void *context);
 using TlsEcdsaP256SignCallback = void (*)(bool success, void *context);
 using TlsEcdsaP256VerifyCallback = void (*)(bool success, void *context);
 using TlsAesGcm128Callback = void (*)(bool success, void *context);
+using TlsAeadCallback = void (*)(bool success, void *context);
+
+/**
+ * @brief TLS AEAD algorithms that may be serviced by async Crypto providers.
+ *
+ * The numeric values are part of the C shim contract used by the local Mbed TLS
+ * hooks. Unsupported algorithms must fail closed until the provider implements
+ * an async hardware-backed path for that exact shape.
+ */
+enum class TlsAeadAlgorithm : uint8_t {
+  Aes128Gcm = 1,
+  Aes256Gcm = 2,
+  Aes128Ccm = 3,
+  Aes256Ccm = 4,
+  Aes128Ccm8 = 5,
+  Aes256Ccm8 = 6,
+  ChaCha20Poly1305 = 7,
+};
 
 /**
  * @brief Async crypto readiness provider for TLS sessions.
@@ -204,6 +222,83 @@ public:
                         const uint8_t *ciphertext, uint8_t *plaintext,
                         size_t length, const uint8_t tag[16],
                         TlsAesGcm128Callback callback, void *context) {
+    (void)key;
+    (void)nonce;
+    (void)aad;
+    (void)aadLength;
+    (void)ciphertext;
+    (void)plaintext;
+    (void)length;
+    (void)tag;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async TLS AEAD encryption for a supported provider algorithm.
+   *
+   * AES-128-GCM is the first implemented hardware path and is dispatched to
+   * `aesGcm128EncryptAsync()`. Other TLS AEAD algorithms are represented here
+   * so callers can fail closed through one generic Crypto boundary instead of
+   * falling back to software implicitly.
+   *
+   * @todo Add async hardware implementations for AES-256-GCM, AES-CCM,
+   * AES-CCM-8, and ChaCha20-Poly1305 when those algorithms are required by
+   * non-Ethernet peripherals or expanded TLS profiles.
+   */
+  virtual bool aeadEncryptAsync(TlsAeadAlgorithm algorithm,
+                                const uint8_t *key, size_t keyLength,
+                                const uint8_t *nonce, size_t nonceLength,
+                                const uint8_t *aad, size_t aadLength,
+                                const uint8_t *plaintext,
+                                uint8_t *ciphertext, size_t length,
+                                uint8_t *tag, size_t tagLength,
+                                TlsAeadCallback callback, void *context) {
+    if (algorithm == TlsAeadAlgorithm::Aes128Gcm && keyLength == 16 &&
+        nonceLength == 12 && tagLength == 16) {
+      return aesGcm128EncryptAsync(key, nonce, aad, aadLength, plaintext,
+                                   ciphertext, length, tag, callback,
+                                   context);
+    }
+
+    (void)key;
+    (void)nonce;
+    (void)aad;
+    (void)aadLength;
+    (void)plaintext;
+    (void)ciphertext;
+    (void)length;
+    (void)tag;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async TLS AEAD decryption for a supported provider algorithm.
+   *
+   * Unsupported algorithms fail closed by default. This keeps Crypto generic
+   * while making each production AEAD shape an explicit provider capability.
+   *
+   * @todo Add async hardware implementations for AES-256-GCM, AES-CCM,
+   * AES-CCM-8, and ChaCha20-Poly1305 when those algorithms are promoted from
+   * stubs to supported Crypto provider capabilities.
+   */
+  virtual bool aeadDecryptAsync(TlsAeadAlgorithm algorithm,
+                                const uint8_t *key, size_t keyLength,
+                                const uint8_t *nonce, size_t nonceLength,
+                                const uint8_t *aad, size_t aadLength,
+                                const uint8_t *ciphertext,
+                                uint8_t *plaintext, size_t length,
+                                const uint8_t *tag, size_t tagLength,
+                                TlsAeadCallback callback, void *context) {
+    if (algorithm == TlsAeadAlgorithm::Aes128Gcm && keyLength == 16 &&
+        nonceLength == 12 && tagLength == 16) {
+      return aesGcm128DecryptAsync(key, nonce, aad, aadLength, ciphertext,
+                                   plaintext, length, tag, callback, context);
+    }
+
     (void)key;
     (void)nonce;
     (void)aad;
