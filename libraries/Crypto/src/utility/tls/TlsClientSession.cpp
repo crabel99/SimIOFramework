@@ -40,6 +40,11 @@ constexpr uint8_t Tls12Minor = 0x03;
 constexpr int StrictTls12CipherSuites[] = {
     MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, 0};
 
+constexpr uint16_t StrictTlsSignatureAlgorithms[] = {
+    MBEDTLS_TLS1_3_SIG_ECDSA_SECP256R1_SHA256,
+    MBEDTLS_TLS1_3_SIG_ECDSA_SECP384R1_SHA384,
+    MBEDTLS_TLS1_3_SIG_NONE};
+
 bool policySupported(const TlsClientPolicy &policy) {
   return policy.verification == TlsVerificationPolicy::Required &&
          policy.minVersion == TlsProtocolVersion::Tls12 &&
@@ -627,8 +632,10 @@ bool TlsClientSession::startOperation(TlsOperation operation, Callback callback,
   _lastError = 0;
   _lastMbedTlsResult = 0;
   _status = TlsAsyncStatus::Busy;
-  if (operation == TlsOperation::Handshake)
+  if (operation == TlsOperation::Handshake) {
+    _verificationResult = 0;
     _peerCloseNotified = false;
+  }
   return true;
 }
 
@@ -671,6 +678,7 @@ bool TlsClientSession::prepareMbedTlsSession() {
   mbedtls_ssl_conf_min_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
   mbedtls_ssl_conf_max_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
   mbedtls_ssl_conf_ciphersuites(&_sslConfig, StrictTls12CipherSuites);
+  mbedtls_ssl_conf_sig_algs(&_sslConfig, StrictTlsSignatureAlgorithms);
 #if defined(MBEDTLS_SSL_SESSION_TICKETS)
   mbedtls_ssl_conf_session_tickets(&_sslConfig,
                                    MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
@@ -845,6 +853,9 @@ TlsAsyncStatus TlsClientSession::handleMbedTlsResult(int result) {
 #endif
   if (result == MBEDTLS_ERR_NET_CONN_RESET)
     return fail(TlsErrorTransportDisconnected);
+
+  if (_operation == TlsOperation::Handshake)
+    _verificationResult = mbedtls_ssl_get_verify_result(&_ssl);
 
   return fail(result == 0 ? TlsErrorMbedTlsIoFailed : result);
 }

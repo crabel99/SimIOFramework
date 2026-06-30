@@ -51,6 +51,12 @@ extern time_t simio_mbedtls_time(time_t *time);
 #define MBEDTLS_SSL_CIPHERSUITES                                             \
   MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
 
+/* RSA support is intentionally not part of the SimIO TLS profile. TF-PSA may
+ * still compile RSA internals as dependency glue, but SimIO does not enable RSA
+ * ciphersuites, RSA PSA wants, or RSA provider operations. Add RSA signing only
+ * as an explicit future compatibility profile.
+ */
+
 /* Mbed TLS 4.x delegates cryptographic feature selection to PSA. Keep the
  * initial SecureClient profile narrow. Built-in software PSA modules are
  * bring-up scaffolding only for primitives that the SAME5x can perform in async
