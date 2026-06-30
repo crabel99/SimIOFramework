@@ -93,9 +93,7 @@ TrustedTimeClient::TrustedTimeClient(TransportProvider &provider,
     : _clock(clock), _client(provider) {}
 
 bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
-  if (_status != TrustedTimeClientStatus::Idle &&
-      _status != TrustedTimeClientStatus::Updated &&
-      _status != TrustedTimeClientStatus::Failed) {
+  if (active()) {
     _lastError = TrustedTimeClientError::InvalidArgument;
     return false;
   }
@@ -127,10 +125,22 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
   _lastError = TrustedTimeClientError::None;
   _receivedUnixTime = 0;
   _responseLength = 0;
+  _pollCount = 0;
+  return true;
+}
+
+bool TrustedTimeClient::setPollLimit(uint16_t pollLimit) {
+  if (active() || pollLimit == 0)
+    return false;
+
+  _pollLimit = pollLimit;
   return true;
 }
 
 TrustedTimeClientStatus TrustedTimeClient::poll() {
+  if (active() && !consumePollBudget())
+    return fail(TrustedTimeClientError::OperationDeadlineExceeded);
+
   switch (_status) {
   case TrustedTimeClientStatus::Handshaking: {
     const Crypto::TlsAsyncStatus tlsStatus = _client.pollTls();
@@ -152,7 +162,8 @@ TrustedTimeClientStatus TrustedTimeClient::poll() {
   case TrustedTimeClientStatus::Receiving:
     if (!receiveAvailable())
       return _status;
-    return processResponse() ? _status : _status;
+    processResponse();
+    return _status;
   case TrustedTimeClientStatus::Idle:
   case TrustedTimeClientStatus::Connecting:
   case TrustedTimeClientStatus::Updated:
@@ -169,6 +180,7 @@ void TrustedTimeClient::stop() {
   _receivedUnixTime = 0;
   _requestLength = 0;
   _responseLength = 0;
+  _pollCount = 0;
 }
 
 bool TrustedTimeClient::parseHttpUnixTimeResponse(const uint8_t *response,
@@ -264,6 +276,10 @@ bool TrustedTimeClient::receiveAvailable() {
     fail(TrustedTimeClientError::InvalidResponse);
     return false;
   }
+  if (!_client.connected() && _responseLength == 0) {
+    fail(TrustedTimeClientError::InvalidResponse);
+    return false;
+  }
 
   return false;
 }
@@ -293,5 +309,22 @@ bool TrustedTimeClient::processResponse() {
   _client.stop();
   _status = TrustedTimeClientStatus::Updated;
   _lastError = TrustedTimeClientError::None;
+  return true;
+}
+
+bool TrustedTimeClient::active() const {
+  return _status == TrustedTimeClientStatus::Connecting ||
+         _status == TrustedTimeClientStatus::Handshaking ||
+         _status == TrustedTimeClientStatus::Requesting ||
+         _status == TrustedTimeClientStatus::Receiving;
+}
+
+bool TrustedTimeClient::consumePollBudget() {
+  if (_pollLimit == 0)
+    return false;
+  if (_pollCount >= _pollLimit)
+    return false;
+
+  ++_pollCount;
   return true;
 }

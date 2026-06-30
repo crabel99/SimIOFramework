@@ -28,6 +28,7 @@ enum class NetworkTimeClientError : uint8_t {
   InvalidResponse = 10,
   ClockRejected = 11,
   AuthenticationFailed = 12,
+  OperationDeadlineExceeded = 13,
 };
 
 using NetworkTimeAuthenticator = bool (*)(const uint8_t *packet,
@@ -70,6 +71,7 @@ public:
   static constexpr uint16_t DefaultServerPort = 123;
   static constexpr uint16_t DefaultLocalPort = 0;
   static constexpr uint8_t PacketSize = 48;
+  static constexpr uint16_t DefaultPollLimit = 2000;
 
   NetworkTimeClient(TransportProvider &provider, NetworkClock &clock);
 
@@ -78,8 +80,9 @@ public:
                     uint16_t localPort = DefaultLocalPort);
   bool beginAuthenticatedRequest(IPAddress server,
                                  const NetworkTimeAuthenticationPolicy &policy,
-                                 uint16_t serverPort = DefaultServerPort,
-                                 uint16_t localPort = DefaultLocalPort);
+	                                 uint16_t serverPort = DefaultServerPort,
+	                                 uint16_t localPort = DefaultLocalPort);
+  bool setPollLimit(uint16_t pollLimit);
   NetworkTimeClientStatus poll();
   void stop();
 
@@ -87,13 +90,17 @@ public:
   NetworkTimeClientStatus status() const { return _status; }
   NetworkTimeClientError lastError() const { return _lastError; }
   uint64_t receivedUnixTime() const { return _receivedUnixTime; }
+  uint16_t pollLimit() const { return _pollLimit; }
 
 private:
-  static bool parseResponse(const uint8_t *packet, uint64_t &unixTimeOut);
+  static bool parseResponse(const uint8_t *packet,
+                            const uint8_t expectedOriginateTimestamp[8],
+                            uint64_t &unixTimeOut);
   bool startRequest(IPAddress server, uint16_t serverPort,
-                    NetworkTimeState state, uint16_t localPort,
-                    const NetworkTimeAuthenticationPolicy &policy);
+	                    NetworkTimeState state, uint16_t localPort,
+	                    const NetworkTimeAuthenticationPolicy &policy);
   NetworkTimeClientStatus fail(NetworkTimeClientError error);
+  bool consumePollBudget();
 
   EthernetUDP _udp;
   NetworkClock &_clock;
@@ -104,4 +111,7 @@ private:
   NetworkTimeClientStatus _status = NetworkTimeClientStatus::Idle;
   NetworkTimeClientError _lastError = NetworkTimeClientError::None;
   uint64_t _receivedUnixTime = 0;
+  uint16_t _pollLimit = DefaultPollLimit;
+  uint16_t _pollCount = 0;
+  uint8_t _requestTransmitTimestamp[8] = {};
 };

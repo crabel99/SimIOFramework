@@ -5,16 +5,29 @@
 namespace {
 constexpr uint64_t NtpUnixEpochOffset = 2208988800ULL;
 constexpr uint8_t NtpClientRequest = 0x23; // LI=0, version=4, mode=3.
+constexpr uint8_t NtpLeapIndicatorMask = 0xC0;
+constexpr uint8_t NtpLeapIndicatorAlarm = 0xC0;
+constexpr uint8_t NtpVersionMask = 0x38;
+constexpr uint8_t NtpVersion4 = 0x20;
 constexpr uint8_t NtpModeMask = 0x07;
 constexpr uint8_t NtpModeServer = 4;
 constexpr uint8_t NtpModeBroadcast = 5;
+constexpr uint8_t NtpOriginateTimestampOffset = 24;
 constexpr uint8_t NtpTransmitTimestampOffset = 40;
+uint32_t requestSequence = 0;
 
 uint32_t readBigEndian32(const uint8_t *buffer) {
   return (static_cast<uint32_t>(buffer[0]) << 24) |
          (static_cast<uint32_t>(buffer[1]) << 16) |
          (static_cast<uint32_t>(buffer[2]) << 8) |
          static_cast<uint32_t>(buffer[3]);
+}
+
+void writeBigEndian32(uint8_t *buffer, uint32_t value) {
+  buffer[0] = static_cast<uint8_t>(value >> 24);
+  buffer[1] = static_cast<uint8_t>(value >> 16);
+  buffer[2] = static_cast<uint8_t>(value >> 8);
+  buffer[3] = static_cast<uint8_t>(value);
 }
 } // namespace
 
@@ -60,6 +73,11 @@ bool NetworkTimeClient::startRequest(
 
   uint8_t request[PacketSize] = {};
   request[0] = NtpClientRequest;
+  const uint32_t sequence = ++requestSequence;
+  writeBigEndian32(request + NtpTransmitTimestampOffset,
+                   static_cast<uint32_t>(NtpUnixEpochOffset + sequence));
+  writeBigEndian32(request + NtpTransmitTimestampOffset + 4,
+                   ~sequence);
 
   if (_udp.begin(localPort) == 0) {
     _lastError = NetworkTimeClientError::BindFailed;
@@ -88,12 +106,25 @@ bool NetworkTimeClient::startRequest(
   _status = NetworkTimeClientStatus::Pending;
   _lastError = NetworkTimeClientError::None;
   _receivedUnixTime = 0;
+  _pollCount = 0;
+  memcpy(_requestTransmitTimestamp, request + NtpTransmitTimestampOffset,
+         sizeof(_requestTransmitTimestamp));
+  return true;
+}
+
+bool NetworkTimeClient::setPollLimit(uint16_t pollLimit) {
+  if (active() || pollLimit == 0)
+    return false;
+
+  _pollLimit = pollLimit;
   return true;
 }
 
 NetworkTimeClientStatus NetworkTimeClient::poll() {
   if (!active())
     return _status;
+  if (!consumePollBudget())
+    return fail(NetworkTimeClientError::OperationDeadlineExceeded);
 
   const int packetLength = _udp.parsePacket();
   if (packetLength == 0)
@@ -108,7 +139,7 @@ NetworkTimeClientStatus NetworkTimeClient::poll() {
     return fail(NetworkTimeClientError::ReadFailed);
 
   uint64_t unixTime = 0;
-  if (!parseResponse(response, unixTime))
+  if (!parseResponse(response, _requestTransmitTimestamp, unixTime))
     return fail(NetworkTimeClientError::InvalidResponse);
   if (_state == NetworkTimeState::Trusted &&
       (!_authenticationPolicy.valid() ||
@@ -130,17 +161,27 @@ void NetworkTimeClient::stop() {
   _status = NetworkTimeClientStatus::Idle;
   _lastError = NetworkTimeClientError::None;
   _receivedUnixTime = 0;
+  _pollCount = 0;
+  memset(_requestTransmitTimestamp, 0, sizeof(_requestTransmitTimestamp));
 }
 
 bool NetworkTimeClient::parseResponse(const uint8_t *packet,
+                                      const uint8_t expectedOriginateTimestamp[8],
                                       uint64_t &unixTimeOut) {
-  if (packet == nullptr)
+  if (packet == nullptr || expectedOriginateTimestamp == nullptr)
     return false;
 
+  if ((packet[0] & NtpLeapIndicatorMask) == NtpLeapIndicatorAlarm)
+    return false;
+  if ((packet[0] & NtpVersionMask) != NtpVersion4)
+    return false;
   const uint8_t mode = packet[0] & NtpModeMask;
   if (mode != NtpModeServer && mode != NtpModeBroadcast)
     return false;
   if (packet[1] == 0)
+    return false;
+  if (memcmp(packet + NtpOriginateTimestampOffset,
+             expectedOriginateTimestamp, 8) != 0)
     return false;
 
   const uint32_t ntpSeconds =
@@ -157,4 +198,14 @@ NetworkTimeClientStatus NetworkTimeClient::fail(NetworkTimeClientError error) {
   _lastError = error;
   _udp.stop();
   return _status;
+}
+
+bool NetworkTimeClient::consumePollBudget() {
+  if (_pollLimit == 0)
+    return false;
+  if (_pollCount >= _pollLimit)
+    return false;
+
+  ++_pollCount;
+  return true;
 }

@@ -27,6 +27,7 @@ enum class TrustedTimeClientError : uint8_t {
   InvalidResponse = 7,
   AuthenticationFailed = 8,
   ClockRejected = 9,
+  OperationDeadlineExceeded = 10,
 };
 
 using TrustedTimeResponseAuthenticator =
@@ -73,16 +74,19 @@ class TrustedTimeClient {
 public:
   static constexpr size_t RequestCapacity = 160;
   static constexpr size_t ResponseCapacity = 384;
+  static constexpr uint16_t DefaultPollLimit = 2000;
 
   TrustedTimeClient(TransportProvider &provider, NetworkClock &clock);
 
   bool begin(const TrustedTimeSourcePolicy &policy);
+  bool setPollLimit(uint16_t pollLimit);
   TrustedTimeClientStatus poll();
   void stop();
 
   TrustedTimeClientStatus status() const { return _status; }
   TrustedTimeClientError lastError() const { return _lastError; }
   uint64_t receivedUnixTime() const { return _receivedUnixTime; }
+  uint16_t pollLimit() const { return _pollLimit; }
 
   static bool parseHttpUnixTimeResponse(const uint8_t *response,
                                         size_t responseLength,
@@ -95,6 +99,8 @@ private:
   bool buildRequest(const char *host, const char *path);
   bool receiveAvailable();
   bool processResponse();
+  bool active() const;
+  bool consumePollBudget();
 
   NetworkClock &_clock;
   SecureClient _client;
@@ -102,6 +108,8 @@ private:
   TrustedTimeClientStatus _status = TrustedTimeClientStatus::Idle;
   TrustedTimeClientError _lastError = TrustedTimeClientError::None;
   uint64_t _receivedUnixTime = 0;
+  uint16_t _pollLimit = DefaultPollLimit;
+  uint16_t _pollCount = 0;
   uint8_t _request[RequestCapacity] = {};
   size_t _requestLength = 0;
   uint8_t _response[ResponseCapacity] = {};
