@@ -90,6 +90,9 @@ public:
 
 private:
   static bool parseResponse(const uint8_t *packet, uint64_t &unixTimeOut);
+  bool startRequest(IPAddress server, uint16_t serverPort,
+                    NetworkTimeState state, uint16_t localPort,
+                    const NetworkTimeAuthenticationPolicy &policy);
   NetworkTimeClientStatus fail(NetworkTimeClientError error);
 
   EthernetUDP _udp;

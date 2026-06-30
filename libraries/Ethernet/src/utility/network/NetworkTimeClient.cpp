@@ -25,16 +25,35 @@ NetworkTimeClient::NetworkTimeClient(TransportProvider &provider,
 bool NetworkTimeClient::beginRequest(IPAddress server, uint16_t serverPort,
                                      NetworkTimeState state,
                                      uint16_t localPort) {
+  if (state == NetworkTimeState::Trusted) {
+    _lastError = NetworkTimeClientError::InvalidArgument;
+    return false;
+  }
+
+  return startRequest(server, serverPort, state, localPort, {});
+}
+
+bool NetworkTimeClient::beginAuthenticatedRequest(
+    IPAddress server, const NetworkTimeAuthenticationPolicy &policy,
+    uint16_t serverPort, uint16_t localPort) {
+  if (!policy.valid()) {
+    _lastError = NetworkTimeClientError::InvalidArgument;
+    return false;
+  }
+
+  return startRequest(server, serverPort, NetworkTimeState::Trusted, localPort,
+                      policy);
+}
+
+bool NetworkTimeClient::startRequest(
+    IPAddress server, uint16_t serverPort, NetworkTimeState state,
+    uint16_t localPort, const NetworkTimeAuthenticationPolicy &policy) {
   if (active()) {
     _lastError = NetworkTimeClientError::Busy;
     return false;
   }
   if (server == IPAddress() || serverPort == 0 ||
       state == NetworkTimeState::Unset) {
-    _lastError = NetworkTimeClientError::InvalidArgument;
-    return false;
-  }
-  if (state == NetworkTimeState::Trusted) {
     _lastError = NetworkTimeClientError::InvalidArgument;
     return false;
   }
@@ -65,55 +84,6 @@ bool NetworkTimeClient::beginRequest(IPAddress server, uint16_t serverPort,
   _server = server;
   _serverPort = serverPort;
   _state = state;
-  _authenticationPolicy = {};
-  _status = NetworkTimeClientStatus::Pending;
-  _lastError = NetworkTimeClientError::None;
-  _receivedUnixTime = 0;
-  return true;
-}
-
-bool NetworkTimeClient::beginAuthenticatedRequest(
-    IPAddress server, const NetworkTimeAuthenticationPolicy &policy,
-    uint16_t serverPort, uint16_t localPort) {
-  if (!policy.valid()) {
-    _lastError = NetworkTimeClientError::InvalidArgument;
-    return false;
-  }
-  if (active()) {
-    _lastError = NetworkTimeClientError::Busy;
-    return false;
-  }
-  if (server == IPAddress() || serverPort == 0) {
-    _lastError = NetworkTimeClientError::InvalidArgument;
-    return false;
-  }
-
-  uint8_t request[PacketSize] = {};
-  request[0] = NtpClientRequest;
-
-  if (_udp.begin(localPort) == 0) {
-    _lastError = NetworkTimeClientError::BindFailed;
-    return false;
-  }
-  if (_udp.beginPacket(server, serverPort) != 1) {
-    _udp.stop();
-    _lastError = NetworkTimeClientError::BeginPacketFailed;
-    return false;
-  }
-  if (_udp.write(request, sizeof(request)) != sizeof(request)) {
-    _udp.stop();
-    _lastError = NetworkTimeClientError::WriteFailed;
-    return false;
-  }
-  if (_udp.endPacket() != 1) {
-    _udp.stop();
-    _lastError = NetworkTimeClientError::EndPacketFailed;
-    return false;
-  }
-
-  _server = server;
-  _serverPort = serverPort;
-  _state = NetworkTimeState::Trusted;
   _authenticationPolicy = policy;
   _status = NetworkTimeClientStatus::Pending;
   _lastError = NetworkTimeClientError::None;
