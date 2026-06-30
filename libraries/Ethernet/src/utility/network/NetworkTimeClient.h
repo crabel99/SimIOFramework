@@ -2,6 +2,7 @@
 
 #include <EthernetUdp.h>
 #include <IPAddress.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <utility/network/NetworkClock.h>
 #include <utility/transport/TransportProvider.h>
@@ -26,11 +27,32 @@ enum class NetworkTimeClientError : uint8_t {
   ReadFailed = 9,
   InvalidResponse = 10,
   ClockRejected = 11,
+  AuthenticationFailed = 12,
 };
 
-enum class NetworkTimeAuthentication : uint8_t {
-  None = 0,
-  AuthenticatedSource = 1,
+using NetworkTimeAuthenticator = bool (*)(const uint8_t *packet,
+                                          size_t packetLength,
+                                          uint64_t unixTime, void *context);
+
+/**
+ * @brief Product policy hook for promoting network time to trusted.
+ *
+ * Plain SNTP/NTP packets are not authenticated. A trusted update must be backed
+ * by a product-specific policy that authenticates the source/response, such as
+ * a pinned TLS time endpoint, NTS, a signed response, or a provisioning
+ * channel. The callback receives the raw SNTP response and parsed Unix time and
+ * must return true only after that policy has accepted the update.
+ */
+struct NetworkTimeAuthenticationPolicy {
+  constexpr NetworkTimeAuthenticationPolicy() = default;
+  constexpr NetworkTimeAuthenticationPolicy(NetworkTimeAuthenticator callback,
+                                            void *callbackContext = nullptr)
+      : authenticate(callback), context(callbackContext) {}
+
+  NetworkTimeAuthenticator authenticate = nullptr;
+  void *context = nullptr;
+
+  bool valid() const { return authenticate != nullptr; }
 };
 
 /**
@@ -39,11 +61,9 @@ enum class NetworkTimeAuthentication : uint8_t {
  * The client sends one UDP SNTP request and returns immediately. Call `poll()`
  * from the network service loop until it returns `Updated` or `Failed`.
  * Plain SNTP/NTP may only establish manual/provisional time. Trusted promotion
- * requires `NetworkTimeAuthentication::AuthenticatedSource`, which is a marker
- * that the caller has constrained and authenticated the time source through a
- * product policy such as a pinned HTTPS endpoint, NTS bootstrap, signed
- * response, or provisioning channel. `NetworkClock` still enforces that manual
- * time cannot overwrite trusted time after promotion.
+ * requires a `NetworkTimeAuthenticationPolicy` callback that accepts the exact
+ * response/time being applied. `NetworkClock` still enforces that manual time
+ * cannot overwrite trusted time after promotion.
  */
 class NetworkTimeClient {
 public:
@@ -55,16 +75,11 @@ public:
 
   bool beginRequest(IPAddress server, uint16_t serverPort = DefaultServerPort,
                     NetworkTimeState state = NetworkTimeState::Manual,
-                    uint16_t localPort = DefaultLocalPort,
-                    NetworkTimeAuthentication authentication =
-                        NetworkTimeAuthentication::None);
+                    uint16_t localPort = DefaultLocalPort);
   bool beginAuthenticatedRequest(IPAddress server,
+                                 const NetworkTimeAuthenticationPolicy &policy,
                                  uint16_t serverPort = DefaultServerPort,
-                                 uint16_t localPort = DefaultLocalPort) {
-    return beginRequest(server, serverPort, NetworkTimeState::Trusted,
-                        localPort,
-                        NetworkTimeAuthentication::AuthenticatedSource);
-  }
+                                 uint16_t localPort = DefaultLocalPort);
   NetworkTimeClientStatus poll();
   void stop();
 
@@ -80,6 +95,7 @@ private:
   EthernetUDP _udp;
   NetworkClock &_clock;
   IPAddress _server;
+  NetworkTimeAuthenticationPolicy _authenticationPolicy = {};
   uint16_t _serverPort = DefaultServerPort;
   NetworkTimeState _state = NetworkTimeState::Manual;
   NetworkTimeClientStatus _status = NetworkTimeClientStatus::Idle;
