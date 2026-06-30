@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include <utility/lwip/port/LwipRandom.h>
+
 #include <lwip/dhcp.h>
 #include <lwip/dns.h>
 #include <lwip/init.h>
@@ -54,6 +56,9 @@ EthernetLwipPort::~EthernetLwipPort() { end(); }
 
 bool EthernetLwipPort::begin(EthernetPacketAllocator &allocator) {
   if (_netif == nullptr)
+    return false;
+
+  if (!EthernetLwipRandom::seedFromHardware())
     return false;
 
   if (!beginLwipNetif())

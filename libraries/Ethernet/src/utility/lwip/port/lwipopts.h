@@ -98,4 +98,14 @@
 #define LWIP_PROVIDE_ERRNO 1
 #define LWIP_DONT_PROVIDE_BYTEORDER_FUNCTIONS 1
 
-#define LWIP_RAND() 0x12345678UL
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint32_t simio_lwip_rand(void);
+#ifdef __cplusplus
+}
+#endif
+
+#define LWIP_RAND() simio_lwip_rand()
