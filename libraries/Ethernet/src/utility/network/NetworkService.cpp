@@ -3,7 +3,8 @@
 NetworkService::NetworkService(EthernetFrameDriver &frameDriver,
                                EthernetPacketAllocator &packetAllocator)
     : _packetAllocator(&packetAllocator), _netif(frameDriver),
-      _socketBackend(), _lwipPort(_netif), _networkConfig(), _started(false) {
+      _socketBackend(), _lwipPort(_netif), _networkConfig(), _clock(),
+      _started(false) {
   _lwipPort.setTcpBackend(_socketBackend);
   _lwipPort.setUdpBackend(_socketBackend);
 }

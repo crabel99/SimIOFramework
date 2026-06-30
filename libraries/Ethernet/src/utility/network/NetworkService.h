@@ -5,6 +5,7 @@
 #include <utility/netif/FrameDriver.h>
 #include <utility/netif/Netif.h>
 #include <utility/network/NetworkConfig.h>
+#include <utility/network/NetworkClock.h>
 
 /**
  * @file NetworkService.h
@@ -71,6 +72,15 @@ public:
    * @brief Return the stored network configuration.
    */
   const NetworkConfig &networkConfig() const { return _networkConfig; }
+
+  /**
+   * @brief Access the service-owned network clock bridge.
+   *
+   * Unauthenticated NTP/SNTP updates must be stored as untrusted. Only
+   * authenticated time sources should be marked trusted and applied to TLS.
+   */
+  NetworkClock &clock() { return _clock; }
+  const NetworkClock &clock() const { return _clock; }
 
   /**
    * @brief Return true when DHCP or static addressing has been selected.
@@ -155,5 +165,6 @@ private:
   LwipTransportBackend _socketBackend;
   EthernetLwipPort _lwipPort;
   NetworkConfig _networkConfig;
+  NetworkClock _clock;
   bool _started;
 };
