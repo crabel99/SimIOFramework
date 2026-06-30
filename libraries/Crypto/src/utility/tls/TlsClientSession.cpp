@@ -138,7 +138,11 @@ TlsClientSession::TlsClientSession()
       _recordCallbackContext(nullptr), _recordOutputLength(nullptr),
       _recordPendingLength(0), _recordNonce{}, _recordAad{},
       _readBuffer(nullptr), _writeBuffer(nullptr), _requestedLength(0),
-      _bytesTransferred(0), _operationPollLimit(DefaultTlsOperationPollLimit),
+      _bytesTransferred(0), _bioSendCalls(0), _bioRecvCalls(0),
+      _bioRecvWantReadCount(0), _bioBytesSent(0), _bioBytesReceived(0),
+      _bioLastSendLength(0), _bioLastSendAccepted(0), _bioLastRecvLength(0),
+      _bioLastRecvAvailable(0),
+      _operationPollLimit(DefaultTlsOperationPollLimit),
       _operationPollCount(0), _lastError(0), _lastMbedTlsResult(0),
       _verificationResult(0), _handshakeComplete(false), _cryptoReady(false),
       _cryptoFailed(false), _tlsConfigured(false), _peerCloseNotified(false),
@@ -552,6 +556,15 @@ void TlsClientSession::abort() {
   _writeBuffer = nullptr;
   _requestedLength = 0;
   _bytesTransferred = 0;
+  _bioSendCalls = 0;
+  _bioRecvCalls = 0;
+  _bioRecvWantReadCount = 0;
+  _bioBytesSent = 0;
+  _bioBytesReceived = 0;
+  _bioLastSendLength = 0;
+  _bioLastSendAccepted = 0;
+  _bioLastRecvLength = 0;
+  _bioLastRecvAvailable = 0;
   _lastMbedTlsResult = 0;
   _handshakeComplete = false;
   _cryptoReady = false;
@@ -871,10 +884,14 @@ int TlsClientSession::bioSend(void *context, const unsigned char *buffer,
       session->_transport->connected() == 0)
     return MBEDTLS_ERR_NET_CONN_RESET;
 
+  ++session->_bioSendCalls;
+  session->_bioLastSendLength = length;
   const size_t written = session->_transport->write(buffer, length);
+  session->_bioLastSendAccepted = written;
   if (written == 0)
     return MBEDTLS_ERR_SSL_WANT_WRITE;
 
+  session->_bioBytesSent += written;
   return static_cast<int>(written);
 }
 
@@ -886,13 +903,22 @@ int TlsClientSession::bioRecv(void *context, unsigned char *buffer,
   if (!session->_transport->carrierUp() ||
       session->_transport->connected() == 0)
     return MBEDTLS_ERR_NET_CONN_RESET;
-  if (session->_transport->available() <= 0)
+  ++session->_bioRecvCalls;
+  session->_bioLastRecvLength = length;
+  const int available = session->_transport->available();
+  session->_bioLastRecvAvailable = available;
+  if (available <= 0) {
+    ++session->_bioRecvWantReadCount;
     return MBEDTLS_ERR_SSL_WANT_READ;
+  }
 
   const int readCount = session->_transport->read(buffer, length);
-  if (readCount <= 0)
+  if (readCount <= 0) {
+    ++session->_bioRecvWantReadCount;
     return MBEDTLS_ERR_SSL_WANT_READ;
+  }
 
+  session->_bioBytesReceived += static_cast<size_t>(readCount);
   return readCount;
 }
 

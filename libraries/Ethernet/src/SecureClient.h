@@ -130,6 +130,15 @@ public:
   int tlsLastError() const;
   int tlsLastMbedTlsResult() const;
   int tlsHandshakeState() const;
+  uint32_t tlsBioSendCalls() const;
+  uint32_t tlsBioRecvCalls() const;
+  uint32_t tlsBioRecvWantReadCount() const;
+  size_t tlsBioBytesSent() const;
+  size_t tlsBioBytesReceived() const;
+  size_t tlsBioLastSendLength() const;
+  size_t tlsBioLastSendAccepted() const;
+  size_t tlsBioLastRecvLength() const;
+  int tlsBioLastRecvAvailable() const;
   Crypto::TlsOperation tlsOperation() const;
   bool tlsHandshakePending() const;
   uint32_t tlsVerificationResult() const;

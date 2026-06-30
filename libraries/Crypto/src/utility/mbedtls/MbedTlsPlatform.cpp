@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include <mbedtls/platform_time.h>
@@ -41,6 +42,297 @@ bool generateExternalRandom(uint8_t *buffer, size_t length) {
   return externalRandomProvider->generateRandom(buffer, length);
 }
 } // namespace Crypto::MbedTlsPort
+
+extern "C" {
+typedef void (*simio_mbedtls_async_callback_t)(int success, void *context);
+
+static void simio_mbedtls_zeroize(void *buffer, size_t length) {
+  if (buffer == nullptr)
+    return;
+
+  volatile uint8_t *bytes = static_cast<volatile uint8_t *>(buffer);
+  while (length-- > 0u)
+    *bytes++ = 0u;
+}
+
+int simio_mbedtls_ecdh_p256_start(const uint8_t privateScalar[32],
+                                  const uint8_t peerPublicKey[65],
+                                  uint8_t sharedSecret[32],
+                                  simio_mbedtls_async_callback_t callback,
+                                  void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      privateScalar == nullptr || peerPublicKey == nullptr ||
+      sharedSecret == nullptr || callback == nullptr) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    simio_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->ecdhP256SharedSecretAsync(
+          privateScalar, peerPublicKey, sharedSecret,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            simio_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
+int simio_mbedtls_ecdsa_p256_verify_start(
+    const uint8_t publicKey[65], const uint8_t hash[32],
+    const uint8_t signature[64], simio_mbedtls_async_callback_t callback,
+    void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      publicKey == nullptr || hash == nullptr || signature == nullptr ||
+      callback == nullptr) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    simio_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->ecdsaP256VerifyAsync(
+          publicKey, hash, signature,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            simio_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
+int simio_mbedtls_ecdsa_p256_sign_start(const uint8_t privateKey[32],
+                                        const uint8_t hash[32],
+                                        uint8_t signature[64],
+                                        simio_mbedtls_async_callback_t callback,
+                                        void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      privateKey == nullptr || hash == nullptr || signature == nullptr ||
+      callback == nullptr) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    uint8_t nonceScalar[32];
+    const uint8_t *privateKey;
+    const uint8_t *hash;
+    uint8_t *signature;
+    simio_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext = {};
+  callbackContext.privateKey = privateKey;
+  callbackContext.hash = hash;
+  callbackContext.signature = signature;
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submittedRandom =
+      Crypto::MbedTlsPort::externalRandomProvider->randomBytesAsync(
+          callbackContext.nonceScalar, sizeof(callbackContext.nonceScalar),
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            if (!success ||
+                Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+                !Crypto::MbedTlsPort::externalRandomProvider
+                     ->ecdsaP256SignAsync(
+                         callbackContext->privateKey,
+                         callbackContext->nonceScalar, callbackContext->hash,
+                         callbackContext->signature,
+                         [](bool signSuccess, void *signUser) {
+                           auto *callbackContext =
+                               static_cast<CallbackContext *>(signUser);
+                           simio_mbedtls_async_callback_t completed =
+                               callbackContext->callback;
+                           void *completedContext = callbackContext->context;
+                           simio_mbedtls_zeroize(
+                               callbackContext->nonceScalar,
+                               sizeof(callbackContext->nonceScalar));
+                           callbackContext->privateKey = nullptr;
+                           callbackContext->hash = nullptr;
+                           callbackContext->signature = nullptr;
+                           callbackContext->callback = nullptr;
+                           callbackContext->context = nullptr;
+                           if (completed != nullptr)
+                             completed(signSuccess ? 1 : 0, completedContext);
+                         },
+                         callbackContext)) {
+              simio_mbedtls_async_callback_t completed =
+                  callbackContext->callback;
+              void *completedContext = callbackContext->context;
+              simio_mbedtls_zeroize(callbackContext->nonceScalar,
+                                    sizeof(callbackContext->nonceScalar));
+              callbackContext->privateKey = nullptr;
+              callbackContext->hash = nullptr;
+              callbackContext->signature = nullptr;
+              callbackContext->callback = nullptr;
+              callbackContext->context = nullptr;
+              if (completed != nullptr)
+                completed(0, completedContext);
+            }
+          },
+          &callbackContext);
+
+  if (!submittedRandom) {
+    simio_mbedtls_zeroize(callbackContext.nonceScalar,
+                          sizeof(callbackContext.nonceScalar));
+    callbackContext = {};
+    return 0;
+  }
+
+  return 1;
+}
+
+int simio_mbedtls_aes_gcm128_encrypt_start(
+    const uint8_t key[16], const uint8_t nonce[12], const uint8_t *aad,
+    size_t aadLength, const uint8_t *plaintext, uint8_t *ciphertext,
+    size_t length, uint8_t tag[16], simio_mbedtls_async_callback_t callback,
+    void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (plaintext == nullptr && length != 0) ||
+      (ciphertext == nullptr && length != 0)) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    simio_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->aesGcm128EncryptAsync(
+          key, nonce, aad, aadLength, plaintext, ciphertext, length, tag,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            simio_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
+int simio_mbedtls_aes_gcm128_decrypt_start(
+    const uint8_t key[16], const uint8_t nonce[12], const uint8_t *aad,
+    size_t aadLength, const uint8_t *ciphertext, uint8_t *plaintext,
+    size_t length, const uint8_t tag[16],
+    simio_mbedtls_async_callback_t callback, void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (ciphertext == nullptr && length != 0) ||
+      (plaintext == nullptr && length != 0)) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    simio_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->aesGcm128DecryptAsync(
+          key, nonce, aad, aadLength, ciphertext, plaintext, length, tag,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            simio_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+}
 
 extern "C" void mbedtls_platform_zeroize(void *buffer, size_t length) {
   if (buffer == nullptr)

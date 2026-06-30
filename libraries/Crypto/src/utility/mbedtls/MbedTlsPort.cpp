@@ -284,15 +284,19 @@ void aesGcmEcbCallback(aes::EventMask events, AesEcb128Context &aesContext,
     const size_t remaining = context->length - context->payloadOffset;
     const size_t chunk =
         remaining > sizeof(stream) ? sizeof(stream) : remaining;
+    if (!context->encrypt) {
+      prepareGhashInput(*context, context->input + context->payloadOffset,
+                        chunk);
+    }
     for (size_t index = 0; index < chunk; ++index) {
       const uint8_t in = context->input[context->payloadOffset + index];
       context->output[context->payloadOffset + index] = in ^ stream[index];
     }
 
-    const uint8_t *ghashSource = context->encrypt
-                                     ? context->output + context->payloadOffset
-                                     : context->input + context->payloadOffset;
-    prepareGhashInput(*context, ghashSource, chunk);
+    if (context->encrypt) {
+      prepareGhashInput(*context, context->output + context->payloadOffset,
+                        chunk);
+    }
     secureZeroArray(stream);
     if (!submitAesGcmGhash(*context, AesGcm128Context::Step::PayloadGhash,
                            aesGcmGhashCallback)) {
@@ -1593,6 +1597,7 @@ void MbedTlsCryptoProvider::finishEcdh(bool success) {
   _ecdhCallback = nullptr;
   _ecdhCallbackContext = nullptr;
   _ecdhBusy = false;
+  Crypto::clearPukccCallback();
   clearEcdhWorkspace();
 
   if (callback != nullptr)

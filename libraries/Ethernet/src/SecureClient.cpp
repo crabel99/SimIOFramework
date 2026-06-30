@@ -281,6 +281,42 @@ int SecureClient::tlsHandshakeState() const {
   return _tlsSession.handshakeState();
 }
 
+uint32_t SecureClient::tlsBioSendCalls() const {
+  return _tlsSession.bioSendCalls();
+}
+
+uint32_t SecureClient::tlsBioRecvCalls() const {
+  return _tlsSession.bioRecvCalls();
+}
+
+uint32_t SecureClient::tlsBioRecvWantReadCount() const {
+  return _tlsSession.bioRecvWantReadCount();
+}
+
+size_t SecureClient::tlsBioBytesSent() const {
+  return _tlsSession.bioBytesSent();
+}
+
+size_t SecureClient::tlsBioBytesReceived() const {
+  return _tlsSession.bioBytesReceived();
+}
+
+size_t SecureClient::tlsBioLastSendLength() const {
+  return _tlsSession.bioLastSendLength();
+}
+
+size_t SecureClient::tlsBioLastSendAccepted() const {
+  return _tlsSession.bioLastSendAccepted();
+}
+
+size_t SecureClient::tlsBioLastRecvLength() const {
+  return _tlsSession.bioLastRecvLength();
+}
+
+int SecureClient::tlsBioLastRecvAvailable() const {
+  return _tlsSession.bioLastRecvAvailable();
+}
+
 Crypto::TlsOperation SecureClient::tlsOperation() const {
   return _tlsSession.operation();
 }

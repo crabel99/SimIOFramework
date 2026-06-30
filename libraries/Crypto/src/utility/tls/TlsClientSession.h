@@ -482,6 +482,15 @@ public:
   bool peerCloseNotified() const { return _peerCloseNotified; }
   size_t bytesTransferred() const { return _bytesTransferred; }
   int handshakeState() const { return _ssl.MBEDTLS_PRIVATE(state); }
+  uint32_t bioSendCalls() const { return _bioSendCalls; }
+  uint32_t bioRecvCalls() const { return _bioRecvCalls; }
+  uint32_t bioRecvWantReadCount() const { return _bioRecvWantReadCount; }
+  size_t bioBytesSent() const { return _bioBytesSent; }
+  size_t bioBytesReceived() const { return _bioBytesReceived; }
+  size_t bioLastSendLength() const { return _bioLastSendLength; }
+  size_t bioLastSendAccepted() const { return _bioLastSendAccepted; }
+  size_t bioLastRecvLength() const { return _bioLastRecvLength; }
+  int bioLastRecvAvailable() const { return _bioLastRecvAvailable; }
 
 private:
   bool operationActive() const;
@@ -530,6 +539,15 @@ private:
   const uint8_t *_writeBuffer;
   size_t _requestedLength;
   size_t _bytesTransferred;
+  uint32_t _bioSendCalls;
+  uint32_t _bioRecvCalls;
+  uint32_t _bioRecvWantReadCount;
+  size_t _bioBytesSent;
+  size_t _bioBytesReceived;
+  size_t _bioLastSendLength;
+  size_t _bioLastSendAccepted;
+  size_t _bioLastRecvLength;
+  int _bioLastRecvAvailable;
   uint16_t _operationPollLimit;
   uint16_t _operationPollCount;
   int _lastError;
