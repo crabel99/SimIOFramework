@@ -142,6 +142,7 @@ struct RtcState {
   uint64_t unixTime = 0;
   bool serviceRegistered = false;
   rtc::TimeState timeState = rtc::TimeState::Unset;
+  rtc::Error lastError = rtc::Error::None;
 };
 
 RtcState rtcState;
@@ -212,10 +213,18 @@ bool configureGenericClock() {
 #elif defined(GCLK_REGS) && defined(GCLK_PCHCTRL_CHEN_Msk) && defined(ID_RTC)
   GCLK_REGS->GCLK_PCHCTRL[ID_RTC] =
       GCLK_PCHCTRL_GEN_GCLK3 | GCLK_PCHCTRL_CHEN_Msk;
-  return (GCLK_REGS->GCLK_PCHCTRL[ID_RTC] & GCLK_PCHCTRL_CHEN_Msk) != 0u;
+  for (uint32_t attempt = 0; attempt < 100000u; ++attempt) {
+    if ((GCLK_REGS->GCLK_PCHCTRL[ID_RTC] & GCLK_PCHCTRL_CHEN_Msk) != 0u)
+      return true;
+  }
+  return false;
 #elif defined(GCLK) && defined(GCLK_PCHCTRL_CHEN) && defined(ID_RTC)
   GCLK->PCHCTRL[ID_RTC].reg = GCLK_PCHCTRL_GEN_GCLK3 | GCLK_PCHCTRL_CHEN;
-  return (GCLK->PCHCTRL[ID_RTC].reg & GCLK_PCHCTRL_CHEN) != 0u;
+  for (uint32_t attempt = 0; attempt < 100000u; ++attempt) {
+    if ((GCLK->PCHCTRL[ID_RTC].reg & GCLK_PCHCTRL_CHEN) != 0u)
+      return true;
+  }
+  return false;
 #else
   return false;
 #endif
@@ -248,12 +257,16 @@ void rtc::disableClock() {
 
 bool rtc::begin(bool runStandby) {
   (void)runStandby;
-  if (!ensurePendSvServiceRegistered())
+  if (!ensurePendSvServiceRegistered()) {
+    rtcState.lastError = Error::PendSvRegistrationFailed;
     return false;
+  }
 
   enableClock();
-  if (!configureGenericClock())
+  if (!configureGenericClock()) {
+    rtcState.lastError = Error::ClockConfigurationFailed;
     return false;
+  }
 
   disableInterrupts(Compare0Interrupt);
   clearInterruptFlags(Compare0Interrupt);
@@ -261,34 +274,50 @@ bool rtc::begin(bool runStandby) {
 #if defined(SIMIO_RTC_CTRL_REGS)
   if ((controlReg() & RTC_MODE0_CTRL_ENABLE) == 0u) {
     writeControl(RTC_MODE0_CTRL_MODE_COUNT32 | RTC_MODE0_CTRL_PRESCALER_DIV1024);
-    if (!waitSync(0))
+    if (!waitSync(0)) {
+      rtcState.lastError = Error::CountSyncTimeout;
       return false;
+    }
     regs()->MODE0.READREQ.reg = RTC_READREQ_RCONT | RTC_READREQ_ADDR(0x10);
     writeCount(0);
-    if (!waitSync(0))
+    if (!waitSync(0)) {
+      rtcState.lastError = Error::CountWriteTimeout;
       return false;
+    }
     setControlBits(RTC_MODE0_CTRL_ENABLE);
-    if (!waitSync(0))
+    if (!waitSync(0)) {
+      rtcState.lastError = Error::EnableSyncTimeout;
       return false;
+    }
   }
 #else
   if ((controlReg() & kCtrlEnable) == 0u) {
     writeControl(kCtrlModeCount32 | kCtrlPrescalerDiv1024 | kCtrlCountSync);
-    if (!waitSync(kSyncCountSync))
+    if (!waitSync(kSyncCountSync)) {
+      rtcState.lastError = Error::CountSyncTimeout;
       return false;
+    }
     writeCount(0);
-    if (!waitSync(kSyncCount))
+    if (!waitSync(kSyncCount)) {
+      rtcState.lastError = Error::CountWriteTimeout;
       return false;
+    }
     setControlBits(kCtrlEnable);
-    if (!waitSync(kSyncEnable))
+    if (!waitSync(kSyncEnable)) {
+      rtcState.lastError = Error::EnableSyncTimeout;
       return false;
+    }
   }
 #endif
 
-  scheduleSecondTick();
+  if (!scheduleSecondTick()) {
+    rtcState.lastError = Error::ScheduleFailed;
+    return false;
+  }
   NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
   NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
   enableInterrupts(Compare0Interrupt);
+  rtcState.lastError = Error::None;
   return true;
 }
 
@@ -313,21 +342,29 @@ bool rtc::enabled() {
 }
 
 bool rtc::setUnixTime(uint64_t unixTime, TimeState state) {
-  if (unixTime == 0 || !begin())
+  if (unixTime == 0) {
+    rtcState.lastError = Error::InvalidUnixTime;
+    return false;
+  }
+  if (!begin())
     return false;
 
   const uint32_t primask = enterCritical();
   if (rtcState.timeState == TimeState::Trusted && state != TimeState::Trusted) {
+    rtcState.lastError = Error::TrustedAuthorityRejected;
     exitCritical(primask);
     return false;
   }
 
   rtcState.unixTime = unixTime;
   rtcState.timeState = state == TimeState::Unset ? TimeState::Manual : state;
+  rtcState.lastError = Error::None;
   exitCritical(primask);
 
-  if (!scheduleSecondTick())
+  if (!scheduleSecondTick()) {
+    rtcState.lastError = Error::ScheduleFailed;
     return false;
+  }
 
   queueEvent(EventTimeSet, unixTime);
   return true;
@@ -363,10 +400,18 @@ rtc::TimeState rtc::timeState() {
   return result;
 }
 
+rtc::Error rtc::lastError() {
+  const uint32_t primask = enterCritical();
+  const Error result = rtcState.lastError;
+  exitCritical(primask);
+  return result;
+}
+
 void rtc::clearTime() {
   const uint32_t primask = enterCritical();
   rtcState.unixTime = 0;
   rtcState.timeState = TimeState::Unset;
+  rtcState.lastError = Error::None;
   exitCritical(primask);
 }
 

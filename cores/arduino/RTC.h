@@ -29,6 +29,18 @@ public:
     Trusted = 2,
   };
 
+  enum class Error : uint8_t {
+    None = 0,
+    InvalidUnixTime = 1,
+    PendSvRegistrationFailed = 2,
+    ClockConfigurationFailed = 3,
+    CountSyncTimeout = 4,
+    CountWriteTimeout = 5,
+    EnableSyncTimeout = 6,
+    ScheduleFailed = 7,
+    TrustedAuthorityRejected = 8,
+  };
+
   static constexpr EventMask EventNone = 0;
   static constexpr EventMask EventSecond = 1u << 0;
   static constexpr EventMask EventTimeSet = 1u << 1;
@@ -58,6 +70,7 @@ public:
   static bool trustedUnixTime(uint64_t &unixTime);
   static bool trusted();
   static TimeState timeState();
+  static Error lastError();
   static void clearTime();
   static void clearTrusted();
 
