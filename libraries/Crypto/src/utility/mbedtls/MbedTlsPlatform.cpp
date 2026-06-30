@@ -125,8 +125,9 @@ int simio_mbedtls_ecdh_p256_start(const uint8_t privateScalar[32],
   callbackContext.context = context;
 
   const bool submitted =
-      Crypto::MbedTlsPort::externalRandomProvider->ecdhP256SharedSecretAsync(
-          privateScalar, peerPublicKey, sharedSecret,
+      Crypto::MbedTlsPort::externalRandomProvider->keyExchangeSharedSecretAsync(
+          Crypto::TlsKeyExchangeAlgorithm::EcdhP256, privateScalar, 32,
+          peerPublicKey, 65, sharedSecret, 32,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
             simio_mbedtls_async_callback_t completed =
@@ -169,8 +170,9 @@ int simio_mbedtls_ecdh_p256_public_key_start(
   callbackContext.context = context;
 
   const bool submitted =
-      Crypto::MbedTlsPort::externalRandomProvider->ecdhP256PublicKeyAsync(
-          privateScalar, publicKey,
+      Crypto::MbedTlsPort::externalRandomProvider->keyExchangePublicKeyAsync(
+          Crypto::TlsKeyExchangeAlgorithm::EcdhP256, privateScalar, 32,
+          publicKey, 65,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
             simio_mbedtls_async_callback_t completed =
@@ -215,8 +217,9 @@ int simio_mbedtls_ecdsa_p256_verify_start(
   callbackContext.context = context;
 
   const bool submitted =
-      Crypto::MbedTlsPort::externalRandomProvider->ecdsaP256VerifyAsync(
-          publicKey, hash, signature,
+      Crypto::MbedTlsPort::externalRandomProvider->signatureVerifyAsync(
+          Crypto::TlsSignatureAlgorithm::EcdsaP256Sha256, publicKey, 65, hash,
+          32, signature, 64,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
             simio_mbedtls_async_callback_t completed =
@@ -277,10 +280,12 @@ int simio_mbedtls_ecdsa_p256_sign_start(const uint8_t privateKey[32],
             if (!success ||
                 Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
                 !Crypto::MbedTlsPort::externalRandomProvider
-                     ->ecdsaP256SignAsync(
-                         callbackContext->privateKey,
-                         callbackContext->nonceScalar, callbackContext->hash,
-                         callbackContext->signature,
+                     ->signatureSignAsync(
+                         Crypto::TlsSignatureAlgorithm::EcdsaP256Sha256,
+                         callbackContext->privateKey, 32,
+                         callbackContext->nonceScalar, 32,
+                         callbackContext->hash, 32, callbackContext->signature,
+                         64,
                          [](bool signSuccess, void *signUser) {
                            auto *callbackContext =
                                static_cast<CallbackContext *>(signUser);

@@ -31,7 +31,38 @@ using TlsEcdhP256Callback = void (*)(bool success, void *context);
 using TlsEcdsaP256SignCallback = void (*)(bool success, void *context);
 using TlsEcdsaP256VerifyCallback = void (*)(bool success, void *context);
 using TlsAesGcm128Callback = void (*)(bool success, void *context);
+using TlsKeyExchangeCallback = void (*)(bool success, void *context);
+using TlsSignatureCallback = void (*)(bool success, void *context);
 using TlsAeadCallback = void (*)(bool success, void *context);
+
+/**
+ * @brief TLS key exchange groups that may be serviced by async providers.
+ *
+ * P-256 is currently implemented through PUKCC. Other groups are represented
+ * so TLS 1.3 KeyShare support can be added without using implicit PSA/software
+ * fallback paths.
+ */
+enum class TlsKeyExchangeAlgorithm : uint8_t {
+  EcdhP256 = 1,
+  EcdhP384 = 2,
+  X25519 = 3,
+  EcdhP521 = 4,
+};
+
+/**
+ * @brief TLS signature algorithms that may be serviced by async providers.
+ *
+ * ECDSA P-256 with SHA-256 is currently implemented through PUKCC. Unsupported
+ * algorithms fail closed until a provider implements the exact signature shape.
+ */
+enum class TlsSignatureAlgorithm : uint8_t {
+  EcdsaP256Sha256 = 1,
+  EcdsaP384Sha384 = 2,
+  EcdsaP521Sha512 = 3,
+  Ed25519 = 4,
+  RsaPssRsaeSha256 = 5,
+  RsaPssRsaeSha384 = 6,
+};
 
 /**
  * @brief TLS AEAD algorithms that may be serviced by async Crypto providers.
@@ -48,6 +79,24 @@ enum class TlsAeadAlgorithm : uint8_t {
   Aes128Ccm8 = 5,
   Aes256Ccm8 = 6,
   ChaCha20Poly1305 = 7,
+};
+
+/**
+ * @brief TLS hash/MAC/KDF algorithms retained as explicit software exceptions.
+ *
+ * @todo Promote individual algorithms to async hardware-backed provider
+ * operations if future targets expose exact SHA/HMAC/HKDF/TLS-PRF hardware
+ * support. Until then, these are documented protocol/key-schedule exceptions,
+ * not claimed hardware-backed primitives.
+ */
+enum class TlsSoftwareKdfAlgorithm : uint8_t {
+  Sha256 = 1,
+  Sha384 = 2,
+  HmacSha256 = 3,
+  HmacSha384 = 4,
+  HkdfSha256 = 5,
+  HkdfSha384 = 6,
+  Tls12PrfSha256 = 7,
 };
 
 /**
@@ -134,6 +183,63 @@ public:
   }
 
   /**
+   * @brief Start async TLS key exchange public-key derivation.
+   *
+   * `privateScalar` and `publicKey` use the wire shape for `algorithm`. P-256
+   * expects a 32-byte big-endian scalar and writes a 65-byte uncompressed
+   * point.
+   *
+   * @todo Add async provider implementations for P-384, X25519, and P-521 when
+   * those groups are enabled for TLS 1.3 KeyShare or expanded TLS profiles.
+   */
+  virtual bool keyExchangePublicKeyAsync(
+      TlsKeyExchangeAlgorithm algorithm, const uint8_t *privateScalar,
+      size_t privateScalarLength, uint8_t *publicKey, size_t publicKeyLength,
+      TlsKeyExchangeCallback callback, void *context) {
+    if (algorithm == TlsKeyExchangeAlgorithm::EcdhP256 &&
+        privateScalarLength == 32 && publicKeyLength == 65) {
+      return ecdhP256PublicKeyAsync(privateScalar, publicKey, callback,
+                                    context);
+    }
+
+    (void)privateScalar;
+    (void)publicKey;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async TLS key exchange shared-secret computation.
+   *
+   * P-256 expects a 32-byte big-endian scalar, a 65-byte uncompressed peer
+   * point, and writes the 32-byte X-coordinate shared secret.
+   *
+   * @todo Add async provider implementations for P-384, X25519, and P-521 when
+   * those groups are enabled. Unsupported groups fail closed.
+   */
+  virtual bool keyExchangeSharedSecretAsync(
+      TlsKeyExchangeAlgorithm algorithm, const uint8_t *privateScalar,
+      size_t privateScalarLength, const uint8_t *peerPublicKey,
+      size_t peerPublicKeyLength, uint8_t *sharedSecret,
+      size_t sharedSecretLength, TlsKeyExchangeCallback callback,
+      void *context) {
+    if (algorithm == TlsKeyExchangeAlgorithm::EcdhP256 &&
+        privateScalarLength == 32 && peerPublicKeyLength == 65 &&
+        sharedSecretLength == 32) {
+      return ecdhP256SharedSecretAsync(privateScalar, peerPublicKey,
+                                       sharedSecret, callback, context);
+    }
+
+    (void)privateScalar;
+    (void)peerPublicKey;
+    (void)sharedSecret;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
    * @brief Start async P-256 ECDSA signature generation.
    *
    * `privateKey` and `nonceScalar` are 32-byte big-endian scalars. The nonce
@@ -172,6 +278,65 @@ public:
                                     const uint8_t signature[64],
                                     TlsEcdsaP256VerifyCallback callback,
                                     void *context) {
+    (void)publicKey;
+    (void)hash;
+    (void)signature;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async TLS signature generation for a supported algorithm.
+   *
+   * ECDSA P-256/SHA-256 is currently implemented and requires a caller-owned
+   * nonce scalar already filled from async hardware random.
+   *
+   * @todo Add provider implementations for P-384/P-521 ECDSA, Ed25519, and
+   * RSA-PSS only when those signature schemes become supported TLS policy.
+   */
+  virtual bool
+  signatureSignAsync(TlsSignatureAlgorithm algorithm, const uint8_t *privateKey,
+                     size_t privateKeyLength, const uint8_t *nonceScalar,
+                     size_t nonceScalarLength, const uint8_t *hash,
+                     size_t hashLength, uint8_t *signature,
+                     size_t signatureLength, TlsSignatureCallback callback,
+                     void *context) {
+    if (algorithm == TlsSignatureAlgorithm::EcdsaP256Sha256 &&
+        privateKeyLength == 32 && nonceScalarLength == 32 && hashLength == 32 &&
+        signatureLength == 64) {
+      return ecdsaP256SignAsync(privateKey, nonceScalar, hash, signature,
+                                callback, context);
+    }
+
+    (void)privateKey;
+    (void)nonceScalar;
+    (void)hash;
+    (void)signature;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async TLS signature verification for a supported algorithm.
+   *
+   * ECDSA P-256/SHA-256 is currently implemented. Unsupported signature
+   * algorithms fail closed instead of falling back to PSA/software.
+   */
+  virtual bool signatureVerifyAsync(TlsSignatureAlgorithm algorithm,
+                                    const uint8_t *publicKey,
+                                    size_t publicKeyLength, const uint8_t *hash,
+                                    size_t hashLength, const uint8_t *signature,
+                                    size_t signatureLength,
+                                    TlsSignatureCallback callback,
+                                    void *context) {
+    if (algorithm == TlsSignatureAlgorithm::EcdsaP256Sha256 &&
+        publicKeyLength == 65 && hashLength == 32 && signatureLength == 64) {
+      return ecdsaP256VerifyAsync(publicKey, hash, signature, callback,
+                                  context);
+    }
+
     (void)publicKey;
     (void)hash;
     (void)signature;
