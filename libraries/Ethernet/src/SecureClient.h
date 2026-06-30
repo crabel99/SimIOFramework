@@ -40,9 +40,10 @@ public:
    * secure socket, carrier is down, or connection setup fails. Provider-owned
    * secure sockets are released on failure, `stop()`, destruction, and move
    * assignment through the inherited `EthernetClient` ownership contract. A
-   * successful return means the TCP connect was accepted; `pollTls()` starts
-   * the TLS handshake after the provider reports the TCP connection is
-   * established.
+   * successful return means the provider accepted or completed DNS/TCP setup;
+   * provider-owned non-blocking DNS and TCP progress is observed through
+   * `connected()`/`pollTls()`. `pollTls()` starts the TLS handshake only after
+   * the provider reports the TCP connection is established.
    */
   int connect(IPAddress ip, uint16_t port) override;
   int connect(const char *host, uint16_t port) override;

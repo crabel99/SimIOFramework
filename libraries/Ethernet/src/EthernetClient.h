@@ -51,8 +51,13 @@ public:
    *
    * The call fails closed when no socket/provider exists, carrier is down, or
    * the provider cannot connect. Provider-acquired sockets are released on
-   * failed connect attempts. `stop()`, destruction, and move assignment release
-   * provider-owned sockets exactly once.
+   * failed connect attempts. A nonzero return means the provider accepted or
+   * completed the connect request; non-blocking providers may still be
+   * resolving DNS or completing TCP setup, so callers observe completion
+   * through `connected()` and stream readiness. Hostname DNS state and
+   * transport retry/timeout policy remain provider-owned and are not surfaced
+   * as separate `EthernetClient` states. `stop()`, destruction, and move
+   * assignment release provider-owned sockets exactly once.
    */
   int connect(IPAddress ip, uint16_t port) override;
   int connect(const char *host, uint16_t port) override;
