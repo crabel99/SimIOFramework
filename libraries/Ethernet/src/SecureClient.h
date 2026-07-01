@@ -21,6 +21,7 @@ enum SecureClientError : int {
   SecureClientConnectFailed = -2,
   SecureClientTlsNotConfigured = -3,
   SecureClientTlsHandshakeStartFailed = -4,
+  SecureClientTrustedTimeBootstrapFailed = -5,
 };
 
 class SecureClient : public EthernetClient {
@@ -230,6 +231,12 @@ private:
 
   EthernetSocket *acquireProviderSocket() override;
   bool applyProviderTrustedTime();
+  bool tlsConfigurationReadyExceptTime() const;
+  bool beginTrustedTimeBootstrapForConnect(bool byHost, IPAddress ip,
+                                           const char *host, uint16_t port);
+  Crypto::TlsAsyncStatus advanceTrustedTimeBootstrap();
+  bool startDeferredConnectAfterTrustedTime();
+  void clearDeferredConnect();
   bool tlsConfigurationReady() const;
   bool prepareTlsSession();
   bool startTlsHandshake();
@@ -266,4 +273,9 @@ private:
   uint8_t _tlsTxBuffer[TlsTxBufferSize] = {};
   size_t _tlsTxLength = 0;
   bool _tlsTxPending = false;
+  bool _trustedTimeBootstrapPending = false;
+  bool _deferredConnectByHost = false;
+  IPAddress _deferredConnectIp;
+  char _deferredConnectHost[128] = {};
+  uint16_t _deferredConnectPort = 0;
 };

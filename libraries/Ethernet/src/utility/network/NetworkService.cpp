@@ -80,6 +80,15 @@ IPAddress NetworkService::localIP() const { return _lwipPort.localIP(); }
 
 IPAddress NetworkService::gatewayIP() const { return _lwipPort.gatewayIP(); }
 
+void NetworkService::setTrustedTimeBootstrapper(
+    TrustedTimeBootstrapper &bootstrapper) {
+  _lwipPort.setTrustedTimeBootstrapper(bootstrapper);
+}
+
+void NetworkService::clearTrustedTimeBootstrapper() {
+  _lwipPort.clearTrustedTimeBootstrapper();
+}
+
 IPAddress NetworkService::subnetMask() const { return _lwipPort.subnetMask(); }
 
 IPAddress NetworkService::dnsServerIP() const {

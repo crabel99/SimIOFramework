@@ -230,6 +230,15 @@ void EthernetLwipPort::setNetworkClock(NetworkClock &clock) {
 
 void EthernetLwipPort::clearNetworkClock() { _networkClock = nullptr; }
 
+void EthernetLwipPort::setTrustedTimeBootstrapper(
+    TrustedTimeBootstrapper &bootstrapper) {
+  _trustedTimeBootstrapper = &bootstrapper;
+}
+
+void EthernetLwipPort::clearTrustedTimeBootstrapper() {
+  _trustedTimeBootstrapper = nullptr;
+}
+
 EthernetLwipErr EthernetLwipPort::output(const uint8_t *frame,
                                          uint16_t length) {
   if (!_started || _netif == nullptr)
@@ -288,6 +297,21 @@ bool EthernetLwipPort::tlsAvailable() const {
 }
 
 NetworkClock *EthernetLwipPort::networkClock() { return _networkClock; }
+
+bool EthernetLwipPort::beginTrustedTimeBootstrap() {
+  return _trustedTimeBootstrapper != nullptr &&
+         _trustedTimeBootstrapper->beginTrustedTimeBootstrap();
+}
+
+bool EthernetLwipPort::pollTrustedTimeBootstrap() {
+  return _trustedTimeBootstrapper != nullptr &&
+         _trustedTimeBootstrapper->pollTrustedTimeBootstrap();
+}
+
+bool EthernetLwipPort::trustedTimeBootstrapActive() const {
+  return _trustedTimeBootstrapper != nullptr &&
+         _trustedTimeBootstrapper->trustedTimeBootstrapActive();
+}
 
 bool EthernetLwipPort::beginServer(uint16_t port) {
   if (!_started || _tcpBackend == nullptr)

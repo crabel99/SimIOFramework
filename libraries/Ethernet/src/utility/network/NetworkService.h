@@ -145,6 +145,17 @@ public:
   const TransportProvider &transportProvider() const { return _lwipPort; }
 
   /**
+   * @brief Install optional provider-owned trusted-time bootstrap logic.
+   *
+   * `SecureClient` can trigger this when it has all TLS policy except trusted
+   * time. The bootstrapper remains caller-owned and must outlive this service
+   * registration. It must promote only authenticated trusted time into
+   * `clock()`.
+   */
+  void setTrustedTimeBootstrapper(TrustedTimeBootstrapper &bootstrapper);
+  void clearTrustedTimeBootstrapper();
+
+  /**
    * @brief Register this service as the default provider for public facades.
    *
    * This is a non-owning registration. Board packages, examples, or application
