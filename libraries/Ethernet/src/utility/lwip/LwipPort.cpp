@@ -224,6 +224,12 @@ void EthernetLwipPort::clearUdpBackend() {
   _udpBackend = nullptr;
 }
 
+void EthernetLwipPort::setNetworkClock(NetworkClock &clock) {
+  _networkClock = &clock;
+}
+
+void EthernetLwipPort::clearNetworkClock() { _networkClock = nullptr; }
+
 EthernetLwipErr EthernetLwipPort::output(const uint8_t *frame,
                                          uint16_t length) {
   if (!_started || _netif == nullptr)
@@ -280,6 +286,8 @@ void EthernetLwipPort::releaseSocket(EthernetSocket *socket) {
 bool EthernetLwipPort::tlsAvailable() const {
   return _started && _tcpBackend != nullptr && _tcpBackend->tlsAvailable();
 }
+
+NetworkClock *EthernetLwipPort::networkClock() { return _networkClock; }
 
 bool EthernetLwipPort::beginServer(uint16_t port) {
   if (!_started || _tcpBackend == nullptr)

@@ -1,6 +1,7 @@
 #include "SecureClient.h"
 
 #include <string.h>
+#include <utility/network/NetworkClock.h>
 
 SecureClient::SecureClient()
     : EthernetClient(), _lastError(SecureClientNoError), _trustAnchors(nullptr),
@@ -114,6 +115,7 @@ int SecureClient::connect(IPAddress ip, uint16_t port) {
     _lastError = SecureClientTlsUnavailable;
     return 0;
   }
+  applyProviderTrustedTime();
   if (!tlsConfigurationReady()) {
     _lastError = SecureClientTlsNotConfigured;
     return 0;
@@ -144,6 +146,7 @@ int SecureClient::connect(const char *host, uint16_t port) {
     _lastError = SecureClientTlsUnavailable;
     return 0;
   }
+  applyProviderTrustedTime();
   if (!setHostname(host) || !tlsConfigurationReady()) {
     _lastError = SecureClientTlsNotConfigured;
     return 0;
@@ -485,6 +488,18 @@ EthernetSocket *SecureClient::acquireProviderSocket() {
     return nullptr;
 
   return provider->acquireSecureClientSocket();
+}
+
+bool SecureClient::applyProviderTrustedTime() {
+  if (_trustedTimeConfigured)
+    return true;
+
+  TransportProvider *provider = transportProvider();
+  if (provider == nullptr)
+    return false;
+
+  NetworkClock *clock = provider->networkClock();
+  return clock != nullptr && clock->applyTrustedTime(*this);
 }
 
 bool SecureClient::SocketTlsTransport::carrierUp() const {

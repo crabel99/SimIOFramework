@@ -25,6 +25,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+class NetworkClock;
+
 class EthernetSocket {
 public:
   virtual ~EthernetSocket() = default;
@@ -94,6 +96,16 @@ public:
   virtual EthernetSocket *acquireSecureClientSocket() = 0;
   virtual void releaseSocket(EthernetSocket *socket) = 0;
   virtual bool tlsAvailable() const = 0;
+
+  /**
+   * @brief Optional network clock owned by the provider's network service.
+   *
+   * Public secure clients may use this only to consume already-trusted time
+   * before TLS certificate validation. Providers that do not own a clock return
+   * `nullptr`; callers must not infer trust from uptime or manual/provisional
+   * time through this hook.
+   */
+  virtual NetworkClock *networkClock() { return nullptr; }
 
   /**
    * @brief Server/listener operations keyed by Arduino server port.

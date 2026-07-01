@@ -229,6 +229,7 @@ private:
   };
 
   EthernetSocket *acquireProviderSocket() override;
+  bool applyProviderTrustedTime();
   bool tlsConfigurationReady() const;
   bool prepareTlsSession();
   bool startTlsHandshake();
