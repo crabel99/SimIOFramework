@@ -86,6 +86,18 @@ bool parseContentLength(const uint8_t *headers, size_t length,
   contentLengthOut = value;
   return true;
 }
+
+bool constantTimeEqual(const uint8_t *left, const uint8_t *right,
+                       size_t length) {
+  if (left == nullptr || right == nullptr || length == 0)
+    return false;
+
+  uint8_t diff = 0;
+  for (size_t index = 0; index < length; ++index)
+    diff |= static_cast<uint8_t>(left[index] ^ right[index]);
+
+  return diff == 0;
+}
 } // namespace
 
 TrustedTimeClient::TrustedTimeClient(TransportProvider &provider,
@@ -115,7 +127,10 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
     return false;
   }
 
-  if (_client.connect(policy.host, policy.port) != 1) {
+  const int connectResult = policy.connectByIp
+                                ? _client.connect(policy.connectIp, policy.port)
+                                : _client.connect(policy.host, policy.port);
+  if (connectResult != 1) {
     _lastError = TrustedTimeClientError::ConnectFailed;
     return false;
   }
@@ -145,6 +160,16 @@ TrustedTimeClientStatus TrustedTimeClient::poll() {
   case TrustedTimeClientStatus::Handshaking: {
     const Crypto::TlsAsyncStatus tlsStatus = _client.pollTls();
     if (_client.connected()) {
+      uint8_t certificateDigest[TrustedTimeSourcePolicy::CertificateSha256Length] =
+          {};
+      const bool pinAccepted =
+          _client.peerCertificateSha256(certificateDigest) &&
+          constantTimeEqual(certificateDigest, _policy.certificateSha256,
+                            _policy.certificateSha256Length);
+      memset(certificateDigest, 0, sizeof(certificateDigest));
+      if (!pinAccepted)
+        return fail(TrustedTimeClientError::CertificatePinMismatch);
+
       _status = TrustedTimeClientStatus::Requesting;
       return poll();
     }

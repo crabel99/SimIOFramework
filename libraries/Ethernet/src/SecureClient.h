@@ -83,6 +83,8 @@ public:
    */
   bool setAlpnProtocols(const char *const *protocols);
   const char *negotiatedAlpnProtocol() const;
+  bool peerCertificateSha256(
+      uint8_t digest[Crypto::TlsSha256DigestLength]) const;
 
   /**
    * @brief Configure trusted UTC Unix time for TLS certificate validity.

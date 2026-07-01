@@ -154,7 +154,8 @@ TlsClientSession::TlsClientSession()
       _bioLastRecvAvailable(0),
       _operationPollLimit(DefaultTlsOperationPollLimit),
       _operationPollCount(0), _lastError(0), _lastMbedTlsResult(0),
-      _verificationResult(0), _handshakeComplete(false), _cryptoReady(false),
+      _verificationResult(0), _handshakeComplete(false),
+      _peerCertificateSha256Available(false), _cryptoReady(false),
       _cryptoFailed(false), _tlsConfigured(false), _peerCloseNotified(false),
       _trustedTimeConfigured(false), _clientIdentityConfigured(false),
       _sessionReuseEnabled(false),
@@ -266,6 +267,16 @@ const char *TlsClientSession::negotiatedAlpnProtocol() const {
     return nullptr;
 
   return mbedtls_ssl_get_alpn_protocol(&_ssl);
+}
+
+bool TlsClientSession::peerCertificateSha256(
+    uint8_t digest[TlsSha256DigestLength]) const {
+  if (!_handshakeComplete || !_peerCertificateSha256Available ||
+      digest == nullptr)
+    return false;
+
+  memcpy(digest, _peerCertificateSha256, TlsSha256DigestLength);
+  return true;
 }
 
 bool TlsClientSession::configureTrustedTime(uint64_t unixTime) {
@@ -587,6 +598,9 @@ void TlsClientSession::abort() {
   _writeBuffer = nullptr;
   _requestedLength = 0;
   _bytesTransferred = 0;
+  mbedtls_platform_zeroize(_peerCertificateSha256,
+                           sizeof(_peerCertificateSha256));
+  _peerCertificateSha256Available = false;
   _bioSendCalls = 0;
   _bioRecvCalls = 0;
   _bioRecvWantReadCount = 0;
@@ -635,6 +649,9 @@ bool TlsClientSession::startOperation(TlsOperation operation, Callback callback,
   if (operation == TlsOperation::Handshake) {
     _verificationResult = 0;
     _peerCloseNotified = false;
+    mbedtls_platform_zeroize(_peerCertificateSha256,
+                             sizeof(_peerCertificateSha256));
+    _peerCertificateSha256Available = false;
   }
   return true;
 }
@@ -675,6 +692,8 @@ bool TlsClientSession::prepareMbedTlsSession() {
   }
 
   mbedtls_ssl_conf_authmode(&_sslConfig, MBEDTLS_SSL_VERIFY_REQUIRED);
+  mbedtls_ssl_conf_verify(&_sslConfig,
+                          TlsClientSession::handleCertificateVerify, this);
   mbedtls_ssl_conf_min_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
   mbedtls_ssl_conf_max_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
   mbedtls_ssl_conf_ciphersuites(&_sslConfig, StrictTls12CipherSuites);
@@ -734,6 +753,9 @@ void TlsClientSession::resetMbedTlsSession() {
   mbedtls_ssl_config_init(&_sslConfig);
   _tlsConfigured = false;
   _handshakeComplete = false;
+  mbedtls_platform_zeroize(_peerCertificateSha256,
+                           sizeof(_peerCertificateSha256));
+  _peerCertificateSha256Available = false;
 }
 
 TlsAsyncStatus TlsClientSession::pollHandshake() {
@@ -916,6 +938,36 @@ void TlsClientSession::handleRecordProtectionComplete(bool success,
 
   if (callback != nullptr)
     callback(success, callbackContext);
+}
+
+int TlsClientSession::handleCertificateVerify(void *context,
+                                              mbedtls_x509_crt *crt,
+                                              int depth, uint32_t *flags) {
+  (void)flags;
+  auto *session = static_cast<TlsClientSession *>(context);
+  if (session == nullptr || crt == nullptr || depth != 0)
+    return 0;
+
+  session->_peerCertificateSha256Available = false;
+  mbedtls_platform_zeroize(session->_peerCertificateSha256,
+                           sizeof(session->_peerCertificateSha256));
+  if (crt->raw.p == nullptr || crt->raw.len == 0)
+    return 0;
+
+  size_t hashLength = 0;
+  const psa_status_t status = psa_hash_compute(
+      PSA_ALG_SHA_256, crt->raw.p, crt->raw.len,
+      session->_peerCertificateSha256,
+      sizeof(session->_peerCertificateSha256), &hashLength);
+  session->_peerCertificateSha256Available =
+      status == PSA_SUCCESS &&
+      hashLength == sizeof(session->_peerCertificateSha256);
+  if (!session->_peerCertificateSha256Available) {
+    mbedtls_platform_zeroize(session->_peerCertificateSha256,
+                             sizeof(session->_peerCertificateSha256));
+  }
+
+  return 0;
 }
 
 int TlsClientSession::bioSend(void *context, const unsigned char *buffer,

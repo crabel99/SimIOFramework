@@ -28,6 +28,7 @@ enum class TrustedTimeClientError : uint8_t {
   AuthenticationFailed = 8,
   ClockRejected = 9,
   OperationDeadlineExceeded = 10,
+  CertificatePinMismatch = 11,
 };
 
 using TrustedTimeResponseAuthenticator =
@@ -38,24 +39,38 @@ using TrustedTimeResponseAuthenticator =
  * @brief Policy for a constrained authenticated HTTPS time source.
  *
  * The source is intentionally narrow: one configured host, port, path, trust
- * anchor set, TLS crypto provider, and provisional Unix time used only for this
- * endpoint's certificate date validation. The response authenticator must
- * validate the exact body/time before `NetworkClock` is promoted to trusted.
+ * anchor set, TLS crypto provider, leaf certificate SHA-256 pin, and
+ * provisional Unix time used only for this endpoint's certificate date
+ * validation. The response authenticator must validate the exact body/time
+ * before `NetworkClock` is promoted to trusted.
+ *
+ * @todo Add SPKI pinning once the TLS wrapper exposes the parsed peer
+ * public-key DER. The current pin is the complete leaf certificate DER digest.
  */
 struct TrustedTimeSourcePolicy {
+  static constexpr size_t CertificateSha256Length =
+      Crypto::TlsSha256DigestLength;
+
   const char *host = nullptr;
+  IPAddress connectIp;
+  bool connectByIp = false;
   uint16_t port = 443;
   const char *path = "/";
   const uint8_t *trustAnchors = nullptr;
   size_t trustAnchorLength = 0;
+  const uint8_t *certificateSha256 = nullptr;
+  size_t certificateSha256Length = 0;
   Crypto::TlsCryptoProvider *cryptoProvider = nullptr;
   uint64_t provisionalUnixTime = 0;
   TrustedTimeResponseAuthenticator authenticate = nullptr;
   void *authenticationContext = nullptr;
 
   bool valid() const {
-    return host != nullptr && host[0] != '\0' && port != 0 && path != nullptr &&
+    return host != nullptr && host[0] != '\0' &&
+           (!connectByIp || connectIp != IPAddress()) && port != 0 && path != nullptr &&
            path[0] == '/' && trustAnchors != nullptr && trustAnchorLength != 0 &&
+           certificateSha256 != nullptr &&
+           certificateSha256Length == CertificateSha256Length &&
            cryptoProvider != nullptr && provisionalUnixTime >= 946684800ULL &&
            authenticate != nullptr;
   }

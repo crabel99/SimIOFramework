@@ -230,6 +230,11 @@ const char *SecureClient::negotiatedAlpnProtocol() const {
   return _tlsSession.negotiatedAlpnProtocol();
 }
 
+bool SecureClient::peerCertificateSha256(
+    uint8_t digest[Crypto::TlsSha256DigestLength]) const {
+  return _tlsSession.peerCertificateSha256(digest);
+}
+
 bool SecureClient::setTrustedTime(uint64_t unixTime) {
   if (!_tlsSession.configureTrustedTime(unixTime))
     return false;
