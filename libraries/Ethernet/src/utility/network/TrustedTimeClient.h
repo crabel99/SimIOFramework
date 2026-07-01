@@ -35,17 +35,19 @@ using TrustedTimeResponseAuthenticator =
     bool (*)(const uint8_t *body, size_t bodyLength, uint64_t unixTime,
              void *context);
 
+enum class TrustedTimePinKind : uint8_t {
+  LeafCertificateSha256 = 0,
+  SubjectPublicKeyInfoSha256 = 1,
+};
+
 /**
  * @brief Policy for a constrained authenticated HTTPS time source.
  *
  * The source is intentionally narrow: one configured host, port, path, trust
- * anchor set, TLS crypto provider, leaf certificate SHA-256 pin, and
+ * anchor set, TLS crypto provider, SHA-256 endpoint pin, and
  * provisional Unix time used only for this endpoint's certificate date
  * validation. The response authenticator must validate the exact body/time
  * before `NetworkClock` is promoted to trusted.
- *
- * @todo Add SPKI pinning once the TLS wrapper exposes the parsed peer
- * public-key DER. The current pin is the complete leaf certificate DER digest.
  */
 struct TrustedTimeSourcePolicy {
   static constexpr size_t CertificateSha256Length =
@@ -60,6 +62,7 @@ struct TrustedTimeSourcePolicy {
   size_t trustAnchorLength = 0;
   const uint8_t *certificateSha256 = nullptr;
   size_t certificateSha256Length = 0;
+  TrustedTimePinKind pinKind = TrustedTimePinKind::LeafCertificateSha256;
   Crypto::TlsCryptoProvider *cryptoProvider = nullptr;
   uint64_t provisionalUnixTime = 0;
   TrustedTimeResponseAuthenticator authenticate = nullptr;

@@ -609,11 +609,20 @@ public:
    *
    * This succeeds only after a completed TLS handshake. It is intended for
    * caller-owned pin checks on constrained bootstrap endpoints such as trusted
-   * time sources. It hashes the complete leaf certificate DER; future SPKI
-   * pinning can use the parsed peer certificate public-key field without
-   * widening the TLS policy surface.
+   * time sources. It hashes the complete leaf certificate DER.
    */
   bool peerCertificateSha256(uint8_t digest[TlsSha256DigestLength]) const;
+
+  /**
+   * @brief Hash the current peer SubjectPublicKeyInfo DER with SHA-256.
+   *
+   * This succeeds only after a completed TLS handshake. It hashes the
+   * `SubjectPublicKeyInfo` region parsed by Mbed TLS (`mbedtls_x509_crt::pk_raw`)
+   * so callers can pin key material without coupling renewal to the exact leaf
+   * certificate bytes.
+   */
+  bool peerSubjectPublicKeyInfoSha256(
+      uint8_t digest[TlsSha256DigestLength]) const;
 
   /**
    * @brief Configure trusted UTC Unix time for certificate validity checks.
@@ -849,6 +858,7 @@ private:
   size_t _requestedLength;
   size_t _bytesTransferred;
   uint8_t _peerCertificateSha256[TlsSha256DigestLength];
+  uint8_t _peerSubjectPublicKeyInfoSha256[TlsSha256DigestLength];
   uint32_t _bioSendCalls;
   uint32_t _bioRecvCalls;
   uint32_t _bioRecvWantReadCount;
@@ -865,6 +875,7 @@ private:
   uint32_t _verificationResult;
   bool _handshakeComplete;
   bool _peerCertificateSha256Available;
+  bool _peerSubjectPublicKeyInfoSha256Available;
   bool _cryptoReady;
   bool _cryptoFailed;
   bool _tlsConfigured;

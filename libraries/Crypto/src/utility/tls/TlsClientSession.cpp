@@ -155,7 +155,8 @@ TlsClientSession::TlsClientSession()
       _operationPollLimit(DefaultTlsOperationPollLimit),
       _operationPollCount(0), _lastError(0), _lastMbedTlsResult(0),
       _verificationResult(0), _handshakeComplete(false),
-      _peerCertificateSha256Available(false), _cryptoReady(false),
+      _peerCertificateSha256Available(false),
+      _peerSubjectPublicKeyInfoSha256Available(false), _cryptoReady(false),
       _cryptoFailed(false), _tlsConfigured(false), _peerCloseNotified(false),
       _trustedTimeConfigured(false), _clientIdentityConfigured(false),
       _sessionReuseEnabled(false),
@@ -276,6 +277,16 @@ bool TlsClientSession::peerCertificateSha256(
     return false;
 
   memcpy(digest, _peerCertificateSha256, TlsSha256DigestLength);
+  return true;
+}
+
+bool TlsClientSession::peerSubjectPublicKeyInfoSha256(
+    uint8_t digest[TlsSha256DigestLength]) const {
+  if (!_handshakeComplete || !_peerSubjectPublicKeyInfoSha256Available ||
+      digest == nullptr)
+    return false;
+
+  memcpy(digest, _peerSubjectPublicKeyInfoSha256, TlsSha256DigestLength);
   return true;
 }
 
@@ -600,7 +611,10 @@ void TlsClientSession::abort() {
   _bytesTransferred = 0;
   mbedtls_platform_zeroize(_peerCertificateSha256,
                            sizeof(_peerCertificateSha256));
+  mbedtls_platform_zeroize(_peerSubjectPublicKeyInfoSha256,
+                           sizeof(_peerSubjectPublicKeyInfoSha256));
   _peerCertificateSha256Available = false;
+  _peerSubjectPublicKeyInfoSha256Available = false;
   _bioSendCalls = 0;
   _bioRecvCalls = 0;
   _bioRecvWantReadCount = 0;
@@ -651,7 +665,10 @@ bool TlsClientSession::startOperation(TlsOperation operation, Callback callback,
     _peerCloseNotified = false;
     mbedtls_platform_zeroize(_peerCertificateSha256,
                              sizeof(_peerCertificateSha256));
+    mbedtls_platform_zeroize(_peerSubjectPublicKeyInfoSha256,
+                             sizeof(_peerSubjectPublicKeyInfoSha256));
     _peerCertificateSha256Available = false;
+    _peerSubjectPublicKeyInfoSha256Available = false;
   }
   return true;
 }
@@ -755,7 +772,10 @@ void TlsClientSession::resetMbedTlsSession() {
   _handshakeComplete = false;
   mbedtls_platform_zeroize(_peerCertificateSha256,
                            sizeof(_peerCertificateSha256));
+  mbedtls_platform_zeroize(_peerSubjectPublicKeyInfoSha256,
+                           sizeof(_peerSubjectPublicKeyInfoSha256));
   _peerCertificateSha256Available = false;
+  _peerSubjectPublicKeyInfoSha256Available = false;
 }
 
 TlsAsyncStatus TlsClientSession::pollHandshake() {
@@ -949,8 +969,11 @@ int TlsClientSession::handleCertificateVerify(void *context,
     return 0;
 
   session->_peerCertificateSha256Available = false;
+  session->_peerSubjectPublicKeyInfoSha256Available = false;
   mbedtls_platform_zeroize(session->_peerCertificateSha256,
                            sizeof(session->_peerCertificateSha256));
+  mbedtls_platform_zeroize(session->_peerSubjectPublicKeyInfoSha256,
+                           sizeof(session->_peerSubjectPublicKeyInfoSha256));
   if (crt->raw.p == nullptr || crt->raw.len == 0)
     return 0;
 
@@ -965,6 +988,21 @@ int TlsClientSession::handleCertificateVerify(void *context,
   if (!session->_peerCertificateSha256Available) {
     mbedtls_platform_zeroize(session->_peerCertificateSha256,
                              sizeof(session->_peerCertificateSha256));
+  }
+
+  hashLength = 0;
+  if (crt->pk_raw.p != nullptr && crt->pk_raw.len != 0) {
+    const psa_status_t publicKeyStatus = psa_hash_compute(
+        PSA_ALG_SHA_256, crt->pk_raw.p, crt->pk_raw.len,
+        session->_peerSubjectPublicKeyInfoSha256,
+        sizeof(session->_peerSubjectPublicKeyInfoSha256), &hashLength);
+    session->_peerSubjectPublicKeyInfoSha256Available =
+        publicKeyStatus == PSA_SUCCESS &&
+        hashLength == sizeof(session->_peerSubjectPublicKeyInfoSha256);
+  }
+  if (!session->_peerSubjectPublicKeyInfoSha256Available) {
+    mbedtls_platform_zeroize(session->_peerSubjectPublicKeyInfoSha256,
+                             sizeof(session->_peerSubjectPublicKeyInfoSha256));
   }
 
   return 0;

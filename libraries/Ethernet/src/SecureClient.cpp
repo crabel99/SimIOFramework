@@ -235,6 +235,11 @@ bool SecureClient::peerCertificateSha256(
   return _tlsSession.peerCertificateSha256(digest);
 }
 
+bool SecureClient::peerSubjectPublicKeyInfoSha256(
+    uint8_t digest[Crypto::TlsSha256DigestLength]) const {
+  return _tlsSession.peerSubjectPublicKeyInfoSha256(digest);
+}
+
 bool SecureClient::setTrustedTime(uint64_t unixTime) {
   if (!_tlsSession.configureTrustedTime(unixTime))
     return false;
