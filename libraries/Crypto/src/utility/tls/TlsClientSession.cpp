@@ -46,7 +46,8 @@ constexpr uint16_t StrictTlsSignatureAlgorithms[] = {
     MBEDTLS_TLS1_3_SIG_NONE};
 
 bool policySupported(const TlsClientPolicy &policy) {
-  return policy.verification == TlsVerificationPolicy::Required &&
+  return (policy.verification == TlsVerificationPolicy::Required ||
+          policy.verification == TlsVerificationPolicy::InsecureNoVerify) &&
          policy.minVersion == TlsProtocolVersion::Tls12 &&
          policy.maxVersion == TlsProtocolVersion::Tls12 &&
          policy.cipherSuite ==
@@ -635,6 +636,9 @@ void TlsClientSession::abort() {
 }
 
 bool TlsClientSession::configured() const {
+  if (_policy.verification == TlsVerificationPolicy::InsecureNoVerify)
+    return _transport != nullptr && _cryptoProvider != nullptr;
+
   return _transport != nullptr && _trustAnchors != nullptr &&
          _trustAnchorLength != 0 && _hostname != nullptr &&
          _cryptoProvider != nullptr && _trustedTimeConfigured;
@@ -688,14 +692,19 @@ bool TlsClientSession::startHandshakeCrypto() {
 bool TlsClientSession::prepareMbedTlsSession() {
   if (_tlsConfigured)
     return true;
-  if (_trustAnchors == nullptr || _trustAnchorLength == 0 ||
-      _hostname == nullptr || !_trustedTimeConfigured)
-    return false;
 
-  if (!MbedTlsPort::setTrustedTime(_trustedUnixTime) ||
-      !MbedTlsPort::hasTrustedTime()) {
-    _lastError = TlsErrorTrustedTimeUnavailable;
-    return false;
+  const bool verifyRequired =
+      _policy.verification == TlsVerificationPolicy::Required;
+  if (verifyRequired) {
+    if (_trustAnchors == nullptr || _trustAnchorLength == 0 ||
+        _hostname == nullptr || !_trustedTimeConfigured)
+      return false;
+
+    if (!MbedTlsPort::setTrustedTime(_trustedUnixTime) ||
+        !MbedTlsPort::hasTrustedTime()) {
+      _lastError = TlsErrorTrustedTimeUnavailable;
+      return false;
+    }
   }
 
   resetMbedTlsSession();
@@ -708,9 +717,12 @@ bool TlsClientSession::prepareMbedTlsSession() {
     return false;
   }
 
-  mbedtls_ssl_conf_authmode(&_sslConfig, MBEDTLS_SSL_VERIFY_REQUIRED);
-  mbedtls_ssl_conf_verify(&_sslConfig,
-                          TlsClientSession::handleCertificateVerify, this);
+  mbedtls_ssl_conf_authmode(&_sslConfig, verifyRequired
+                                            ? MBEDTLS_SSL_VERIFY_REQUIRED
+                                            : MBEDTLS_SSL_VERIFY_NONE);
+  if (verifyRequired)
+    mbedtls_ssl_conf_verify(&_sslConfig,
+                            TlsClientSession::handleCertificateVerify, this);
   mbedtls_ssl_conf_min_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
   mbedtls_ssl_conf_max_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
   mbedtls_ssl_conf_ciphersuites(&_sslConfig, StrictTls12CipherSuites);
@@ -719,7 +731,8 @@ bool TlsClientSession::prepareMbedTlsSession() {
   mbedtls_ssl_conf_session_tickets(&_sslConfig,
                                    MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
 #endif
-  mbedtls_ssl_conf_ca_chain(&_sslConfig, &_caChain, nullptr);
+  if (verifyRequired)
+    mbedtls_ssl_conf_ca_chain(&_sslConfig, &_caChain, nullptr);
   if (_alpnProtocols != nullptr) {
     result = mbedtls_ssl_conf_alpn_protocols(&_sslConfig, _alpnProtocols);
     if (result != 0) {
@@ -742,10 +755,12 @@ bool TlsClientSession::prepareMbedTlsSession() {
     return false;
   }
 
-  result = mbedtls_ssl_set_hostname(&_ssl, _hostname);
-  if (result != 0) {
-    _lastError = result;
-    return false;
+  if (_hostname != nullptr) {
+    result = mbedtls_ssl_set_hostname(&_ssl, _hostname);
+    if (result != 0) {
+      _lastError = result;
+      return false;
+    }
   }
 
   if (_sessionReuseEnabled && _sessionCached) {

@@ -147,8 +147,6 @@ public:
   void clearUdpBackend();
   void setNetworkClock(NetworkClock &clock);
   void clearNetworkClock();
-  void setTrustedTimeBootstrapper(TrustedTimeBootstrapper &bootstrapper);
-  void clearTrustedTimeBootstrapper();
 
   /**
    * @brief Send one raw Ethernet frame through the netif and map the result.
@@ -170,9 +168,6 @@ public:
   void releaseSocket(EthernetSocket *socket) override;
   bool tlsAvailable() const override;
   NetworkClock *networkClock() override;
-  bool beginTrustedTimeBootstrap() override;
-  bool pollTrustedTimeBootstrap() override;
-  bool trustedTimeBootstrapActive() const override;
 
   /**
    * @brief TCP listener operations delegated to the attached TCP backend.
@@ -218,7 +213,6 @@ private:
   LwipTcpSocket _acceptedSocket;
   LwipUdpBackend *_udpBackend = nullptr;
   NetworkClock *_networkClock = nullptr;
-  TrustedTimeBootstrapper *_trustedTimeBootstrapper = nullptr;
   uint8_t _outputBuffer[1536];
 
   bool handleInput(EthernetPacket *packet);

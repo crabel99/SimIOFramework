@@ -10,6 +10,7 @@ SecureClient::SecureClient()
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
       _trustedUnixTime(0),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
+      _tlsSecurityLevel(SecureClientTlsSecurityLevel::High),
       _tlsSessionReuseEnabled(false), _tlsHandshakePending(false),
       _trustedTimeConfigured(false), _hostname{},
       _cryptoProvider(nullptr),
@@ -22,6 +23,7 @@ SecureClient::SecureClient(EthernetSocket &socket)
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
       _trustedUnixTime(0),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
+      _tlsSecurityLevel(SecureClientTlsSecurityLevel::High),
       _tlsSessionReuseEnabled(false), _tlsHandshakePending(false),
       _trustedTimeConfigured(false), _hostname{},
       _cryptoProvider(nullptr),
@@ -37,6 +39,7 @@ SecureClient::SecureClient(TransportProvider &provider)
       _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
       _trustedUnixTime(0),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
+      _tlsSecurityLevel(SecureClientTlsSecurityLevel::High),
       _tlsSessionReuseEnabled(false), _tlsHandshakePending(false),
       _trustedTimeConfigured(false), _hostname{},
       _cryptoProvider(nullptr),
@@ -53,6 +56,7 @@ SecureClient::SecureClient(SecureClient &&other)
       _alpnProtocols(other._alpnProtocols),
       _trustedUnixTime(other._trustedUnixTime),
       _tlsOperationPollLimit(other._tlsOperationPollLimit),
+      _tlsSecurityLevel(other._tlsSecurityLevel),
       _tlsSessionReuseEnabled(other._tlsSessionReuseEnabled),
       _tlsHandshakePending(other._tlsHandshakePending),
       _trustedTimeConfigured(other._trustedTimeConfigured), _hostname{},
@@ -67,13 +71,6 @@ SecureClient::SecureClient(SecureClient &&other)
   memcpy(_tlsTxBuffer, other._tlsTxBuffer, sizeof(_tlsTxBuffer));
   _tlsTxLength = other._tlsTxLength;
   _tlsTxPending = other._tlsTxPending;
-  _trustedTimeBootstrapPending = other._trustedTimeBootstrapPending;
-  _deferredConnectByHost = other._deferredConnectByHost;
-  _deferredConnectIp = other._deferredConnectIp;
-  strncpy(_deferredConnectHost, other._deferredConnectHost,
-          sizeof(_deferredConnectHost) - 1);
-  _deferredConnectHost[sizeof(_deferredConnectHost) - 1] = '\0';
-  _deferredConnectPort = other._deferredConnectPort;
   _tlsSession.configurePolicy(other.tlsPolicy());
   prepareTlsSession();
   other.clearTlsState();
@@ -95,6 +92,7 @@ SecureClient &SecureClient::operator=(SecureClient &&other) {
   _alpnProtocols = other._alpnProtocols;
   _trustedUnixTime = other._trustedUnixTime;
   _tlsOperationPollLimit = other._tlsOperationPollLimit;
+  _tlsSecurityLevel = other._tlsSecurityLevel;
   _tlsSessionReuseEnabled = other._tlsSessionReuseEnabled;
   _tlsHandshakePending = other._tlsHandshakePending;
   _trustedTimeConfigured = other._trustedTimeConfigured;
@@ -110,14 +108,6 @@ SecureClient &SecureClient::operator=(SecureClient &&other) {
   memcpy(_tlsTxBuffer, other._tlsTxBuffer, sizeof(_tlsTxBuffer));
   _tlsTxLength = other._tlsTxLength;
   _tlsTxPending = other._tlsTxPending;
-  _trustedTimeBootstrapPending = other._trustedTimeBootstrapPending;
-  _deferredConnectByHost = other._deferredConnectByHost;
-  _deferredConnectIp = other._deferredConnectIp;
-  memset(_deferredConnectHost, 0, sizeof(_deferredConnectHost));
-  strncpy(_deferredConnectHost, other._deferredConnectHost,
-          sizeof(_deferredConnectHost) - 1);
-  _deferredConnectHost[sizeof(_deferredConnectHost) - 1] = '\0';
-  _deferredConnectPort = other._deferredConnectPort;
   _tlsSession.configurePolicy(other.tlsPolicy());
   prepareTlsSession();
   other.clearTlsState();
@@ -130,13 +120,8 @@ int SecureClient::connect(IPAddress ip, uint16_t port) {
     _lastError = SecureClientTlsUnavailable;
     return 0;
   }
-  applyProviderTrustedTime();
+  applyProviderTimeForTls();
   if (!tlsConfigurationReady()) {
-    if (!_trustedTimeConfigured && tlsConfigurationReadyExceptTime() &&
-        beginTrustedTimeBootstrapForConnect(false, ip, nullptr, port)) {
-      _lastError = SecureClientNoError;
-      return 1;
-    }
     _lastError = SecureClientTlsNotConfigured;
     return 0;
   }
@@ -166,17 +151,12 @@ int SecureClient::connect(const char *host, uint16_t port) {
     _lastError = SecureClientTlsUnavailable;
     return 0;
   }
-  applyProviderTrustedTime();
+  applyProviderTimeForTls();
   if (!setHostname(host)) {
     _lastError = SecureClientTlsNotConfigured;
     return 0;
   }
   if (!tlsConfigurationReady()) {
-    if (!_trustedTimeConfigured && tlsConfigurationReadyExceptTime() &&
-        beginTrustedTimeBootstrapForConnect(true, IPAddress(), host, port)) {
-      _lastError = SecureClientNoError;
-      return 1;
-    }
     _lastError = SecureClientTlsNotConfigured;
     return 0;
   }
@@ -302,11 +282,34 @@ bool SecureClient::setCryptoProvider(Crypto::TlsCryptoProvider &provider) {
 }
 
 bool SecureClient::setTlsPolicy(const Crypto::TlsClientPolicy &policy) {
-  return _tlsSession.configurePolicy(policy);
+  if (!_tlsSession.configurePolicy(policy))
+    return false;
+
+  _tlsSecurityLevel =
+      policy.verification == Crypto::TlsVerificationPolicy::InsecureNoVerify
+          ? SecureClientTlsSecurityLevel::Low
+          : SecureClientTlsSecurityLevel::High;
+  return true;
 }
 
 const Crypto::TlsClientPolicy &SecureClient::tlsPolicy() const {
   return _tlsSession.policy();
+}
+
+bool SecureClient::setTlsSecurityLevel(SecureClientTlsSecurityLevel level) {
+  Crypto::TlsClientPolicy policy = tlsPolicy();
+  policy.verification = level == SecureClientTlsSecurityLevel::Low
+                            ? Crypto::TlsVerificationPolicy::InsecureNoVerify
+                            : Crypto::TlsVerificationPolicy::Required;
+  if (!_tlsSession.configurePolicy(policy))
+    return false;
+
+  _tlsSecurityLevel = level;
+  return true;
+}
+
+SecureClientTlsSecurityLevel SecureClient::tlsSecurityLevel() const {
+  return _tlsSecurityLevel;
 }
 
 bool SecureClient::setTlsOperationPollLimit(uint16_t pollLimit) {
@@ -493,7 +496,6 @@ void SecureClient::flush() {
 }
 
 void SecureClient::stop() {
-  clearDeferredConnect();
   _tlsHandshakePending = false;
   _tlsSession.abort();
   clearTlsStreamBuffers();
@@ -520,8 +522,11 @@ EthernetSocket *SecureClient::acquireProviderSocket() {
   return provider->acquireSecureClientSocket();
 }
 
-bool SecureClient::applyProviderTrustedTime() {
+bool SecureClient::applyProviderTimeForTls() {
   if (_trustedTimeConfigured)
+    return true;
+
+  if (_tlsSecurityLevel == SecureClientTlsSecurityLevel::Low)
     return true;
 
   TransportProvider *provider = transportProvider();
@@ -529,94 +534,20 @@ bool SecureClient::applyProviderTrustedTime() {
     return false;
 
   NetworkClock *clock = provider->networkClock();
-  return clock != nullptr && clock->applyTrustedTime(*this);
-}
-
-bool SecureClient::tlsConfigurationReadyExceptTime() const {
-  return _trustAnchors != nullptr && _trustAnchorLength != 0 &&
-         _hostname[0] != '\0' && _cryptoProvider != nullptr;
-}
-
-bool SecureClient::beginTrustedTimeBootstrapForConnect(bool byHost, IPAddress ip,
-                                                       const char *host,
-                                                       uint16_t port) {
-  TransportProvider *provider = transportProvider();
-  if (provider == nullptr || port == 0)
+  if (clock == nullptr)
     return false;
 
-  if (!provider->beginTrustedTimeBootstrap())
-    return false;
+  if (_tlsSecurityLevel == SecureClientTlsSecurityLevel::High)
+    return clock->applyTrustedTime(*this);
 
-  clearDeferredConnect();
-  _trustedTimeBootstrapPending = true;
-  _deferredConnectByHost = byHost;
-  _deferredConnectIp = ip;
-  _deferredConnectPort = port;
-  if (byHost) {
-    if (host == nullptr || host[0] == '\0')
-      return false;
-    strncpy(_deferredConnectHost, host, sizeof(_deferredConnectHost) - 1);
-    _deferredConnectHost[sizeof(_deferredConnectHost) - 1] = '\0';
-  }
-  return true;
-}
+  uint64_t unixTime = 0;
+  if (clock->unixTime(unixTime))
+    return setTrustedTime(unixTime);
 
-Crypto::TlsAsyncStatus SecureClient::advanceTrustedTimeBootstrap() {
-  if (!_trustedTimeBootstrapPending)
-    return Crypto::TlsAsyncStatus::Complete;
+  if (clock->trustedUnixTime(unixTime))
+    return setTrustedTime(unixTime);
 
-  TransportProvider *provider = transportProvider();
-  if (provider == nullptr || !provider->pollTrustedTimeBootstrap()) {
-    clearDeferredConnect();
-    _lastError = SecureClientTrustedTimeBootstrapFailed;
-    return Crypto::TlsAsyncStatus::Error;
-  }
-
-  if (provider->trustedTimeBootstrapActive())
-    return Crypto::TlsAsyncStatus::Busy;
-
-  if (!applyProviderTrustedTime() || !tlsConfigurationReady()) {
-    clearDeferredConnect();
-    _lastError = SecureClientTrustedTimeBootstrapFailed;
-    return Crypto::TlsAsyncStatus::Error;
-  }
-
-  if (!startDeferredConnectAfterTrustedTime()) {
-    clearDeferredConnect();
-    _lastError = SecureClientConnectFailed;
-    return Crypto::TlsAsyncStatus::Error;
-  }
-
-  clearDeferredConnect();
-  return Crypto::TlsAsyncStatus::Busy;
-}
-
-bool SecureClient::startDeferredConnectAfterTrustedTime() {
-  const int result = _deferredConnectByHost
-                         ? EthernetClient::connect(_deferredConnectHost,
-                                                   _deferredConnectPort)
-                         : EthernetClient::connect(_deferredConnectIp,
-                                                   _deferredConnectPort);
-  if (result == 0)
-    return false;
-
-  _tlsHandshakePending = true;
-  if (EthernetClient::connected()) {
-    _tlsHandshakePending = false;
-    if (!startTlsHandshake())
-      return false;
-  }
-
-  _lastError = SecureClientNoError;
-  return true;
-}
-
-void SecureClient::clearDeferredConnect() {
-  _trustedTimeBootstrapPending = false;
-  _deferredConnectByHost = false;
-  _deferredConnectIp = IPAddress();
-  memset(_deferredConnectHost, 0, sizeof(_deferredConnectHost));
-  _deferredConnectPort = 0;
+  return false;
 }
 
 bool SecureClient::SocketTlsTransport::carrierUp() const {
@@ -657,9 +588,17 @@ void SecureClient::SocketTlsTransport::stop() {
 }
 
 bool SecureClient::tlsConfigurationReady() const {
-  return _trustAnchors != nullptr && _trustAnchorLength != 0 &&
-         _hostname[0] != '\0' && _cryptoProvider != nullptr &&
-         _trustedTimeConfigured;
+  if (_tlsSecurityLevel == SecureClientTlsSecurityLevel::Low)
+    return _cryptoProvider != nullptr;
+
+  if (_trustAnchors == nullptr || _trustAnchorLength == 0 ||
+      _hostname[0] == '\0' || _cryptoProvider == nullptr)
+    return false;
+
+  if (_tlsSecurityLevel == SecureClientTlsSecurityLevel::High)
+    return _trustedTimeConfigured;
+
+  return _trustedTimeConfigured;
 }
 
 bool SecureClient::prepareTlsSession() {
@@ -703,13 +642,6 @@ bool SecureClient::startTlsHandshake() {
 }
 
 Crypto::TlsAsyncStatus SecureClient::advanceTlsOperation() {
-  if (_trustedTimeBootstrapPending) {
-    const Crypto::TlsAsyncStatus status = advanceTrustedTimeBootstrap();
-    if (status == Crypto::TlsAsyncStatus::Busy ||
-        status == Crypto::TlsAsyncStatus::Error)
-      return status;
-  }
-
   if (_tlsHandshakePending) {
     EthernetSocket *socket = currentSocket();
     if (socket == nullptr || !socket->carrierUp()) {
@@ -831,10 +763,10 @@ void SecureClient::clearTlsState() {
   _clientPrivateKeyLength = 0;
   _alpnProtocols = nullptr;
   _trustedUnixTime = 0;
+  _tlsSecurityLevel = SecureClientTlsSecurityLevel::High;
   _tlsSessionReuseEnabled = false;
   _tlsHandshakePending = false;
   _trustedTimeConfigured = false;
-  clearDeferredConnect();
   memset(_hostname, 0, sizeof(_hostname));
   _cryptoProvider = nullptr;
   _lastTlsCallbackStatus = Crypto::TlsAsyncStatus::Idle;

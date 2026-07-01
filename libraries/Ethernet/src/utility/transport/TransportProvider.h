@@ -27,14 +27,6 @@
 
 class NetworkClock;
 
-class TrustedTimeBootstrapper {
-public:
-  virtual ~TrustedTimeBootstrapper() = default;
-  virtual bool beginTrustedTimeBootstrap() = 0;
-  virtual bool pollTrustedTimeBootstrap() = 0;
-  virtual bool trustedTimeBootstrapActive() const = 0;
-};
-
 class EthernetSocket {
 public:
   virtual ~EthernetSocket() = default;
@@ -114,30 +106,6 @@ public:
    * time through this hook.
    */
   virtual NetworkClock *networkClock() { return nullptr; }
-
-  /**
-   * @brief Start provider-owned trusted-time acquisition when configured.
-   *
-   * `SecureClient` may call this when all TLS policy except trusted time is
-   * configured. The provider owns the actual bootstrap policy, such as
-   * provisional SNTP followed by pinned/signed HTTPS time. Returning true means
-   * the request was accepted or trusted time is already available. General TLS
-   * must still consume only `networkClock()` trusted time after polling.
-   */
-  virtual bool beginTrustedTimeBootstrap() { return false; }
-
-  /**
-   * @brief Advance provider-owned trusted-time acquisition by one bounded step.
-   *
-   * Return false on fail-closed bootstrap failure. While
-   * `trustedTimeBootstrapActive()` is true, callers should keep polling.
-   */
-  virtual bool pollTrustedTimeBootstrap() { return false; }
-
-  /**
-   * @brief Return true while provider-owned trusted-time acquisition is active.
-   */
-  virtual bool trustedTimeBootstrapActive() const { return false; }
 
   /**
    * @brief Server/listener operations keyed by Arduino server port.

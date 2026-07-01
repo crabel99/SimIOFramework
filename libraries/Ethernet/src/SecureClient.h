@@ -21,7 +21,15 @@ enum SecureClientError : int {
   SecureClientConnectFailed = -2,
   SecureClientTlsNotConfigured = -3,
   SecureClientTlsHandshakeStartFailed = -4,
-  SecureClientTrustedTimeBootstrapFailed = -5,
+};
+
+enum class SecureClientTlsSecurityLevel : uint8_t {
+  /** Skip certificate verification. Intended only for explicit test/bring-up. */
+  Low = 0,
+  /** Require certificate verification, accepting manual/provisional RTC time. */
+  Medium = 1,
+  /** Require certificate verification and trusted RTC/provider time. */
+  High = 2,
 };
 
 class SecureClient : public EthernetClient {
@@ -90,11 +98,11 @@ public:
       uint8_t digest[Crypto::TlsSha256DigestLength]) const;
 
   /**
-   * @brief Configure trusted UTC Unix time for TLS certificate validity.
+   * @brief Configure UTC Unix time for TLS certificate validity.
    *
-   * Secure connections fail closed until this is set. Ethernet does not infer
-   * trust from uptime or unauthenticated wall-clock sources; callers must pass
-   * time from an authenticated source appropriate for the product.
+   * `High` security requires this to come from trusted RTC/provider time.
+   * `Medium` security may use provisional/manual RTC time for date validation.
+   * `Low` security skips certificate verification and does not require time.
    */
   bool setTrustedTime(uint64_t unixTime);
   void clearTrustedTime();
@@ -116,6 +124,17 @@ public:
    */
   bool setTlsPolicy(const Crypto::TlsClientPolicy &policy);
   const Crypto::TlsClientPolicy &tlsPolicy() const;
+
+  /**
+   * @brief Select how TLS consumes RTC/network time authority.
+   *
+   * The default is `High`: certificate verification is required and only
+   * trusted RTC/provider time is accepted. `Medium` still verifies certificates
+   * but may use manual/provisional RTC time. `Low` maps to an explicit
+   * no-verification Crypto policy for test/bring-up paths.
+   */
+  bool setTlsSecurityLevel(SecureClientTlsSecurityLevel level);
+  SecureClientTlsSecurityLevel tlsSecurityLevel() const;
 
   /**
    * @brief Configure the maximum poll steps for each TLS operation.
@@ -230,13 +249,7 @@ private:
   };
 
   EthernetSocket *acquireProviderSocket() override;
-  bool applyProviderTrustedTime();
-  bool tlsConfigurationReadyExceptTime() const;
-  bool beginTrustedTimeBootstrapForConnect(bool byHost, IPAddress ip,
-                                           const char *host, uint16_t port);
-  Crypto::TlsAsyncStatus advanceTrustedTimeBootstrap();
-  bool startDeferredConnectAfterTrustedTime();
-  void clearDeferredConnect();
+  bool applyProviderTimeForTls();
   bool tlsConfigurationReady() const;
   bool prepareTlsSession();
   bool startTlsHandshake();
@@ -258,6 +271,7 @@ private:
   const char *const *_alpnProtocols;
   uint64_t _trustedUnixTime;
   uint16_t _tlsOperationPollLimit;
+  SecureClientTlsSecurityLevel _tlsSecurityLevel;
   bool _tlsSessionReuseEnabled;
   bool _tlsHandshakePending;
   bool _trustedTimeConfigured;
@@ -273,9 +287,4 @@ private:
   uint8_t _tlsTxBuffer[TlsTxBufferSize] = {};
   size_t _tlsTxLength = 0;
   bool _tlsTxPending = false;
-  bool _trustedTimeBootstrapPending = false;
-  bool _deferredConnectByHost = false;
-  IPAddress _deferredConnectIp;
-  char _deferredConnectHost[128] = {};
-  uint16_t _deferredConnectPort = 0;
 };

@@ -525,6 +525,8 @@ struct TlsAesGcmRecordKeys {
 
 enum class TlsVerificationPolicy : uint8_t {
   Required,
+  /** Explicit insecure mode: no certificate chain, hostname, or date checks. */
+  InsecureNoVerify,
 };
 
 enum class TlsProtocolVersion : uint8_t {
