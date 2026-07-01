@@ -1,5 +1,6 @@
 #include "TrustedTimeClient.h"
 
+#include <psa/crypto.h>
 #include <string.h>
 
 namespace {
@@ -99,6 +100,92 @@ bool constantTimeEqual(const uint8_t *left, const uint8_t *right,
   return diff == 0;
 }
 
+int hexValue(uint8_t value) {
+  if (value >= '0' && value <= '9')
+    return static_cast<int>(value - '0');
+  if (value >= 'a' && value <= 'f')
+    return static_cast<int>(value - 'a' + 10);
+  if (value >= 'A' && value <= 'F')
+    return static_cast<int>(value - 'A' + 10);
+  return -1;
+}
+
+uint8_t asciiLower(uint8_t value) {
+  return value >= 'A' && value <= 'Z' ? static_cast<uint8_t>(value + 32)
+                                      : value;
+}
+
+bool headerNameEquals(const uint8_t *line, size_t lineLength,
+                      const char *headerName) {
+  const size_t headerNameLength = strlen(headerName);
+  if (line == nullptr || lineLength <= headerNameLength ||
+      line[headerNameLength] != ':') {
+    return false;
+  }
+
+  for (size_t index = 0; index < headerNameLength; ++index) {
+    if (asciiLower(line[index]) !=
+        asciiLower(static_cast<uint8_t>(headerName[index]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool parseHexHeader(const uint8_t *headers, size_t headersLength,
+                    const char *headerName, uint8_t *output,
+                    size_t outputLength) {
+  if (headers == nullptr || headerName == nullptr || headerName[0] == '\0' ||
+      output == nullptr || outputLength == 0) {
+    return false;
+  }
+
+  size_t lineStart = 0;
+  while (lineStart < headersLength) {
+    size_t lineEnd = lineStart;
+    while (lineEnd < headersLength && headers[lineEnd] != '\r' &&
+           headers[lineEnd] != '\n') {
+      ++lineEnd;
+    }
+
+    const uint8_t *line = headers + lineStart;
+    const size_t lineLength = lineEnd - lineStart;
+    if (headerNameEquals(line, lineLength, headerName)) {
+      size_t valueIndex = strlen(headerName) + 1;
+      while (valueIndex < lineLength &&
+             (line[valueIndex] == ' ' || line[valueIndex] == '\t')) {
+        ++valueIndex;
+      }
+
+      if (lineLength - valueIndex < outputLength * 2)
+        return false;
+
+      for (size_t index = 0; index < outputLength; ++index) {
+        const int high = hexValue(line[valueIndex + index * 2]);
+        const int low = hexValue(line[valueIndex + index * 2 + 1]);
+        if (high < 0 || low < 0)
+          return false;
+        output[index] = static_cast<uint8_t>((high << 4) | low);
+      }
+
+      valueIndex += outputLength * 2;
+      while (valueIndex < lineLength &&
+             (line[valueIndex] == ' ' || line[valueIndex] == '\t')) {
+        ++valueIndex;
+      }
+      return valueIndex == lineLength;
+    }
+
+    lineStart = lineEnd;
+    while (lineStart < headersLength &&
+           (headers[lineStart] == '\r' || headers[lineStart] == '\n')) {
+      ++lineStart;
+    }
+  }
+
+  return false;
+}
+
 bool readPeerPin(SecureClient &client, TrustedTimePinKind pinKind,
                  uint8_t digest[TrustedTimeSourcePolicy::CertificateSha256Length]) {
   switch (pinKind) {
@@ -153,6 +240,11 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
   _receivedUnixTime = 0;
   _responseLength = 0;
   _pollCount = 0;
+  _authenticatedUnixTime = 0;
+  _responseSignatureVerified = false;
+  _responseSignatureComplete = false;
+  memset(_responseSignatureHash, 0, sizeof(_responseSignatureHash));
+  memset(_responseSignature, 0, sizeof(_responseSignature));
   return true;
 }
 
@@ -201,6 +293,13 @@ TrustedTimeClientStatus TrustedTimeClient::poll() {
       return _status;
     processResponse();
     return _status;
+  case TrustedTimeClientStatus::Authenticating:
+    if (!_responseSignatureComplete)
+      return _status;
+    if (!_responseSignatureVerified)
+      return fail(TrustedTimeClientError::AuthenticationFailed);
+    finishAuthenticatedResponse();
+    return _status;
   case TrustedTimeClientStatus::Idle:
   case TrustedTimeClientStatus::Connecting:
   case TrustedTimeClientStatus::Updated:
@@ -218,6 +317,11 @@ void TrustedTimeClient::stop() {
   _requestLength = 0;
   _responseLength = 0;
   _pollCount = 0;
+  _authenticatedUnixTime = 0;
+  _responseSignatureVerified = false;
+  _responseSignatureComplete = false;
+  memset(_responseSignatureHash, 0, sizeof(_responseSignatureHash));
+  memset(_responseSignature, 0, sizeof(_responseSignature));
 }
 
 bool TrustedTimeClient::parseHttpUnixTimeResponse(const uint8_t *response,
@@ -331,29 +435,115 @@ bool TrustedTimeClient::processResponse() {
     return false;
   }
 
-  if (!_policy.authenticate(body, bodyLength, unixTime,
-                            _policy.authenticationContext)) {
+  if (!authenticateResponse(body, bodyLength, unixTime)) {
     fail(TrustedTimeClientError::AuthenticationFailed);
     return false;
   }
 
-  if (!_clock.setUnixTime(unixTime, NetworkTimeState::Trusted)) {
+  return true;
+}
+
+bool TrustedTimeClient::authenticateResponse(const uint8_t *body,
+                                             size_t bodyLength,
+                                             uint64_t unixTime) {
+  if (_policy.authenticate != nullptr &&
+      !_policy.authenticate(body, bodyLength, unixTime,
+                            _policy.authenticationContext)) {
+    return false;
+  }
+
+  if (_policy.responseSignatureAlgorithm ==
+      TrustedTimeResponseSignatureAlgorithm::None) {
+    _authenticatedUnixTime = unixTime;
+    return finishAuthenticatedResponse();
+  }
+
+  return startResponseSignatureVerification(body, bodyLength, unixTime);
+}
+
+bool TrustedTimeClient::startResponseSignatureVerification(const uint8_t *body,
+                                                           size_t bodyLength,
+                                                           uint64_t unixTime) {
+  if (_policy.responseSignatureAlgorithm !=
+      TrustedTimeResponseSignatureAlgorithm::EcdsaP256Sha256) {
+    return false;
+  }
+
+  const uint8_t *headerEnd =
+      findBytes(_response, _responseLength, HeaderTerminator);
+  if (headerEnd == nullptr)
+    return false;
+
+  const size_t headerLength = static_cast<size_t>(headerEnd - _response);
+  if (!parseHexHeader(_response, headerLength, _policy.responseSignatureHeader,
+                      _responseSignature, sizeof(_responseSignature))) {
+    return false;
+  }
+
+  size_t hashLength = 0;
+  if (psa_crypto_init() != PSA_SUCCESS ||
+      psa_hash_compute(PSA_ALG_SHA_256, body, bodyLength,
+                       _responseSignatureHash, sizeof(_responseSignatureHash),
+                       &hashLength) != PSA_SUCCESS ||
+      hashLength != sizeof(_responseSignatureHash)) {
+    return false;
+  }
+
+  _authenticatedUnixTime = unixTime;
+  _responseSignatureVerified = false;
+  _responseSignatureComplete = false;
+  _status = TrustedTimeClientStatus::Authenticating;
+
+  if (!_policy.cryptoProvider->signatureVerifyAsync(
+          Crypto::TlsSignatureAlgorithm::EcdsaP256Sha256,
+          _policy.responseSigningPublicKey,
+          _policy.responseSigningPublicKeyLength, _responseSignatureHash,
+          sizeof(_responseSignatureHash), _responseSignature,
+          sizeof(_responseSignature), handleResponseSignatureVerified, this)) {
+    memset(_responseSignatureHash, 0, sizeof(_responseSignatureHash));
+    memset(_responseSignature, 0, sizeof(_responseSignature));
+    return false;
+  }
+
+  return true;
+}
+
+bool TrustedTimeClient::finishAuthenticatedResponse() {
+  if (!_clock.setUnixTime(_authenticatedUnixTime, NetworkTimeState::Trusted)) {
     fail(TrustedTimeClientError::ClockRejected);
     return false;
   }
 
-  _receivedUnixTime = unixTime;
+  _receivedUnixTime = _authenticatedUnixTime;
   _client.stop();
   _status = TrustedTimeClientStatus::Updated;
   _lastError = TrustedTimeClientError::None;
+  memset(_responseSignatureHash, 0, sizeof(_responseSignatureHash));
+  memset(_responseSignature, 0, sizeof(_responseSignature));
   return true;
+}
+
+void TrustedTimeClient::handleResponseSignatureVerified(bool success,
+                                                        void *context) {
+  auto *client = static_cast<TrustedTimeClient *>(context);
+  if (client == nullptr)
+    return;
+
+  client->_responseSignatureVerified = success;
+  client->_responseSignatureComplete = true;
+  if (!success) {
+    memset(client->_responseSignatureHash, 0,
+           sizeof(client->_responseSignatureHash));
+    memset(client->_responseSignature, 0, sizeof(client->_responseSignature));
+  }
 }
 
 bool TrustedTimeClient::active() const {
   return _status == TrustedTimeClientStatus::Connecting ||
          _status == TrustedTimeClientStatus::Handshaking ||
          _status == TrustedTimeClientStatus::Requesting ||
-         _status == TrustedTimeClientStatus::Receiving;
+         _status == TrustedTimeClientStatus::Receiving ||
+         _status == TrustedTimeClientStatus::Authenticating;
 }
 
 bool TrustedTimeClient::consumePollBudget() {
