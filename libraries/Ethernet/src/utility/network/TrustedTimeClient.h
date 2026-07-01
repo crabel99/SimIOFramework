@@ -107,7 +107,14 @@ struct TrustedTimeSourcePolicy {
   const uint8_t *responseSigningPublicKey = nullptr;
   size_t responseSigningPublicKeyLength = 0;
   Crypto::TlsCryptoProvider *cryptoProvider = nullptr;
-  /** Plausible time used only for this endpoint's certificate date checks. */
+  /**
+   * Plausible time used only for this endpoint's certificate date checks.
+   *
+   * Leave as 0 to use the current NetworkClock/RTC time. This keeps the RTC as
+   * the system authority: provisional/manual time can bootstrap only the
+   * constrained trusted-time endpoint, and successful authentication promotes
+   * the same clock to trusted.
+   */
   uint64_t provisionalUnixTime = 0;
   TrustedTimeResponseAuthenticator authenticate = nullptr;
   void *authenticationContext = nullptr;
@@ -127,7 +134,9 @@ struct TrustedTimeSourcePolicy {
            path != nullptr && path[0] == '/' && trustAnchors != nullptr &&
            trustAnchorLength != 0 && certificateSha256 != nullptr &&
            certificateSha256Length == CertificateSha256Length &&
-           cryptoProvider != nullptr && provisionalUnixTime >= 946684800ULL &&
+           cryptoProvider != nullptr &&
+           (provisionalUnixTime == 0 ||
+            provisionalUnixTime >= 946684800ULL) &&
            (hasCallbackAuthenticator || hasResponseSignature);
   }
 };

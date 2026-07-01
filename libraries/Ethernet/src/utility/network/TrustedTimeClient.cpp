@@ -217,24 +217,38 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
     return false;
   }
 
+  uint64_t provisionalUnixTime = policy.provisionalUnixTime;
+  if (provisionalUnixTime == 0 &&
+      (!_clock.unixTime(provisionalUnixTime) ||
+       provisionalUnixTime < MinTrustedUnixTime)) {
+    _lastError = TrustedTimeClientError::InvalidArgument;
+    return false;
+  }
+
+  TrustedTimeSourcePolicy resolvedPolicy = policy;
+  resolvedPolicy.provisionalUnixTime = provisionalUnixTime;
+
   _client.stop();
-  if (!_client.setCryptoProvider(*policy.cryptoProvider) ||
-      !_client.setTrustAnchors(policy.trustAnchors, policy.trustAnchorLength) ||
-      !_client.setTrustedTime(policy.provisionalUnixTime) ||
-      !_client.setHostname(policy.host)) {
+  if (!_client.setTlsSecurityLevel(SecureClientTlsSecurityLevel::Medium) ||
+      !_client.setCryptoProvider(*resolvedPolicy.cryptoProvider) ||
+      !_client.setTrustAnchors(resolvedPolicy.trustAnchors,
+                               resolvedPolicy.trustAnchorLength) ||
+      !_client.setTrustedTime(resolvedPolicy.provisionalUnixTime) ||
+      !_client.setHostname(resolvedPolicy.host)) {
     _lastError = TrustedTimeClientError::TlsConfigurationFailed;
     return false;
   }
 
-  const int connectResult = policy.connectByIp
-                                ? _client.connect(policy.connectIp, policy.port)
-                                : _client.connect(policy.host, policy.port);
+  const int connectResult =
+      resolvedPolicy.connectByIp
+          ? _client.connect(resolvedPolicy.connectIp, resolvedPolicy.port)
+          : _client.connect(resolvedPolicy.host, resolvedPolicy.port);
   if (connectResult != 1) {
     _lastError = TrustedTimeClientError::ConnectFailed;
     return false;
   }
 
-  _policy = policy;
+  _policy = resolvedPolicy;
   _status = TrustedTimeClientStatus::Handshaking;
   _lastError = TrustedTimeClientError::None;
   _receivedUnixTime = 0;
