@@ -5,6 +5,21 @@
 
 #include <stdint.h>
 
+#define RTC_USE_UNCLAIMED 0
+#define RTC_USE_DEBOUNCE 1
+#define RTC_USE_TIME_DAEMON 2
+
+#ifndef RTC_CONFIGURED_USE
+#define RTC_CONFIGURED_USE RTC_USE_UNCLAIMED
+#endif
+
+#if RTC_CONFIGURED_USE != RTC_USE_UNCLAIMED &&                                 \
+    RTC_CONFIGURED_USE != RTC_USE_DEBOUNCE &&                                  \
+    RTC_CONFIGURED_USE != RTC_USE_TIME_DAEMON
+#error                                                                         \
+    "RTC_CONFIGURED_USE must be RTC_USE_UNCLAIMED, RTC_USE_DEBOUNCE, or RTC_USE_TIME_DAEMON"
+#endif
+
 #if defined(__SAME53__) || defined(__SAME54__)
 #define RTC_PERIPH (reinterpret_cast<uintptr_t>(RTC_REGS))
 #else
@@ -19,13 +34,13 @@
  * register access, interrupt flags, and PendSV callback dispatch. Higher-level
  * code such as NetworkTimeService owns time source authority and trust policy.
  *
- * Legacy Unix-time authority helpers remain temporarily for existing callers
- * while the network time daemon is introduced. New code should use the raw
- * peripheral operations plus explicit daemon-owned trust state.
+ * Unix-time helpers are raw calendar convenience functions only. Higher-level
+ * code such as NetworkTimeService owns source authority and trust policy.
  */
 class rtc {
 public:
-  /** @brief Bitmask of deferred RTC events delivered from the PendSV context. */
+  /** @brief Bitmask of deferred RTC events delivered from the PendSV context.
+   */
   using EventMask = uint16_t;
 
   /**
@@ -38,17 +53,7 @@ public:
    * interrupt handler.
    */
   using EventCallback = void (*)(EventMask events, uint64_t unixTime,
-                                void *context);
-
-  /** @brief Authority level associated with the currently configured time. */
-  enum class TimeState : uint8_t {
-    /** @brief No authoritative time has been established. */
-    Unset = 0,
-    /** @brief Application-provided plausible time. */
-    Manual = 1,
-    /** @brief Time established by a trusted source. */
-    Trusted = 2,
-  };
+                                 void *context);
 
   /** @brief Last failure reason for RTC setup, time conversion, or writes. */
   enum class Error : uint8_t {
@@ -60,11 +65,27 @@ public:
     CountWriteTimeout = 5,
     EnableSyncTimeout = 6,
     ScheduleFailed = 7,
-    TrustedAuthorityRejected = 8,
     ClockWriteTimeout = 9,
     AlarmWriteTimeout = 10,
     UnsupportedAlarm = 11,
     UnsupportedDebounce = 12,
+    ClaimConflict = 13,
+  };
+
+  /**
+   * @brief Exclusive high-level use currently claimed for RTC helpers.
+   *
+   * The raw register read/write helpers remain available for peripheral-level
+   * code, but configuration helpers that establish a role claim the RTC as
+   * either a debounce source or the Mode2 time-daemon clock. Default builds
+   * start unclaimed and enforce conflicts at runtime. Builds may define
+   * RTC_CONFIGURED_USE to RTC_USE_DEBOUNCE or RTC_USE_TIME_DAEMON to make
+   * incompatible helper calls compile-time errors.
+   */
+  enum class RtcUse : uint8_t {
+    Unclaimed = RTC_USE_UNCLAIMED,
+    Debounce = RTC_USE_DEBOUNCE,
+    TimeDaemon = RTC_USE_TIME_DAEMON,
   };
 
   /**
@@ -262,7 +283,11 @@ public:
    * @param runStandby Reserved for standby behavior; currently ignored.
    * @return true when clocking, Mode2 setup, interrupts, and PendSV succeeded.
    */
+#if RTC_CONFIGURED_USE == RTC_USE_DEBOUNCE
+  static bool begin(bool runStandby = false) = delete;
+#else
   static bool begin(bool runStandby = false);
+#endif
   /** @brief Disable RTC interrupts and the hardware counter. */
   static void end();
   /** @brief Return true when the RTC hardware enable bit is set. */
@@ -282,8 +307,13 @@ public:
    * prescaler, initializes the calendar register if the RTC was disabled, and
    * enables the requested Mode2 interrupts.
    */
+#if RTC_CONFIGURED_USE == RTC_USE_DEBOUNCE
+  static bool configureClock() = delete;
+  static bool configureClock(const ClockConfig &config) = delete;
+#else
   static bool configureClock();
   static bool configureClock(const ClockConfig &config);
+#endif
   /** @brief Return the current hardware operating mode. */
   static OperatingMode operatingMode();
   /** @brief Return the number of Mode2 alarm channels exposed by this target.
@@ -293,40 +323,27 @@ public:
   static bool alarmSupported(uint8_t index);
 
   /**
-   * @brief Set the RTC calendar from Unix time and assign authority state.
+   * @brief Set the Mode2 calendar from Unix time.
    * @param unixTime Seconds since 1970-01-01 UTC.
-   * @param state Authority assigned to this update.
-   * @return false if time is outside the Mode2 window or trust rules reject it.
+   * @return true when the time is representable and written successfully.
    *
-   * A trusted time can only be replaced by another trusted time. Passing
-   * TimeState::Unset stores the value as Manual so callers cannot accidentally
-   * set a usable clock with no authority label.
+   * This is a raw peripheral write. Source authority and trust policy are owned
+   * by NetworkTimeService or another higher-level clock authority.
    */
-  static bool setUnixTime(uint64_t unixTime, TimeState state);
-  /**
-   * @brief Set RTC time with the legacy trusted/manual boolean.
-   * @param unixTime Seconds since 1970-01-01 UTC.
-   * @param trusted true for TimeState::Trusted, false for TimeState::Manual.
-   */
-  static bool setUnixTime(uint64_t unixTime, bool trusted) {
-    return setUnixTime(unixTime, trusted ? TimeState::Trusted
-                                         : TimeState::Manual);
-  }
+#if RTC_CONFIGURED_USE == RTC_USE_DEBOUNCE
+  static bool setUnixTime(uint64_t unixTime) = delete;
+#else
+  static bool setUnixTime(uint64_t unixTime);
+#endif
   /**
    * @brief Read the current RTC time as Unix time.
    * @param unixTime Receives seconds since 1970-01-01 UTC.
-   * @return true only when a Manual or Trusted time has been established.
+   * @return true only when time has been written and continuity is intact.
    *
    * If the hardware calendar has moved backwards relative to the last accepted
-   * value, the RTC authority state is cleared and this returns false.
+   * value, the RTC configured state is cleared and this returns false.
    */
   static bool unixTime(uint64_t &unixTime);
-  /**
-   * @brief Read Unix time only when the current authority is Trusted.
-   * @param unixTime Receives seconds since 1970-01-01 UTC.
-   * @return false when time is unset, manual, invalid, or continuity was lost.
-   */
-  static bool trustedUnixTime(uint64_t &unixTime);
   /**
    * @brief Convert Unix time into hardware Mode2 calendar fields.
    * @return false outside the 2000-01-01 through 2063-12-31 Mode2 window.
@@ -336,8 +353,7 @@ public:
    * @brief Convert hardware Mode2 calendar fields into Unix time.
    * @return false when fields are outside the Mode2 calendar domain.
    */
-  static bool mode2ToUnixTime(const Mode2Time &mode2Time,
-                              uint64_t &unixTime);
+  static bool mode2ToUnixTime(const Mode2Time &mode2Time, uint64_t &unixTime);
   /**
    * @brief Read the current RTC count/calendar register for the active mode.
    *
@@ -363,15 +379,28 @@ public:
    * @param match Match precision.
    * @return false if the alarm index or calendar fields are unsupported.
    */
+#if RTC_CONFIGURED_USE == RTC_USE_DEBOUNCE
   static bool setAlarm(uint8_t index, const Mode2Time &time,
-                       AlarmMatch match);
+                       AlarmMatch match) = delete;
+#else
+  static bool setAlarm(uint8_t index, const Mode2Time &time, AlarmMatch match);
+#endif
   /**
    * @brief Program a hardware Mode2 alarm from Unix time.
    * @return false if Unix time is outside the Mode2 window.
    */
+#if RTC_CONFIGURED_USE == RTC_USE_DEBOUNCE
+  static bool setAlarm(uint8_t index, uint64_t unixTime,
+                       AlarmMatch match) = delete;
+#else
   static bool setAlarm(uint8_t index, uint64_t unixTime, AlarmMatch match);
+#endif
   /** @brief Disable and clear a hardware Mode2 alarm. */
+#if RTC_CONFIGURED_USE == RTC_USE_DEBOUNCE
+  static bool clearAlarm(uint8_t index) = delete;
+#else
   static bool clearAlarm(uint8_t index);
+#endif
   /**
    * @brief Enable or disable a periodic interval interrupt source.
    *
@@ -392,8 +421,13 @@ public:
    * This preset owns RTC mode/clock/prescaler selection. Use the PERn overload
    * only when the RTC has already been configured elsewhere.
    */
+#if RTC_CONFIGURED_USE == RTC_USE_TIME_DAEMON
+  static bool configureDebounce() = delete;
+  static bool configureDebounce(const DebounceConfig &config) = delete;
+#else
   static bool configureDebounce();
   static bool configureDebounce(const DebounceConfig &config);
+#endif
   /**
    * @brief Configure a periodic RTC source for debounce sampling.
    * @param interval Periodic interval source, or Disabled.
@@ -404,18 +438,19 @@ public:
    * prescaler. Callers that need debounce must configure an RTC mode/clock fast
    * enough for their debounce window before enabling this periodic source.
    */
+#if RTC_CONFIGURED_USE == RTC_USE_TIME_DAEMON
+  static bool configureDebounce(PeriodicInterval interval,
+                                bool interrupt = false) = delete;
+#else
   static bool configureDebounce(PeriodicInterval interval,
                                 bool interrupt = false);
-  /** @brief Return true when the current RTC authority is Trusted. */
-  static bool trusted();
-  /** @brief Return the current RTC authority state. */
-  static TimeState timeState();
+#endif
+  /** @brief Return the currently claimed high-level RTC helper role. */
+  static RtcUse currentUse();
   /** @brief Return and retain the last RTC error code. */
   static Error lastError();
-  /** @brief Clear stored Unix time and authority state without stopping RTC. */
+  /** @brief Clear stored Unix time without stopping RTC or changing RTC use. */
   static void clearTime();
-  /** @brief Demote Trusted time to Manual without changing the calendar. */
-  static void clearTrusted();
 
   /** @brief Return the raw Mode2 CLOCK register value. */
   static uint32_t counter();
@@ -443,6 +478,9 @@ public:
   /** @brief Capture RTC IRQ state and schedule PendSV callback dispatch. */
   static void handleInterrupt();
 #if defined(UNIT_TEST)
+  /** @brief Reset the RTC helper ownership claim for embedded unit tests only.
+   */
+  static void resetUseForTesting();
   /** @brief Inject RTC interrupt flags for embedded unit tests only. */
   static void handleInterruptFlagsForTesting(uint16_t flags);
 #endif

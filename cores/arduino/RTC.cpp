@@ -308,7 +308,8 @@ struct RtcState {
   uint64_t pendingUnixTime = 0;
   uint64_t unixTime = 0;
   bool serviceRegistered = false;
-  rtc::TimeState timeState = rtc::TimeState::Unset;
+  bool configured = false;
+  rtc::RtcUse currentUse = rtc::RtcUse::Unclaimed;
   rtc::Error lastError = rtc::Error::None;
 };
 
@@ -319,13 +320,11 @@ static_assert((rtc::Mode2ReferenceYear % 4u) == 0u,
 static_assert(rtc::Mode2ReferenceYear == 2000u,
               "RTC Mode2 Unix conversion is bounded to 2000-2063");
 
-bool mode2YearIsLeap(uint8_t yearOffset) {
-  return (yearOffset & 0x03u) == 0u;
-}
+bool mode2YearIsLeap(uint8_t yearOffset) { return (yearOffset & 0x03u) == 0u; }
 
 uint8_t mode2DaysInMonth(uint8_t yearOffset, uint8_t month) {
-  static constexpr uint8_t kDaysByMonth[] = {
-      31u, 28u, 31u, 30u, 31u, 30u, 31u, 31u, 30u, 31u, 30u, 31u};
+  static constexpr uint8_t kDaysByMonth[] = {31u, 28u, 31u, 30u, 31u, 30u,
+                                             31u, 31u, 30u, 31u, 30u, 31u};
   if (month == 0u || month > 12u)
     return 0u;
   if (month == 2u && mode2YearIsLeap(yearOffset))
@@ -339,11 +338,9 @@ int64_t daysFromCivil(uint16_t year, uint8_t month, uint8_t day) {
   adjustedYear -= monthValue <= 2u ? 1 : 0;
   const int32_t era =
       (adjustedYear >= 0 ? adjustedYear : adjustedYear - 399) / 400;
-  const uint32_t yearOfEra =
-      static_cast<uint32_t>(adjustedYear - era * 400);
+  const uint32_t yearOfEra = static_cast<uint32_t>(adjustedYear - era * 400);
   const uint32_t dayOfYear =
-      (153u * (monthValue > 2u ? monthValue - 3u : monthValue + 9u) + 2u) /
-          5u +
+      (153u * (monthValue > 2u ? monthValue - 3u : monthValue + 9u) + 2u) / 5u +
       day - 1u;
   const uint32_t dayOfEra =
       yearOfEra * 365u + yearOfEra / 4u - yearOfEra / 100u + dayOfYear;
@@ -356,8 +353,7 @@ void civilFromDays(uint64_t daysSinceEpoch, uint16_t &year, uint8_t &month,
   const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
   const uint32_t dayOfEra = static_cast<uint32_t>(z - era * 146097);
   const uint32_t yearOfEra =
-      (dayOfEra - dayOfEra / 1460u + dayOfEra / 36524u -
-       dayOfEra / 146096u) /
+      (dayOfEra - dayOfEra / 1460u + dayOfEra / 36524u - dayOfEra / 146096u) /
       365u;
   const int64_t yearValue = static_cast<int64_t>(yearOfEra) + era * 400;
   const uint32_t dayOfYear =
@@ -468,9 +464,9 @@ void processInterruptFlags(uint16_t flags, bool clearHardwareFlags) {
   if (overflow) {
     const uint32_t primask = enterCritical();
     rtcState.unixTime = 0;
-    rtcState.timeState = rtc::TimeState::Unset;
+    rtcState.configured = false;
     exitCritical(primask);
-  } else if (rtcState.timeState != rtc::TimeState::Unset) {
+  } else if (rtcState.configured) {
     rtc::Mode2Time mode2Time = unpackMode2Time(clockReg());
     if (rtc::mode2ToUnixTime(mode2Time, unixTimeValue)) {
       const uint32_t primask = enterCritical();
@@ -482,13 +478,26 @@ void processInterruptFlags(uint16_t flags, bool clearHardwareFlags) {
   queueEvent(events, unixTimeValue);
 }
 
+bool claimUse(rtc::RtcUse requested) {
+  const uint32_t primask = enterCritical();
+  const bool available = rtcState.currentUse == rtc::RtcUse::Unclaimed ||
+                         rtcState.currentUse == requested;
+  if (available) {
+    rtcState.currentUse = requested;
+    rtcState.lastError = rtc::Error::None;
+  } else {
+    rtcState.lastError = rtc::Error::ClaimConflict;
+  }
+  exitCritical(primask);
+  return available;
+}
+
 bool ensurePendSvServiceRegistered() {
   if (rtcState.serviceRegistered)
     return true;
 
-  const bool registered =
-      PendSV::instance().registerService(rtc::pendSvServiceId(),
-                                         rtcPendSvService);
+  const bool registered = PendSV::instance().registerService(
+      rtc::pendSvServiceId(), rtcPendSvService);
   if (registered)
     rtcState.serviceRegistered = true;
   return registered;
@@ -561,11 +570,13 @@ void rtc::disableClock() {
 #endif
 }
 
+#if RTC_CONFIGURED_USE != RTC_USE_DEBOUNCE
 bool rtc::begin(bool runStandby) {
   ClockConfig config;
   config.runStandby = runStandby;
   return configureClock(config);
 }
+#endif
 
 void rtc::end() {
   disableInterrupts(BaseInterruptMask | PeriodicInterruptMask);
@@ -592,9 +603,12 @@ bool rtc::configure(OperatingMode mode, Prescaler prescaler) {
   return true;
 }
 
+#if RTC_CONFIGURED_USE != RTC_USE_DEBOUNCE
 bool rtc::configureClock() { return configureClock(ClockConfig{}); }
 
 bool rtc::configureClock(const ClockConfig &config) {
+  if (!claimUse(RtcUse::TimeDaemon))
+    return false;
   (void)config.runStandby;
   if (!ensurePendSvServiceRegistered()) {
     rtcState.lastError = Error::PendSvRegistrationFailed;
@@ -643,6 +657,7 @@ bool rtc::configureClock(const ClockConfig &config) {
   rtcState.lastError = Error::None;
   return true;
 }
+#endif
 
 rtc::OperatingMode rtc::operatingMode() {
   return static_cast<OperatingMode>((controlReg() >> ControlModePosition) &
@@ -655,7 +670,10 @@ bool rtc::alarmSupported(uint8_t index) {
   return index < mode2AlarmCount() && mode2AlarmSupported(index);
 }
 
-bool rtc::setUnixTime(uint64_t unixTimeValue, TimeState state) {
+#if RTC_CONFIGURED_USE != RTC_USE_DEBOUNCE
+bool rtc::setUnixTime(uint64_t unixTimeValue) {
+  if (!claimUse(RtcUse::TimeDaemon))
+    return false;
   if (unixTimeValue == 0) {
     rtcState.lastError = Error::InvalidUnixTime;
     return false;
@@ -670,14 +688,8 @@ bool rtc::setUnixTime(uint64_t unixTimeValue, TimeState state) {
   }
 
   const uint32_t primask = enterCritical();
-  if (rtcState.timeState == TimeState::Trusted && state != TimeState::Trusted) {
-    rtcState.lastError = Error::TrustedAuthorityRejected;
-    exitCritical(primask);
-    return false;
-  }
-
   rtcState.unixTime = unixTimeValue;
-  rtcState.timeState = state == TimeState::Unset ? TimeState::Manual : state;
+  rtcState.configured = true;
   rtcState.lastError = Error::None;
   exitCritical(primask);
 
@@ -689,10 +701,11 @@ bool rtc::setUnixTime(uint64_t unixTimeValue, TimeState state) {
   queueEvent(EventTimeSet, unixTimeValue);
   return true;
 }
+#endif
 
 bool rtc::unixTime(uint64_t &unixTimeOut) {
   const uint32_t primask = enterCritical();
-  const bool configured = rtcState.timeState != TimeState::Unset;
+  const bool configured = rtcState.configured;
   exitCritical(primask);
   if (!configured)
     return false;
@@ -704,7 +717,7 @@ bool rtc::unixTime(uint64_t &unixTimeOut) {
   const uint32_t updateMask = enterCritical();
   if (rtcState.unixTime != 0 && unixTimeOut < rtcState.unixTime) {
     rtcState.unixTime = 0;
-    rtcState.timeState = TimeState::Unset;
+    rtcState.configured = false;
     exitCritical(updateMask);
     queueEvent(EventOverflow, 0);
     return false;
@@ -712,13 +725,6 @@ bool rtc::unixTime(uint64_t &unixTimeOut) {
   rtcState.unixTime = unixTimeOut;
   exitCritical(updateMask);
   return true;
-}
-
-bool rtc::trustedUnixTime(uint64_t &unixTimeOut) {
-  const uint32_t primask = enterCritical();
-  const bool configured = rtcState.timeState == TimeState::Trusted;
-  exitCritical(primask);
-  return configured && unixTime(unixTimeOut);
 }
 
 bool rtc::read(uint32_t &value) {
@@ -847,7 +853,10 @@ bool rtc::mode2ToUnixTime(const Mode2Time &mode2Time, uint64_t &unixTimeOut) {
   return true;
 }
 
+#if RTC_CONFIGURED_USE != RTC_USE_DEBOUNCE
 bool rtc::setAlarm(uint8_t index, const Mode2Time &time, AlarmMatch match) {
+  if (!claimUse(RtcUse::TimeDaemon))
+    return false;
   if (!rtc::alarmSupported(index)) {
     rtcState.lastError = Error::UnsupportedAlarm;
     return false;
@@ -884,6 +893,8 @@ bool rtc::setAlarm(uint8_t index, uint64_t unixTimeValue, AlarmMatch match) {
 }
 
 bool rtc::clearAlarm(uint8_t index) {
+  if (!claimUse(RtcUse::TimeDaemon))
+    return false;
   if (!rtc::alarmSupported(index)) {
     rtcState.lastError = Error::UnsupportedAlarm;
     return false;
@@ -895,6 +906,7 @@ bool rtc::clearAlarm(uint8_t index) {
   rtcState.lastError = Error::None;
   return true;
 }
+#endif
 
 bool rtc::setPeriodicInterrupt(PeriodicInterval interval, bool enabled) {
   const uint16_t mask = periodicInterruptMask(interval);
@@ -949,9 +961,12 @@ bool rtc::setPeriodicEventOutput(PeriodicInterval interval, bool enabled) {
   return true;
 }
 
+#if RTC_CONFIGURED_USE != RTC_USE_TIME_DAEMON
 bool rtc::configureDebounce() { return configureDebounce(DebounceConfig{}); }
 
 bool rtc::configureDebounce(const DebounceConfig &config) {
+  if (!claimUse(RtcUse::Debounce))
+    return false;
   (void)config.runStandby;
   if (config.interval == PeriodicInterval::Disabled)
     return configureDebounce(PeriodicInterval::Disabled, config.interrupt);
@@ -1004,6 +1019,8 @@ bool rtc::configureDebounce(const DebounceConfig &config) {
 }
 
 bool rtc::configureDebounce(PeriodicInterval interval, bool interrupt) {
+  if (!claimUse(RtcUse::Debounce))
+    return false;
   if (interval == PeriodicInterval::Disabled) {
     const bool interruptDisabled =
         setPeriodicInterrupt(PeriodicInterval::Disabled, false);
@@ -1015,17 +1032,11 @@ bool rtc::configureDebounce(PeriodicInterval interval, bool interrupt) {
   return interrupt ? setPeriodicInterrupt(interval, true)
                    : setPeriodicEventOutput(interval, true);
 }
+#endif
 
-bool rtc::trusted() {
+rtc::RtcUse rtc::currentUse() {
   const uint32_t primask = enterCritical();
-  const bool result = rtcState.timeState == TimeState::Trusted;
-  exitCritical(primask);
-  return result;
-}
-
-rtc::TimeState rtc::timeState() {
-  const uint32_t primask = enterCritical();
-  const TimeState result = rtcState.timeState;
+  const RtcUse result = rtcState.currentUse;
   exitCritical(primask);
   return result;
 }
@@ -1040,15 +1051,8 @@ rtc::Error rtc::lastError() {
 void rtc::clearTime() {
   const uint32_t primask = enterCritical();
   rtcState.unixTime = 0;
-  rtcState.timeState = TimeState::Unset;
+  rtcState.configured = false;
   rtcState.lastError = Error::None;
-  exitCritical(primask);
-}
-
-void rtc::clearTrusted() {
-  const uint32_t primask = enterCritical();
-  if (rtcState.timeState == TimeState::Trusted)
-    rtcState.timeState = TimeState::Manual;
   exitCritical(primask);
 }
 
@@ -1084,11 +1088,16 @@ void rtc::enableInterrupts(uint16_t mask) { writeInterruptEnableSet(mask); }
 
 void rtc::disableInterrupts(uint16_t mask) { writeInterruptEnableClear(mask); }
 
-void rtc::handleInterrupt() {
-  processInterruptFlags(interruptFlags(), true);
-}
+void rtc::handleInterrupt() { processInterruptFlags(interruptFlags(), true); }
 
 #if defined(UNIT_TEST)
+void rtc::resetUseForTesting() {
+  const uint32_t primask = enterCritical();
+  rtcState.currentUse = RtcUse::Unclaimed;
+  rtcState.lastError = Error::None;
+  exitCritical(primask);
+}
+
 void rtc::handleInterruptFlagsForTesting(uint16_t flags) {
   processInterruptFlags(flags, false);
 }

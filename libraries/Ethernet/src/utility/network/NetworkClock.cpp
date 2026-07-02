@@ -6,22 +6,6 @@
 #include <RTC.h>
 #endif
 
-namespace {
-#if defined(RTC_AVAILABLE) && RTC_AVAILABLE
-rtc::TimeState rtcTimeState(NetworkTimeState state) {
-  switch (state) {
-  case NetworkTimeState::Trusted:
-    return rtc::TimeState::Trusted;
-  case NetworkTimeState::Manual:
-    return rtc::TimeState::Manual;
-  case NetworkTimeState::Unset:
-  default:
-    return rtc::TimeState::Unset;
-  }
-}
-#endif
-} // namespace
-
 bool NetworkClock::setUnixTime(uint64_t unixTime, NetworkTimeState state) {
   if (unixTime == 0)
     return false;
@@ -33,7 +17,7 @@ bool NetworkClock::setUnixTime(uint64_t unixTime, NetworkTimeState state) {
       state == NetworkTimeState::Unset ? NetworkTimeState::Manual : state;
 
 #if defined(RTC_AVAILABLE) && RTC_AVAILABLE
-  if (!rtc::setUnixTime(unixTime, rtcTimeState(nextState)))
+  if (!rtc::setUnixTime(unixTime))
     return false;
 #endif
 
@@ -53,47 +37,42 @@ void NetworkClock::clear() {
 void NetworkClock::clearTrusted() {
   if (_state == NetworkTimeState::Trusted)
     _state = NetworkTimeState::Manual;
-#if defined(RTC_AVAILABLE) && RTC_AVAILABLE
-  rtc::clearTrusted();
-#endif
 }
 
 bool NetworkClock::unixTime(uint64_t &unixTimeOut) const {
+  if (_state == NetworkTimeState::Unset) {
+    unixTimeOut = 0;
+    return false;
+  }
 #if defined(RTC_AVAILABLE) && RTC_AVAILABLE
   if (rtc::unixTime(unixTimeOut))
     return true;
 #endif
   unixTimeOut = _unixTime;
-  return _state != NetworkTimeState::Unset;
+  return _unixTime != 0;
 }
 
 bool NetworkClock::trustedUnixTime(uint64_t &unixTimeOut) const {
+  if (_state != NetworkTimeState::Trusted) {
+    unixTimeOut = 0;
+    return false;
+  }
 #if defined(RTC_AVAILABLE) && RTC_AVAILABLE
-  if (rtc::trustedUnixTime(unixTimeOut))
+  if (rtc::unixTime(unixTimeOut))
     return true;
 #endif
   unixTimeOut = _unixTime;
-  return _state == NetworkTimeState::Trusted;
+  return _unixTime != 0;
 }
 
-bool NetworkClock::trusted() const {
-#if defined(RTC_AVAILABLE) && RTC_AVAILABLE
-  if (rtc::trusted())
-    return true;
-#endif
-  return _state == NetworkTimeState::Trusted;
-}
+bool NetworkClock::trusted() const { return _state == NetworkTimeState::Trusted; }
 
 NetworkTimeState NetworkClock::timeState() const {
 #if defined(RTC_AVAILABLE) && RTC_AVAILABLE
-  switch (rtc::timeState()) {
-  case rtc::TimeState::Trusted:
-    return NetworkTimeState::Trusted;
-  case rtc::TimeState::Manual:
-    return NetworkTimeState::Manual;
-  case rtc::TimeState::Unset:
-  default:
-    break;
+  if (_state != NetworkTimeState::Unset) {
+    uint64_t unixTimeValue = 0;
+    if (!rtc::unixTime(unixTimeValue))
+      return NetworkTimeState::Unset;
   }
 #endif
   return _state;
