@@ -1,5 +1,6 @@
 #pragma once
 
+#include <RTC.h>
 #include <stdint.h>
 #include <utility/network/NetworkTimeClient.h>
 #include <utility/network/TrustedTimeClient.h>
@@ -52,6 +53,7 @@ public:
     return _provisionalClient.active() || _trustedClient.active();
   }
 
+
 private:
   friend class NetworkTimeClient;
   friend class TrustedTimeClient;
@@ -61,10 +63,14 @@ private:
 
   bool applyTime(uint64_t unixTime, NetworkTimeLevel level);
   bool writeRtc(uint64_t unixTime);
+  static void handleRtcEvent(rtc::EventMask events, uint64_t unixTime,
+                             void *context);
+
   bool startSourceUpdate();
   bool advance();
   void detachProvider(TransportProvider &provider);
   void recordSourceFailure(NetworkTimeLevel level);
+  bool scheduleRefreshAlarm();
 
   TransportProvider *_provider = nullptr;
   NetworkTimeProvisionalSource _provisionalSource;
@@ -78,6 +84,7 @@ private:
   uint16_t _warnings = NetworkTimeWarningNone;
   uint32_t _refreshIntervalSeconds = DefaultRefreshIntervalSeconds;
   bool _begun = false;
+  bool _refreshDue = false;
 };
 
 extern NetworkTimeService &NetworkTime;

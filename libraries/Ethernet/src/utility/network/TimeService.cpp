@@ -11,7 +11,8 @@ NetworkTimeService &NetworkTimeService::instance() {
 NetworkTimeService &NetworkTime = NetworkTimeService::instance();
 
 bool NetworkTimeService::begin() {
-  if (!rtc::configureClock()) {
+  if (!rtc::configureClock() ||
+      !rtc::registerEventCallback(handleRtcEvent, this)) {
     _status = NetworkTimeServiceStatus::RtcUnavailable;
     _warnings |= NetworkTimeWarningRtcSetFailed;
     return false;
@@ -42,9 +43,12 @@ void NetworkTimeService::reset() {
   _warnings = NetworkTimeWarningNone;
   _refreshIntervalSeconds = DefaultRefreshIntervalSeconds;
   _begun = false;
+  _refreshDue = false;
   _provider = nullptr;
   _provisionalClient.stop();
   _trustedClient.stop();
+  rtc::clearAlarm(0);
+  rtc::clearEventCallback();
   rtc::clearTime();
 }
 
@@ -130,6 +134,7 @@ bool NetworkTimeService::applyTime(uint64_t unixTime, NetworkTimeLevel level) {
   if (level > _highestLevel)
     _highestLevel = level;
   _status = NetworkTimeServiceStatus::TimeSet;
+  scheduleRefreshAlarm();
   return true;
 }
 
@@ -137,8 +142,18 @@ bool NetworkTimeService::writeRtc(uint64_t unixTime) {
   return rtc::setUnixTime(unixTime);
 }
 
+void NetworkTimeService::handleRtcEvent(rtc::EventMask events, uint64_t,
+                                        void *context) {
+  auto *service = static_cast<NetworkTimeService *>(context);
+  if (service == nullptr)
+    return;
+
+  if ((events & rtc::EventAlarm0) != 0)
+    service->_refreshDue = true;
+}
 
 bool NetworkTimeService::startSourceUpdate() {
+  _refreshDue = false;
   if (_provider == nullptr)
     return false;
   if (_provisionalClient.active() || _trustedClient.active())
@@ -182,6 +197,8 @@ bool NetworkTimeService::advance() {
     }
     if (status == NetworkTimeClientStatus::Updated && _trustedSource.valid())
       startSourceUpdate();
+    else if (status == NetworkTimeClientStatus::Updated)
+      scheduleRefreshAlarm();
     return true;
   }
 
@@ -198,10 +215,15 @@ bool NetworkTimeService::advance() {
       recordSourceFailure(NetworkTimeLevel::Trusted);
       return false;
     }
+    if (status == TrustedTimeClientStatus::Updated)
+      scheduleRefreshAlarm();
     return true;
   }
 
-  return startSourceUpdate();
+  if (_refreshDue)
+    return startSourceUpdate();
+
+  return false;
 }
 
 void NetworkTimeService::detachProvider(TransportProvider &provider) {
@@ -219,4 +241,19 @@ void NetworkTimeService::recordSourceFailure(NetworkTimeLevel level) {
   else if (level == NetworkTimeLevel::Provisional)
     _warnings |= NetworkTimeWarningProvisionalSourceFailed;
   _status = NetworkTimeServiceStatus::SourceUpdateFailed;
+  scheduleRefreshAlarm();
+}
+
+bool NetworkTimeService::scheduleRefreshAlarm() {
+  if (!_begun || _refreshIntervalSeconds == 0)
+    return false;
+
+  uint64_t currentUnixTime = 0;
+  if (!rtc::unixTime(currentUnixTime))
+    currentUnixTime = _unixTime;
+  if (currentUnixTime == 0)
+    return false;
+
+  return rtc::setAlarm(0, currentUnixTime + _refreshIntervalSeconds,
+                       rtc::AlarmMatch::YearMonthDayHourMinuteSecond);
 }
