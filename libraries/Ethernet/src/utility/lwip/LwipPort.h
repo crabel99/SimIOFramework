@@ -17,7 +17,7 @@
 #include <utility/lwip/LwipTcpSocket.h>
 #include <utility/netif/Netif.h>
 #include <utility/network/NetworkConfig.h>
-#include <utility/network/NetworkClock.h>
+#include <utility/network/TimeService.h>
 #include <utility/transport/TransportProvider.h>
 
 #include <lwip/netif.h>
@@ -145,8 +145,6 @@ public:
   void clearTcpBackend();
   void setUdpBackend(LwipUdpBackend &backend);
   void clearUdpBackend();
-  void setNetworkClock(NetworkClock &clock);
-  void clearNetworkClock();
 
   /**
    * @brief Send one raw Ethernet frame through the netif and map the result.
@@ -167,7 +165,7 @@ public:
   EthernetSocket *acquireSecureClientSocket() override;
   void releaseSocket(EthernetSocket *socket) override;
   bool tlsAvailable() const override;
-  NetworkClock *networkClock() override;
+  NetworkTimeService *networkTimeService() override;
 
   /**
    * @brief TCP listener operations delegated to the attached TCP backend.
@@ -212,7 +210,6 @@ private:
   LwipTcpSocket _secureClientSocket;
   LwipTcpSocket _acceptedSocket;
   LwipUdpBackend *_udpBackend = nullptr;
-  NetworkClock *_networkClock = nullptr;
   uint8_t _outputBuffer[1536];
 
   bool handleInput(EthernetPacket *packet);

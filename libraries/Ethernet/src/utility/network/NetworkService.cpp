@@ -2,12 +2,10 @@
 
 NetworkService::NetworkService(EthernetFrameDriver &frameDriver,
                                EthernetPacketAllocator &packetAllocator)
-    : _packetAllocator(&packetAllocator), _netif(frameDriver),
-      _socketBackend(), _lwipPort(_netif), _networkConfig(), _clock(),
-  _started(false) {
+    : _packetAllocator(&packetAllocator), _netif(frameDriver), _socketBackend(),
+      _lwipPort(_netif), _networkConfig(), _started(false) {
   _lwipPort.setTcpBackend(_socketBackend);
   _lwipPort.setUdpBackend(_socketBackend);
-  _lwipPort.setNetworkClock(_clock);
 }
 
 bool NetworkService::begin() {
@@ -15,6 +13,8 @@ bool NetworkService::begin() {
     return false;
 
   _lwipPort.configureNetwork(_networkConfig);
+  if (!NetworkTime.begin())
+    return false;
   _started = _lwipPort.begin(*_packetAllocator);
   return _started;
 }

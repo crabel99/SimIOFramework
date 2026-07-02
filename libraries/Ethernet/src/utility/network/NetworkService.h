@@ -5,7 +5,7 @@
 #include <utility/netif/FrameDriver.h>
 #include <utility/netif/Netif.h>
 #include <utility/network/NetworkConfig.h>
-#include <utility/network/NetworkClock.h>
+#include <utility/network/TimeService.h>
 
 /**
  * @file NetworkService.h
@@ -28,8 +28,8 @@ public:
   /**
    * @brief Apply configured addressing and start the netif/lwIP boundary.
    *
-   * This call is bounded. DHCP mode starts the DHCP client but does not wait for
-   * a lease to be assigned.
+   * This call is bounded. DHCP mode starts the DHCP client but does not wait
+   * for a lease to be assigned.
    */
   bool begin();
 
@@ -74,13 +74,10 @@ public:
   const NetworkConfig &networkConfig() const { return _networkConfig; }
 
   /**
-   * @brief Access the service-owned network clock bridge.
-   *
-   * Unauthenticated NTP/SNTP updates must be stored as untrusted. Only
-   * authenticated time sources should be marked trusted and applied to TLS.
+   * @brief Access the singleton network time daemon boundary.
    */
-  NetworkClock &clock() { return _clock; }
-  const NetworkClock &clock() const { return _clock; }
+  NetworkTimeService &timeService() { return NetworkTime; }
+  const NetworkTimeService &timeService() const { return NetworkTime; }
 
   /**
    * @brief Return true when DHCP or static addressing has been selected.
@@ -130,7 +127,9 @@ public:
    * without exposing lwIP protocol control blocks.
    */
   LwipTransportBackend &transportBackend() { return _socketBackend; }
-  const LwipTransportBackend &transportBackend() const { return _socketBackend; }
+  const LwipTransportBackend &transportBackend() const {
+    return _socketBackend;
+  }
 
   /**
    * @brief Return the provider boundary consumed by public TCP/UDP/TLS facades.
@@ -138,8 +137,8 @@ public:
    * Callers may pass this explicitly to `EthernetClient`, `EthernetServer`,
    * `EthernetUDP`, or `SecureClient`, or register it with
    * `TransportProvider::setDefaultProvider()` while this service remains alive.
-   * The service retains ownership; public facades must not delete or inspect the
-   * provider.
+   * The service retains ownership; public facades must not delete or inspect
+   * the provider.
    */
   TransportProvider &transportProvider() { return _lwipPort; }
   const TransportProvider &transportProvider() const { return _lwipPort; }
@@ -165,6 +164,5 @@ private:
   LwipTransportBackend _socketBackend;
   EthernetLwipPort _lwipPort;
   NetworkConfig _networkConfig;
-  NetworkClock _clock;
   bool _started;
 };

@@ -38,9 +38,8 @@ bool parseUnsignedDecimal(const uint8_t *buffer, size_t length,
     return false;
 
   size_t index = 0;
-  while (index < length &&
-         (buffer[index] == ' ' || buffer[index] == '\r' ||
-          buffer[index] == '\n' || buffer[index] == '\t')) {
+  while (index < length && (buffer[index] == ' ' || buffer[index] == '\r' ||
+                            buffer[index] == '\n' || buffer[index] == '\t')) {
     ++index;
   }
   if (index == length || buffer[index] < '0' || buffer[index] > '9')
@@ -48,7 +47,8 @@ bool parseUnsignedDecimal(const uint8_t *buffer, size_t length,
 
   uint64_t value = 0;
   while (index < length && buffer[index] >= '0' && buffer[index] <= '9') {
-    const uint64_t next = value * 10 + static_cast<uint64_t>(buffer[index] - '0');
+    const uint64_t next =
+        value * 10 + static_cast<uint64_t>(buffer[index] - '0');
     if (next < value)
       return false;
     value = next;
@@ -186,8 +186,9 @@ bool parseHexHeader(const uint8_t *headers, size_t headersLength,
   return false;
 }
 
-bool readPeerPin(SecureClient &client, TrustedTimePinKind pinKind,
-                 uint8_t digest[TrustedTimeSourcePolicy::CertificateSha256Length]) {
+bool readPeerPin(
+    SecureClient &client, TrustedTimePinKind pinKind,
+    uint8_t digest[TrustedTimeSourcePolicy::CertificateSha256Length]) {
   switch (pinKind) {
   case TrustedTimePinKind::LeafCertificateSha256:
     return client.peerCertificateSha256(digest);
@@ -200,8 +201,8 @@ bool readPeerPin(SecureClient &client, TrustedTimePinKind pinKind,
 } // namespace
 
 TrustedTimeClient::TrustedTimeClient(TransportProvider &provider,
-                                     NetworkClock &clock)
-    : _clock(clock), _client(provider) {}
+                                     NetworkTimeService &timeService)
+    : _timeService(timeService), _client(provider) {}
 
 bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
   if (active()) {
@@ -218,11 +219,13 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
   }
 
   uint64_t provisionalUnixTime = policy.provisionalUnixTime;
-  if (provisionalUnixTime == 0 &&
-      (!_clock.unixTime(provisionalUnixTime) ||
-       provisionalUnixTime < MinTrustedUnixTime)) {
-    _lastError = TrustedTimeClientError::InvalidArgument;
-    return false;
+  if (provisionalUnixTime == 0) {
+    const NetworkTimeSnapshot snapshot = _timeService.unixTime();
+    if (!snapshot.valid() || snapshot.unixTime < MinTrustedUnixTime) {
+      _lastError = TrustedTimeClientError::InvalidArgument;
+      return false;
+    }
+    provisionalUnixTime = snapshot.unixTime;
   }
 
   TrustedTimeSourcePolicy resolvedPolicy = policy;
@@ -278,8 +281,7 @@ TrustedTimeClientStatus TrustedTimeClient::poll() {
   case TrustedTimeClientStatus::Handshaking: {
     const Crypto::TlsAsyncStatus tlsStatus = _client.pollTls();
     if (_client.connected()) {
-      uint8_t peerPin[TrustedTimeSourcePolicy::CertificateSha256Length] =
-          {};
+      uint8_t peerPin[TrustedTimeSourcePolicy::CertificateSha256Length] = {};
       const bool pinAccepted =
           readPeerPin(_client, _policy.pinKind, peerPin) &&
           constantTimeEqual(peerPin, _policy.certificateSha256,
@@ -523,8 +525,9 @@ bool TrustedTimeClient::startResponseSignatureVerification(const uint8_t *body,
 }
 
 bool TrustedTimeClient::finishAuthenticatedResponse() {
-  if (!_clock.setUnixTime(_authenticatedUnixTime, NetworkTimeState::Trusted)) {
-    fail(TrustedTimeClientError::ClockRejected);
+  if (!_timeService.applyTime(_authenticatedUnixTime,
+                              NetworkTimeLevel::Trusted)) {
+    fail(TrustedTimeClientError::TimeRejected);
     return false;
   }
 

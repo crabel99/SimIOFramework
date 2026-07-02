@@ -32,18 +32,13 @@ void writeBigEndian32(uint8_t *buffer, uint32_t value) {
 } // namespace
 
 NetworkTimeClient::NetworkTimeClient(TransportProvider &provider,
-                                     NetworkClock &clock)
-    : _udp(provider), _clock(clock) {}
+                                     NetworkTimeService &timeService)
+    : _udp(provider), _timeService(timeService) {}
 
 bool NetworkTimeClient::beginRequest(IPAddress server, uint16_t serverPort,
-                                     NetworkTimeState state,
                                      uint16_t localPort) {
-  if (state == NetworkTimeState::Trusted) {
-    _lastError = NetworkTimeClientError::InvalidArgument;
-    return false;
-  }
-
-  return startRequest(server, serverPort, state, localPort, {});
+  return startRequest(server, serverPort, NetworkTimeLevel::Provisional,
+                      localPort, {});
 }
 
 bool NetworkTimeClient::beginAuthenticatedRequest(
@@ -54,19 +49,19 @@ bool NetworkTimeClient::beginAuthenticatedRequest(
     return false;
   }
 
-  return startRequest(server, serverPort, NetworkTimeState::Trusted, localPort,
+  return startRequest(server, serverPort, NetworkTimeLevel::Trusted, localPort,
                       policy);
 }
 
 bool NetworkTimeClient::startRequest(
-    IPAddress server, uint16_t serverPort, NetworkTimeState state,
+    IPAddress server, uint16_t serverPort, NetworkTimeLevel level,
     uint16_t localPort, const NetworkTimeAuthenticationPolicy &policy) {
   if (active()) {
     _lastError = NetworkTimeClientError::Busy;
     return false;
   }
   if (server == IPAddress() || serverPort == 0 ||
-      state == NetworkTimeState::Unset) {
+      level == NetworkTimeLevel::Unset) {
     _lastError = NetworkTimeClientError::InvalidArgument;
     return false;
   }
@@ -76,8 +71,7 @@ bool NetworkTimeClient::startRequest(
   const uint32_t sequence = ++requestSequence;
   writeBigEndian32(request + NtpTransmitTimestampOffset,
                    static_cast<uint32_t>(NtpUnixEpochOffset + sequence));
-  writeBigEndian32(request + NtpTransmitTimestampOffset + 4,
-                   ~sequence);
+  writeBigEndian32(request + NtpTransmitTimestampOffset + 4, ~sequence);
 
   if (_udp.begin(localPort) == 0) {
     _lastError = NetworkTimeClientError::BindFailed;
@@ -101,7 +95,7 @@ bool NetworkTimeClient::startRequest(
 
   _server = server;
   _serverPort = serverPort;
-  _state = state;
+  _level = level;
   _authenticationPolicy = policy;
   _status = NetworkTimeClientStatus::Pending;
   _lastError = NetworkTimeClientError::None;
@@ -141,13 +135,13 @@ NetworkTimeClientStatus NetworkTimeClient::poll() {
   uint64_t unixTime = 0;
   if (!parseResponse(response, _requestTransmitTimestamp, unixTime))
     return fail(NetworkTimeClientError::InvalidResponse);
-  if (_state == NetworkTimeState::Trusted &&
+  if (_level == NetworkTimeLevel::Trusted &&
       (!_authenticationPolicy.valid() ||
        !_authenticationPolicy.authenticate(response, sizeof(response), unixTime,
                                            _authenticationPolicy.context)))
     return fail(NetworkTimeClientError::AuthenticationFailed);
-  if (!_clock.setUnixTime(unixTime, _state))
-    return fail(NetworkTimeClientError::ClockRejected);
+  if (!_timeService.applyTime(unixTime, _level))
+    return fail(NetworkTimeClientError::TimeRejected);
 
   _receivedUnixTime = unixTime;
   _status = NetworkTimeClientStatus::Updated;
@@ -165,9 +159,9 @@ void NetworkTimeClient::stop() {
   memset(_requestTransmitTimestamp, 0, sizeof(_requestTransmitTimestamp));
 }
 
-bool NetworkTimeClient::parseResponse(const uint8_t *packet,
-                                      const uint8_t expectedOriginateTimestamp[8],
-                                      uint64_t &unixTimeOut) {
+bool NetworkTimeClient::parseResponse(
+    const uint8_t *packet, const uint8_t expectedOriginateTimestamp[8],
+    uint64_t &unixTimeOut) {
   if (packet == nullptr || expectedOriginateTimestamp == nullptr)
     return false;
 
@@ -180,8 +174,8 @@ bool NetworkTimeClient::parseResponse(const uint8_t *packet,
     return false;
   if (packet[1] == 0)
     return false;
-  if (memcmp(packet + NtpOriginateTimestampOffset,
-             expectedOriginateTimestamp, 8) != 0)
+  if (memcmp(packet + NtpOriginateTimestampOffset, expectedOriginateTimestamp,
+             8) != 0)
     return false;
 
   const uint32_t ntpSeconds =

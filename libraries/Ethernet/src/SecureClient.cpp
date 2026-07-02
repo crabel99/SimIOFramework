@@ -1,32 +1,29 @@
 #include "SecureClient.h"
 
 #include <string.h>
-#include <utility/network/NetworkClock.h>
+#include <utility/network/TimeService.h>
 
 SecureClient::SecureClient()
     : EthernetClient(), _lastError(SecureClientNoError), _trustAnchors(nullptr),
       _trustAnchorLength(0), _clientCertificate(nullptr),
       _clientCertificateLength(0), _clientPrivateKey(nullptr),
-      _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
-      _trustedUnixTime(0),
+      _clientPrivateKeyLength(0), _alpnProtocols(nullptr), _trustedUnixTime(0),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
       _tlsSecurityLevel(SecureClientTlsSecurityLevel::High),
       _tlsSessionReuseEnabled(false), _tlsHandshakePending(false),
-      _trustedTimeConfigured(false), _hostname{},
-      _cryptoProvider(nullptr),
+      _trustedTimeConfigured(false), _hostname{}, _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(EthernetSocket &socket)
     : EthernetClient(socket), _lastError(SecureClientNoError),
-      _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
-      _clientCertificateLength(0), _clientPrivateKey(nullptr),
-      _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
-      _trustedUnixTime(0),
+      _trustAnchors(nullptr), _trustAnchorLength(0),
+      _clientCertificate(nullptr), _clientCertificateLength(0),
+      _clientPrivateKey(nullptr), _clientPrivateKeyLength(0),
+      _alpnProtocols(nullptr), _trustedUnixTime(0),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
       _tlsSecurityLevel(SecureClientTlsSecurityLevel::High),
       _tlsSessionReuseEnabled(false), _tlsHandshakePending(false),
-      _trustedTimeConfigured(false), _hostname{},
-      _cryptoProvider(nullptr),
+      _trustedTimeConfigured(false), _hostname{}, _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {
   _tlsTransport.bind(currentSocket());
   _tlsSession.bindTransport(_tlsTransport);
@@ -34,15 +31,14 @@ SecureClient::SecureClient(EthernetSocket &socket)
 
 SecureClient::SecureClient(TransportProvider &provider)
     : EthernetClient(provider), _lastError(SecureClientNoError),
-      _trustAnchors(nullptr), _trustAnchorLength(0), _clientCertificate(nullptr),
-      _clientCertificateLength(0), _clientPrivateKey(nullptr),
-      _clientPrivateKeyLength(0), _alpnProtocols(nullptr),
-      _trustedUnixTime(0),
+      _trustAnchors(nullptr), _trustAnchorLength(0),
+      _clientCertificate(nullptr), _clientCertificateLength(0),
+      _clientPrivateKey(nullptr), _clientPrivateKeyLength(0),
+      _alpnProtocols(nullptr), _trustedUnixTime(0),
       _tlsOperationPollLimit(Crypto::DefaultTlsOperationPollLimit),
       _tlsSecurityLevel(SecureClientTlsSecurityLevel::High),
       _tlsSessionReuseEnabled(false), _tlsHandshakePending(false),
-      _trustedTimeConfigured(false), _hostname{},
-      _cryptoProvider(nullptr),
+      _trustedTimeConfigured(false), _hostname{}, _cryptoProvider(nullptr),
       _lastTlsCallbackStatus(Crypto::TlsAsyncStatus::Idle) {}
 
 SecureClient::SecureClient(SecureClient &&other)
@@ -210,8 +206,8 @@ bool SecureClient::setClientIdentity(const uint8_t *certificate,
                                      size_t certificateLength,
                                      const uint8_t *privateKey,
                                      size_t privateKeyLength) {
-  if (certificate == nullptr || certificateLength == 0 || privateKey == nullptr ||
-      privateKeyLength == 0)
+  if (certificate == nullptr || certificateLength == 0 ||
+      privateKey == nullptr || privateKeyLength == 0)
     return false;
 
   _clientCertificate = certificate;
@@ -439,9 +435,8 @@ size_t SecureClient::write(const uint8_t *buffer, size_t size) {
   _tlsTxLength = size;
   _tlsTxPending = true;
 
-  const Crypto::TlsAsyncStatus started =
-      _tlsSession.writeAsync(_tlsTxBuffer, _tlsTxLength,
-                             SecureClient::handleTlsCallback, this);
+  const Crypto::TlsAsyncStatus started = _tlsSession.writeAsync(
+      _tlsTxBuffer, _tlsTxLength, SecureClient::handleTlsCallback, this);
   if (started == Crypto::TlsAsyncStatus::Error) {
     _tlsTxPending = false;
     _tlsTxLength = 0;
@@ -533,19 +528,17 @@ bool SecureClient::applyProviderTimeForTls() {
   if (provider == nullptr)
     return false;
 
-  NetworkClock *clock = provider->networkClock();
-  if (clock == nullptr)
+  NetworkTimeService *timeService = provider->networkTimeService();
+  if (timeService == nullptr)
     return false;
 
-  if (_tlsSecurityLevel == SecureClientTlsSecurityLevel::High)
-    return clock->applyTrustedTime(*this);
-
-  uint64_t unixTime = 0;
-  if (clock->unixTime(unixTime))
-    return setTrustedTime(unixTime);
-
-  if (clock->trustedUnixTime(unixTime))
-    return setTrustedTime(unixTime);
+  const NetworkTimeSnapshot snapshot = timeService->unixTime();
+  const NetworkTimeLevel required =
+      _tlsSecurityLevel == SecureClientTlsSecurityLevel::High
+          ? NetworkTimeLevel::Trusted
+          : NetworkTimeLevel::Manual;
+  if (snapshot.satisfies(required))
+    return setTrustedTime(snapshot.unixTime);
 
   return false;
 }
@@ -636,8 +629,8 @@ bool SecureClient::startTlsHandshake() {
     return false;
 
   clearTlsStreamBuffers();
-  const Crypto::TlsAsyncStatus status = _tlsSession.handshakeAsync(
-      SecureClient::handleTlsCallback, this);
+  const Crypto::TlsAsyncStatus status =
+      _tlsSession.handshakeAsync(SecureClient::handleTlsCallback, this);
   return status != Crypto::TlsAsyncStatus::Error;
 }
 

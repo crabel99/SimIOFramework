@@ -1,5 +1,5 @@
 #
-#  SimIO Device M4 OpenOCD/GDB script.
+#  M4 Device OpenOCD/GDB script.
 #
 #  Copyright (c) 2014-2015 Arduino LLC. All right reserved.
 #

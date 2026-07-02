@@ -27,7 +27,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-class NetworkClock;
+class NetworkTimeService;
 
 class EthernetSocket {
 public:
@@ -100,14 +100,13 @@ public:
   virtual bool tlsAvailable() const = 0;
 
   /**
-   * @brief Optional network clock owned by the provider's network service.
+   * @brief Optional network time daemon owned by the provider's network
+   * service.
    *
-   * Public secure clients may use this only to consume already-trusted time
-   * before TLS certificate validation. Providers that do not own a clock return
-   * `nullptr`; callers must not infer trust from uptime or manual/provisional
-   * time through this hook.
+   * Secure clients consume time only through this snapshot-based authority
+   * boundary. Providers that do not own the system time daemon return nullptr.
    */
-  virtual NetworkClock *networkClock() { return nullptr; }
+  virtual NetworkTimeService *networkTimeService() { return nullptr; }
 
   /**
    * @brief Server/listener operations keyed by Arduino server port.

@@ -46,7 +46,8 @@ IPAddress makeIPAddressFromIp4(const ip4_addr_t *address) {
 }
 
 IPAddress makeIPAddressFromIp(const ip_addr_t *address) {
-  return address == nullptr ? IPAddress() : makeIPAddressFromIp4(ip_2_ip4(address));
+  return address == nullptr ? IPAddress()
+                            : makeIPAddressFromIp4(ip_2_ip4(address));
 }
 } // namespace
 
@@ -119,8 +120,7 @@ bool EthernetLwipPort::service() {
   return progressed;
 }
 
-void EthernetLwipPort::setInputCallback(InputCallback callback,
-                                        void *context) {
+void EthernetLwipPort::setInputCallback(InputCallback callback, void *context) {
   _inputCallback = callback;
   _inputContext = context;
 }
@@ -224,12 +224,6 @@ void EthernetLwipPort::clearUdpBackend() {
   _udpBackend = nullptr;
 }
 
-void EthernetLwipPort::setNetworkClock(NetworkClock &clock) {
-  _networkClock = &clock;
-}
-
-void EthernetLwipPort::clearNetworkClock() { _networkClock = nullptr; }
-
 EthernetLwipErr EthernetLwipPort::output(const uint8_t *frame,
                                          uint16_t length) {
   if (!_started || _netif == nullptr)
@@ -287,7 +281,9 @@ bool EthernetLwipPort::tlsAvailable() const {
   return _started && _tcpBackend != nullptr && _tcpBackend->tlsAvailable();
 }
 
-NetworkClock *EthernetLwipPort::networkClock() { return _networkClock; }
+NetworkTimeService *EthernetLwipPort::networkTimeService() {
+  return &NetworkTime;
+}
 
 bool EthernetLwipPort::beginServer(uint16_t port) {
   if (!_started || _tcpBackend == nullptr)
