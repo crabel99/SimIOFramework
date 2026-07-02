@@ -1,6 +1,6 @@
 /**
  * @file cc.h
- * @brief SimIO lwIP compiler/CPU definitions.
+ * @brief Arduino lwIP compiler/CPU definitions.
  */
 #pragma once
 

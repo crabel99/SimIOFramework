@@ -102,7 +102,7 @@ struct TrustedTimeSourcePolicy {
   TrustedTimeResponseSignatureAlgorithm responseSignatureAlgorithm =
       TrustedTimeResponseSignatureAlgorithm::None;
   /** Header containing a lowercase or uppercase hex-encoded raw signature. */
-  const char *responseSignatureHeader = "X-SimIO-Time-Signature";
+  const char *responseSignatureHeader = "X-Arduino-Time-Signature";
   /** Uncompressed P-256 public key: 0x04 || X || Y. */
   const uint8_t *responseSigningPublicKey = nullptr;
   size_t responseSigningPublicKeyLength = 0;

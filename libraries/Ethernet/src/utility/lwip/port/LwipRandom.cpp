@@ -99,6 +99,6 @@ void resetForTest() {
 
 } // namespace EthernetLwipRandom
 
-extern "C" uint32_t simio_lwip_rand(void) {
+extern "C" uint32_t samd_lwip_rand(void) {
   return EthernetLwipRandom::next();
 }

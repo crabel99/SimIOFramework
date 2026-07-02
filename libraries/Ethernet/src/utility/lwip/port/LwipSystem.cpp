@@ -1,6 +1,6 @@
 /**
  * @file LwipSystem.cpp
- * @brief Minimal lwIP time hook for the SimIO no-OS port.
+ * @brief Minimal lwIP time hook for the Arduino no-OS port.
  */
 #include <Arduino.h>
 #include <lwip/sys.h>

@@ -20,6 +20,8 @@
  */
 #pragma once
 
+#include <utility/EthernetTarget.h>
+
 #include <IPAddress.h>
 
 #include <stddef.h>
