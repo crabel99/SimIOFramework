@@ -29,6 +29,17 @@
 
 class NetworkTimeService;
 
+enum class EthernetSocketState : uint8_t {
+  Idle,
+  DnsPending,
+  TcpConnecting,
+  Connected,
+  DnsFailed,
+  ConnectFailed,
+  CarrierDown,
+  Closed,
+};
+
 class EthernetSocket {
 public:
   virtual ~EthernetSocket() = default;
@@ -37,6 +48,20 @@ public:
    * @brief Return cached carrier state for fail-fast connect decisions.
    */
   virtual bool carrierUp() const = 0;
+
+  /**
+   * @brief Return provider-owned socket lifecycle state.
+   *
+   * This is an internal transport status surface for facades and tests. Public
+   * Arduino `connected()` semantics remain unchanged; non-blocking providers
+   * use this to distinguish pending DNS/TCP work from terminal failure.
+   */
+  virtual EthernetSocketState state() {
+    if (!carrierUp())
+      return EthernetSocketState::CarrierDown;
+    return connected() ? EthernetSocketState::Connected
+                       : EthernetSocketState::Closed;
+  }
 
   /**
    * @brief Start a TCP/TLS-capable socket connection.

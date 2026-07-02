@@ -14,6 +14,13 @@ bool LwipTcpSocket::carrierUp() const {
   return attached() && _backend->carrierUp(_handle);
 }
 
+EthernetSocketState LwipTcpSocket::state() {
+  if (!attached())
+    return EthernetSocketState::Closed;
+
+  return _backend->state(_handle);
+}
+
 int LwipTcpSocket::connect(IPAddress ip, uint16_t port) {
   if (!attached())
     return 0;

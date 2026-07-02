@@ -42,16 +42,7 @@ public:
     int lastTcpOutputError = 0;
   };
 
-  enum class TcpState : uint8_t {
-    Idle,
-    DnsPending,
-    TcpConnecting,
-    Connected,
-    DnsFailed,
-    ConnectFailed,
-    CarrierDown,
-    Closed,
-  };
+  using TcpState = EthernetSocketState;
 
   LwipTransportBackend();
   ~LwipTransportBackend() override;
@@ -93,7 +84,7 @@ public:
                      size_t size) override;
 
   bool carrierUp(void *handle) const override;
-  TcpState state(void *handle) const;
+  EthernetSocketState state(void *handle) const override;
 
   /**
    * @brief Return receive-path diagnostics for the secure TCP slot.

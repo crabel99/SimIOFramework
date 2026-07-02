@@ -69,6 +69,10 @@ public:
    * backend without exposing DNS state through this adapter.
    */
   virtual bool carrierUp(void *handle) const = 0;
+  virtual EthernetSocketState state(void *handle) const {
+    (void)handle;
+    return EthernetSocketState::Closed;
+  }
   virtual int connect(void *handle, IPAddress ip, uint16_t port) = 0;
   virtual int connect(void *handle, const char *host, uint16_t port) = 0;
   virtual size_t write(void *handle, uint8_t value) = 0;
@@ -90,6 +94,7 @@ public:
   void *handle() const { return _handle; }
 
   bool carrierUp() const override;
+  EthernetSocketState state() override;
   int connect(IPAddress ip, uint16_t port) override;
   int connect(const char *host, uint16_t port) override;
   size_t write(uint8_t value) override;

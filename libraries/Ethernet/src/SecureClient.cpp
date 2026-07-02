@@ -637,14 +637,23 @@ bool SecureClient::startTlsHandshake() {
 Crypto::TlsAsyncStatus SecureClient::advanceTlsOperation() {
   if (_tlsHandshakePending) {
     EthernetSocket *socket = currentSocket();
-    if (socket == nullptr || !socket->carrierUp()) {
+    if (socket == nullptr) {
       _tlsHandshakePending = false;
       _lastError = SecureClientConnectFailed;
       return Crypto::TlsAsyncStatus::Error;
     }
 
-    if (!EthernetClient::connected())
+    const EthernetSocketState socketState = socket->state();
+    if (socketState == EthernetSocketState::DnsPending ||
+        socketState == EthernetSocketState::TcpConnecting)
       return Crypto::TlsAsyncStatus::Busy;
+
+    if (socketState != EthernetSocketState::Connected) {
+      _tlsHandshakePending = false;
+      stop();
+      _lastError = SecureClientConnectFailed;
+      return Crypto::TlsAsyncStatus::Error;
+    }
 
     _tlsHandshakePending = false;
     if (!startTlsHandshake()) {

@@ -71,7 +71,7 @@ struct LwipTransportBackend::TcpHandle {
   bool connected = false;
   bool connecting = false;
   bool dnsPending = false;
-  LwipTransportBackend::TcpState state = LwipTransportBackend::TcpState::Closed;
+  EthernetSocketState state = EthernetSocketState::Closed;
   uint16_t dnsPort = 0;
   uint32_t receiveCallbacks = 0;
   size_t totalReceived = 0;
@@ -149,13 +149,13 @@ void handleTcpDnsResult(const char *name, const ip_addr_t *address,
   tcp->dnsPending = false;
   if (address == nullptr || tcp->pcb == nullptr) {
     tcp->connecting = false;
-    tcp->state = LwipTransportBackend::TcpState::DnsFailed;
+    tcp->state = EthernetSocketState::DnsFailed;
     return;
   }
 
   if (startTcpConnect(tcp, rawIpAddressToIp(address), tcp->dnsPort) != ERR_OK) {
     tcp->connecting = false;
-    tcp->state = LwipTransportBackend::TcpState::ConnectFailed;
+    tcp->state = EthernetSocketState::ConnectFailed;
   }
 }
 } // namespace
@@ -180,7 +180,7 @@ err_t receiveTcpData(void *arg, tcp_pcb *pcb, pbuf *packet, err_t err) {
     state->connected = false;
     state->connecting = false;
     state->pcb = nullptr;
-    state->state = LwipTransportBackend::TcpState::Closed;
+    state->state = EthernetSocketState::Closed;
     return ERR_OK;
   }
 
@@ -220,7 +220,7 @@ void handleTcpError(void *arg, err_t err) {
   state->acquired = false;
   state->connected = false;
   state->connecting = false;
-  state->state = LwipTransportBackend::TcpState::ConnectFailed;
+  state->state = EthernetSocketState::ConnectFailed;
   resetTcpReceiveBuffer(state);
   resetTcpDiagnostics(state);
 }
@@ -232,8 +232,8 @@ err_t tcpConnected(void *arg, tcp_pcb *pcb, err_t err) {
 
   state->connecting = false;
   state->connected = err == ERR_OK;
-  state->state = err == ERR_OK ? LwipTransportBackend::TcpState::Connected
-                               : LwipTransportBackend::TcpState::ConnectFailed;
+  state->state = err == ERR_OK ? EthernetSocketState::Connected
+                               : EthernetSocketState::ConnectFailed;
   return err == ERR_OK ? ERR_OK : err;
 }
 
@@ -255,8 +255,8 @@ err_t startTcpConnect(LwipTransportBackend::TcpHandle *tcp, IPAddress ip,
   const err_t result = tcp_connect(tcp->pcb, &address, port, tcpConnected);
   if (result == ERR_OK)
     tcp->connecting = true;
-  tcp->state = result == ERR_OK ? LwipTransportBackend::TcpState::TcpConnecting
-                                : LwipTransportBackend::TcpState::ConnectFailed;
+  tcp->state = result == ERR_OK ? EthernetSocketState::TcpConnecting
+                                : EthernetSocketState::ConnectFailed;
   return result;
 }
 
@@ -274,7 +274,7 @@ err_t acceptTcpConnection(void *arg, tcp_pcb *newPcb, err_t err) {
   state->acquired = false;
   state->connected = true;
   state->connecting = false;
-  state->state = LwipTransportBackend::TcpState::Connected;
+  state->state = EthernetSocketState::Connected;
   resetTcpReceiveBuffer(state);
   resetTcpDiagnostics(state);
   armTcpCallbacks(state, newPcb);
@@ -344,7 +344,7 @@ void *LwipTransportBackend::acquireClientSocket() {
 
   armTcpCallbacks(_client, _client->pcb);
   _client->acquired = true;
-  _client->state = TcpState::Idle;
+  _client->state = EthernetSocketState::Idle;
   return _client;
 }
 
@@ -359,7 +359,7 @@ void *LwipTransportBackend::acquireSecureClientSocket() {
 
   armTcpCallbacks(_secure, _secure->pcb);
   _secure->acquired = true;
-  _secure->state = TcpState::Idle;
+  _secure->state = EthernetSocketState::Idle;
   return _secure;
 }
 
@@ -447,13 +447,13 @@ bool LwipTransportBackend::carrierUp(void *handle) const {
   return tcp->pcb != nullptr && transportCarrierUp();
 }
 
-LwipTransportBackend::TcpState LwipTransportBackend::state(void *handle) const {
+EthernetSocketState LwipTransportBackend::state(void *handle) const {
   TcpHandle *tcp = asTcpHandle(handle);
   if (tcp == nullptr)
-    return TcpState::Closed;
+    return EthernetSocketState::Closed;
 
   if (tcp->pcb != nullptr && !transportCarrierUp())
-    return TcpState::CarrierDown;
+    return EthernetSocketState::CarrierDown;
 
   return tcp->state;
 }
@@ -463,11 +463,11 @@ int LwipTransportBackend::connect(void *handle, IPAddress ip, uint16_t port) {
   if (tcp == nullptr)
     return 0;
   if (tcp->pcb == nullptr) {
-    tcp->state = TcpState::Closed;
+    tcp->state = EthernetSocketState::Closed;
     return 0;
   }
   if (!transportCarrierUp()) {
-    tcp->state = TcpState::CarrierDown;
+    tcp->state = EthernetSocketState::CarrierDown;
     return 0;
   }
 
@@ -486,15 +486,15 @@ int LwipTransportBackend::connect(void *handle, const char *host, uint16_t port)
   if (tcp == nullptr)
     return 0;
   if (host == nullptr || host[0] == '\0') {
-    tcp->state = TcpState::DnsFailed;
+    tcp->state = EthernetSocketState::DnsFailed;
     return 0;
   }
   if (tcp->pcb == nullptr) {
-    tcp->state = TcpState::Closed;
+    tcp->state = EthernetSocketState::Closed;
     return 0;
   }
   if (!transportCarrierUp()) {
-    tcp->state = TcpState::CarrierDown;
+    tcp->state = EthernetSocketState::CarrierDown;
     return 0;
   }
 
@@ -504,14 +504,14 @@ int LwipTransportBackend::connect(void *handle, const char *host, uint16_t port)
   if (result == ERR_OK)
     return connect(handle, rawIpAddressToIp(&address), port);
   if (result != ERR_INPROGRESS) {
-    tcp->state = TcpState::DnsFailed;
+    tcp->state = EthernetSocketState::DnsFailed;
     return 0;
   }
 
   tcp->dnsPending = true;
   tcp->dnsPort = port;
   tcp->connecting = true;
-  tcp->state = TcpState::DnsPending;
+  tcp->state = EthernetSocketState::DnsPending;
   return 1;
 }
 
@@ -836,7 +836,7 @@ void LwipTransportBackend::closeTcpHandle(TcpHandle *handle) {
   handle->connected = false;
   handle->connecting = false;
   handle->dnsPending = false;
-  handle->state = LwipTransportBackend::TcpState::Closed;
+  handle->state = EthernetSocketState::Closed;
   handle->dnsPort = 0;
   resetTcpReceiveBuffer(handle);
   resetTcpDiagnostics(handle);
