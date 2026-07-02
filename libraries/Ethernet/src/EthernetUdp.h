@@ -72,4 +72,5 @@ public:
 
 private:
   TransportProvider *_provider;
+  bool _active;
 };

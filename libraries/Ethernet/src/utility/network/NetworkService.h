@@ -24,6 +24,7 @@ class NetworkService {
 public:
   NetworkService(EthernetFrameDriver &frameDriver,
                  EthernetPacketAllocator &packetAllocator);
+  ~NetworkService();
 
   /**
    * @brief Apply configured addressing and start the netif/lwIP boundary.

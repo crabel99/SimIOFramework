@@ -1,6 +1,7 @@
 #include "NetworkTimeClient.h"
 
 #include <string.h>
+#include <utility/network/TimeService.h>
 
 namespace {
 constexpr uint64_t NtpUnixEpochOffset = 2208988800ULL;
@@ -33,7 +34,15 @@ void writeBigEndian32(uint8_t *buffer, uint32_t value) {
 
 NetworkTimeClient::NetworkTimeClient(TransportProvider &provider,
                                      NetworkTimeService &timeService)
-    : _udp(provider), _timeService(timeService) {}
+    : _udp(provider) {
+  attach(provider, timeService);
+}
+
+void NetworkTimeClient::attach(TransportProvider &provider,
+                               NetworkTimeService &timeService) {
+  _udp.setProvider(provider);
+  _timeService = &timeService;
+}
 
 bool NetworkTimeClient::beginRequest(IPAddress server, uint16_t serverPort,
                                      uint16_t localPort) {
@@ -56,6 +65,10 @@ bool NetworkTimeClient::beginAuthenticatedRequest(
 bool NetworkTimeClient::startRequest(
     IPAddress server, uint16_t serverPort, NetworkTimeLevel level,
     uint16_t localPort, const NetworkTimeAuthenticationPolicy &policy) {
+  if (_timeService == nullptr) {
+    _lastError = NetworkTimeClientError::InvalidArgument;
+    return false;
+  }
   if (active()) {
     _lastError = NetworkTimeClientError::Busy;
     return false;
@@ -140,7 +153,7 @@ NetworkTimeClientStatus NetworkTimeClient::poll() {
        !_authenticationPolicy.authenticate(response, sizeof(response), unixTime,
                                            _authenticationPolicy.context)))
     return fail(NetworkTimeClientError::AuthenticationFailed);
-  if (!_timeService.applyTime(unixTime, _level))
+  if (_timeService == nullptr || !_timeService->applyTime(unixTime, _level))
     return fail(NetworkTimeClientError::TimeRejected);
 
   _receivedUnixTime = unixTime;
@@ -151,7 +164,8 @@ NetworkTimeClientStatus NetworkTimeClient::poll() {
 }
 
 void NetworkTimeClient::stop() {
-  _udp.stop();
+  if (active())
+    _udp.stop();
   _status = NetworkTimeClientStatus::Idle;
   _lastError = NetworkTimeClientError::None;
   _receivedUnixTime = 0;

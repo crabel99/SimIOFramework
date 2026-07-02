@@ -4,8 +4,10 @@
 #include <IPAddress.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <utility/network/TimeService.h>
+#include <utility/network/time/Config.h>
 #include <utility/transport/TransportProvider.h>
+
+class NetworkTimeService;
 
 enum class NetworkTimeClientStatus : uint8_t {
   Idle = 0,
@@ -56,7 +58,10 @@ public:
   static constexpr uint8_t PacketSize = 48;
   static constexpr uint16_t DefaultPollLimit = 2000;
 
+  NetworkTimeClient() = default;
   NetworkTimeClient(TransportProvider &provider, NetworkTimeService &service);
+
+  void attach(TransportProvider &provider, NetworkTimeService &service);
 
   bool beginRequest(IPAddress server, uint16_t serverPort = DefaultServerPort,
                     uint16_t localPort = DefaultLocalPort);
@@ -85,7 +90,7 @@ private:
   bool consumePollBudget();
 
   EthernetUDP _udp;
-  NetworkTimeService &_timeService;
+  NetworkTimeService *_timeService = nullptr;
   IPAddress _server;
   NetworkTimeAuthenticationPolicy _authenticationPolicy = {};
   uint16_t _serverPort = DefaultServerPort;

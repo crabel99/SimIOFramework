@@ -3,8 +3,10 @@
 #include <SecureClient.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <utility/network/TimeService.h>
+#include <utility/network/time/Config.h>
 #include <utility/transport/TransportProvider.h>
+
+class NetworkTimeService;
 
 enum class TrustedTimeClientStatus : uint8_t {
   Idle = 0,
@@ -47,14 +49,18 @@ public:
   static constexpr size_t ResponseCapacity = 384;
   static constexpr uint16_t DefaultPollLimit = 2000;
 
+  TrustedTimeClient() = default;
   TrustedTimeClient(TransportProvider &provider,
                     NetworkTimeService &timeService);
+
+  void attach(TransportProvider &provider, NetworkTimeService &timeService);
 
   bool begin(const TrustedTimeSourcePolicy &policy);
   bool setPollLimit(uint16_t pollLimit);
   TrustedTimeClientStatus poll();
   void stop();
 
+  bool active() const;
   TrustedTimeClientStatus status() const { return _status; }
   TrustedTimeClientError lastError() const { return _lastError; }
   uint64_t receivedUnixTime() const { return _receivedUnixTime; }
@@ -77,10 +83,9 @@ private:
                                           size_t bodyLength, uint64_t unixTime);
   bool finishAuthenticatedResponse();
   static void handleResponseSignatureVerified(bool success, void *context);
-  bool active() const;
   bool consumePollBudget();
 
-  NetworkTimeService &_timeService;
+  NetworkTimeService *_timeService = nullptr;
   SecureClient _client;
   TrustedTimeSourcePolicy _policy = {};
   TrustedTimeClientStatus _status = TrustedTimeClientStatus::Idle;

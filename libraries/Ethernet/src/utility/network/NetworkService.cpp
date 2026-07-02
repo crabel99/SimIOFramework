@@ -8,18 +8,26 @@ NetworkService::NetworkService(EthernetFrameDriver &frameDriver,
   _lwipPort.setUdpBackend(_socketBackend);
 }
 
+NetworkService::~NetworkService() { end(); }
+
 bool NetworkService::begin() {
   if (_packetAllocator == nullptr)
     return false;
 
   _lwipPort.configureNetwork(_networkConfig);
-  if (!NetworkTime.begin())
-    return false;
   _started = _lwipPort.begin(*_packetAllocator);
-  return _started;
+  if (!_started)
+    return false;
+  if (!NetworkTime.begin(_lwipPort)) {
+    _lwipPort.end();
+    _started = false;
+    return false;
+  }
+  return true;
 }
 
 void NetworkService::end() {
+  NetworkTime.detachProvider(_lwipPort);
   _lwipPort.end();
   _started = false;
 }
@@ -28,7 +36,9 @@ bool NetworkService::service() {
   if (!_started)
     return false;
 
-  return _lwipPort.service();
+  const bool serviced = _lwipPort.service();
+  NetworkTime.advance();
+  return serviced;
 }
 
 bool NetworkService::carrierUp() const { return _lwipPort.carrierUp(); }

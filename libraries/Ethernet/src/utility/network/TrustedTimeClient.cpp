@@ -1,6 +1,7 @@
 #include "TrustedTimeClient.h"
 
 #include <psa/crypto.h>
+#include <utility/network/TimeService.h>
 #include <string.h>
 
 namespace {
@@ -202,9 +203,21 @@ bool readPeerPin(
 
 TrustedTimeClient::TrustedTimeClient(TransportProvider &provider,
                                      NetworkTimeService &timeService)
-    : _timeService(timeService), _client(provider) {}
+    : _client(provider) {
+  attach(provider, timeService);
+}
+
+void TrustedTimeClient::attach(TransportProvider &provider,
+                               NetworkTimeService &timeService) {
+  _client.setTransportProvider(provider);
+  _timeService = &timeService;
+}
 
 bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
+  if (_timeService == nullptr) {
+    _lastError = TrustedTimeClientError::InvalidArgument;
+    return false;
+  }
   if (active()) {
     _lastError = TrustedTimeClientError::InvalidArgument;
     return false;
@@ -220,7 +233,7 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
 
   uint64_t provisionalUnixTime = policy.provisionalUnixTime;
   if (provisionalUnixTime == 0) {
-    const NetworkTimeSnapshot snapshot = _timeService.unixTime();
+    const NetworkTimeSnapshot snapshot = _timeService->unixTime();
     if (!snapshot.valid() || snapshot.unixTime < MinTrustedUnixTime) {
       _lastError = TrustedTimeClientError::InvalidArgument;
       return false;
@@ -326,7 +339,8 @@ TrustedTimeClientStatus TrustedTimeClient::poll() {
 }
 
 void TrustedTimeClient::stop() {
-  _client.stop();
+  if (active())
+    _client.stop();
   _status = TrustedTimeClientStatus::Idle;
   _lastError = TrustedTimeClientError::None;
   _receivedUnixTime = 0;
@@ -525,8 +539,9 @@ bool TrustedTimeClient::startResponseSignatureVerification(const uint8_t *body,
 }
 
 bool TrustedTimeClient::finishAuthenticatedResponse() {
-  if (!_timeService.applyTime(_authenticatedUnixTime,
-                              NetworkTimeLevel::Trusted)) {
+  if (_timeService == nullptr ||
+      !_timeService->applyTime(_authenticatedUnixTime,
+                               NetworkTimeLevel::Trusted)) {
     fail(TrustedTimeClientError::TimeRejected);
     return false;
   }

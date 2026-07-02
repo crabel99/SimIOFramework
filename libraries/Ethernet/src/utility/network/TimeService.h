@@ -1,7 +1,12 @@
 #pragma once
 
 #include <stdint.h>
+#include <utility/network/NetworkTimeClient.h>
+#include <utility/network/TrustedTimeClient.h>
 #include <utility/network/time/Config.h>
+
+class NetworkService;
+class TransportProvider;
 
 /**
  * @brief Singleton system-time daemon boundary for network-backed time.
@@ -20,6 +25,7 @@ public:
   NetworkTimeService &operator=(const NetworkTimeService &) = delete;
 
   bool begin();
+  bool begin(TransportProvider &provider);
   void reset();
 
   bool configureProvisionalSource(const NetworkTimeProvisionalSource &source);
@@ -41,19 +47,30 @@ public:
     return _provisionalSource.configured();
   }
   bool trustedSourceConfigured() const { return _trustedSource.valid(); }
-
+  bool transportProviderConfigured() const { return _provider != nullptr; }
+  bool updateActive() const {
+    return _provisionalClient.active() || _trustedClient.active();
+  }
 
 private:
   friend class NetworkTimeClient;
   friend class TrustedTimeClient;
+  friend class NetworkService;
 
   NetworkTimeService() = default;
 
   bool applyTime(uint64_t unixTime, NetworkTimeLevel level);
   bool writeRtc(uint64_t unixTime);
+  bool startSourceUpdate();
+  bool advance();
+  void detachProvider(TransportProvider &provider);
+  void recordSourceFailure(NetworkTimeLevel level);
 
+  TransportProvider *_provider = nullptr;
   NetworkTimeProvisionalSource _provisionalSource;
   TrustedTimeSourcePolicy _trustedSource;
+  NetworkTimeClient _provisionalClient;
+  TrustedTimeClient _trustedClient;
   uint64_t _unixTime = 0;
   NetworkTimeLevel _currentLevel = NetworkTimeLevel::Unset;
   NetworkTimeLevel _highestLevel = NetworkTimeLevel::Unset;

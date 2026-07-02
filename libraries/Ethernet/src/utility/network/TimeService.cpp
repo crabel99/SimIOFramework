@@ -1,6 +1,7 @@
 #include "TimeService.h"
 
 #include <RTC.h>
+#include <utility/transport/TransportProvider.h>
 
 NetworkTimeService &NetworkTimeService::instance() {
   static NetworkTimeService service;
@@ -19,7 +20,16 @@ bool NetworkTimeService::begin() {
   _begun = true;
   if (_status == NetworkTimeServiceStatus::Stopped)
     _status = NetworkTimeServiceStatus::Ready;
+  if (_provider != nullptr)
+    startSourceUpdate();
   return true;
+}
+
+bool NetworkTimeService::begin(TransportProvider &provider) {
+  _provider = &provider;
+  _provisionalClient.attach(provider, *this);
+  _trustedClient.attach(provider, *this);
+  return begin();
 }
 
 void NetworkTimeService::reset() {
@@ -32,6 +42,9 @@ void NetworkTimeService::reset() {
   _warnings = NetworkTimeWarningNone;
   _refreshIntervalSeconds = DefaultRefreshIntervalSeconds;
   _begun = false;
+  _provider = nullptr;
+  _provisionalClient.stop();
+  _trustedClient.stop();
   rtc::clearTime();
 }
 
@@ -41,6 +54,8 @@ bool NetworkTimeService::configureProvisionalSource(
     return false;
 
   _provisionalSource = source;
+  if (_begun && _provider != nullptr)
+    startSourceUpdate();
   return true;
 }
 
@@ -60,6 +75,8 @@ bool NetworkTimeService::configureTrustedSource(
     return false;
 
   _trustedSource = policy;
+  if (_begun && _provider != nullptr)
+    startSourceUpdate();
   return true;
 }
 
@@ -118,4 +135,88 @@ bool NetworkTimeService::applyTime(uint64_t unixTime, NetworkTimeLevel level) {
 
 bool NetworkTimeService::writeRtc(uint64_t unixTime) {
   return rtc::setUnixTime(unixTime);
+}
+
+
+bool NetworkTimeService::startSourceUpdate() {
+  if (_provider == nullptr)
+    return false;
+  if (_provisionalClient.active() || _trustedClient.active())
+    return true;
+
+  if (_provisionalSource.configured() &&
+      (_highestLevel == NetworkTimeLevel::Unset ||
+       _highestLevel == NetworkTimeLevel::Manual)) {
+    if (_provisionalClient.beginRequest(_provisionalSource.server,
+                                        _provisionalSource.serverPort,
+                                        _provisionalSource.localPort)) {
+      _status = NetworkTimeServiceStatus::SourceUpdatePending;
+      return true;
+    }
+    recordSourceFailure(NetworkTimeLevel::Provisional);
+    return false;
+  }
+
+  if (_trustedSource.valid() &&
+      _highestLevel >= NetworkTimeLevel::Provisional &&
+      _highestLevel < NetworkTimeLevel::Trusted) {
+    if (_trustedClient.begin(_trustedSource)) {
+      _status = NetworkTimeServiceStatus::SourceUpdatePending;
+      return true;
+    }
+    recordSourceFailure(NetworkTimeLevel::Trusted);
+    return false;
+  }
+
+  return false;
+}
+
+bool NetworkTimeService::advance() {
+  if (_provisionalClient.active()) {
+    const NetworkTimeClientStatus status = _provisionalClient.poll();
+    if (status == NetworkTimeClientStatus::Pending)
+      return true;
+    if (status == NetworkTimeClientStatus::Failed) {
+      recordSourceFailure(NetworkTimeLevel::Provisional);
+      return false;
+    }
+    if (status == NetworkTimeClientStatus::Updated && _trustedSource.valid())
+      startSourceUpdate();
+    return true;
+  }
+
+  if (_trustedClient.active()) {
+    const TrustedTimeClientStatus status = _trustedClient.poll();
+    if (status == TrustedTimeClientStatus::Connecting ||
+        status == TrustedTimeClientStatus::Handshaking ||
+        status == TrustedTimeClientStatus::Requesting ||
+        status == TrustedTimeClientStatus::Receiving ||
+        status == TrustedTimeClientStatus::Authenticating) {
+      return true;
+    }
+    if (status == TrustedTimeClientStatus::Failed) {
+      recordSourceFailure(NetworkTimeLevel::Trusted);
+      return false;
+    }
+    return true;
+  }
+
+  return startSourceUpdate();
+}
+
+void NetworkTimeService::detachProvider(TransportProvider &provider) {
+  if (_provider != &provider)
+    return;
+
+  _provisionalClient.stop();
+  _trustedClient.stop();
+  _provider = nullptr;
+}
+
+void NetworkTimeService::recordSourceFailure(NetworkTimeLevel level) {
+  if (level == NetworkTimeLevel::Trusted)
+    _warnings |= NetworkTimeWarningTrustedSourceFailed;
+  else if (level == NetworkTimeLevel::Provisional)
+    _warnings |= NetworkTimeWarningProvisionalSourceFailed;
+  _status = NetworkTimeServiceStatus::SourceUpdateFailed;
 }

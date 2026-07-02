@@ -1,8 +1,10 @@
 #include "EthernetUdp.h"
 
-EthernetUDP::EthernetUDP() : _provider(TransportProvider::defaultProvider()) {}
+EthernetUDP::EthernetUDP()
+    : _provider(TransportProvider::defaultProvider()), _active(false) {}
 
-EthernetUDP::EthernetUDP(TransportProvider &provider) : _provider(&provider) {}
+EthernetUDP::EthernetUDP(TransportProvider &provider)
+    : _provider(&provider), _active(false) {}
 
 void EthernetUDP::setProvider(TransportProvider &provider) {
   stop();
@@ -18,19 +20,24 @@ uint8_t EthernetUDP::begin(uint16_t port) {
   if (_provider == nullptr)
     return 0;
 
-  return _provider->beginUdp(port);
+  const uint8_t result = _provider->beginUdp(port);
+  _active = result != 0;
+  return result;
 }
 
 uint8_t EthernetUDP::beginMulticast(IPAddress ip, uint16_t port) {
   if (_provider == nullptr)
     return 0;
 
-  return _provider->beginUdpMulticast(ip, port);
+  const uint8_t result = _provider->beginUdpMulticast(ip, port);
+  _active = result != 0;
+  return result;
 }
 
 void EthernetUDP::stop() {
-  if (_provider != nullptr)
+  if (_provider != nullptr && _active)
     _provider->stopUdp();
+  _active = false;
 }
 
 int EthernetUDP::beginPacket(IPAddress ip, uint16_t port) {
