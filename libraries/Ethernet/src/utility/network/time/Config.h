@@ -30,6 +30,7 @@ enum NetworkTimeWarning : uint16_t {
   NetworkTimeWarningRtcSetFailed = 1u << 1,
   NetworkTimeWarningProvisionalSourceFailed = 1u << 2,
   NetworkTimeWarningTrustedSourceFailed = 1u << 3,
+  NetworkTimeWarningRtcReadFailed = 1u << 4,
 };
 
 struct NetworkTimeSnapshot {

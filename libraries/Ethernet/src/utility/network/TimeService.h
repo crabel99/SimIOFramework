@@ -25,6 +25,14 @@ public:
   NetworkTimeService(const NetworkTimeService &) = delete;
   NetworkTimeService &operator=(const NetworkTimeService &) = delete;
 
+  /**
+   * @brief Configure RTC/time-daemon plumbing and start any configured source.
+   *
+   * This is bounded and non-blocking. If a transport provider and time source
+   * are configured, the source transaction is submitted and later advanced by
+   * Ethernet service/RTC alarm flow. Read `unixTime()` for status, warnings,
+   * and the current RTC-backed snapshot.
+   */
   bool begin();
   bool begin(TransportProvider &provider);
   void reset();
@@ -41,12 +49,6 @@ public:
 
   bool setManualUnixTime(uint64_t unixTime);
   NetworkTimeSnapshot unixTime() const;
-
-  NetworkTimeServiceStatus status() const { return _status; }
-  uint16_t warnings() const { return _warnings; }
-  bool provisionalSourceConfigured() const {
-    return _provisionalSource.configured();
-  }
 
 private:
   friend class NetworkTimeClient;

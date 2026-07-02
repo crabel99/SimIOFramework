@@ -101,8 +101,14 @@ NetworkTimeSnapshot NetworkTimeService::unixTime() const {
 
   if (_highestLevel != NetworkTimeLevel::Unset) {
     uint64_t rtcUnixTime = 0;
-    if (rtc::unixTime(rtcUnixTime))
+    if (rtc::unixTime(rtcUnixTime)) {
       snapshot.unixTime = rtcUnixTime;
+    } else {
+      snapshot.unixTime = 0;
+      snapshot.trustLevel = NetworkTimeLevel::Unset;
+      snapshot.status = NetworkTimeServiceStatus::RtcUnavailable;
+      snapshot.warnings |= NetworkTimeWarningRtcReadFailed;
+    }
   }
 
   return snapshot;
