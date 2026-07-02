@@ -157,7 +157,7 @@ bool NetworkTimeService::startSourceUpdate() {
 
   if (_trustedSource.valid() &&
       _highestLevel >= NetworkTimeLevel::Provisional &&
-      _highestLevel < NetworkTimeLevel::Trusted) {
+      _highestLevel <= NetworkTimeLevel::Trusted) {
     if (_trustedClient.begin(_trustedSource)) {
       _status = NetworkTimeServiceStatus::SourceUpdatePending;
       return true;

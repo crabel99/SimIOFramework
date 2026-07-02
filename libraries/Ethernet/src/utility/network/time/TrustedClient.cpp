@@ -244,6 +244,10 @@ bool NetworkTimeTrustedClient::begin(const NetworkTimeTrustedSourcePolicy &polic
   NetworkTimeTrustedSourcePolicy resolvedPolicy = policy;
   resolvedPolicy.provisionalUnixTime = provisionalUnixTime;
 
+  if (!_client.setCryptoProvider(*resolvedPolicy.cryptoProvider)) {
+    _lastError = NetworkTimeTrustedClientError::TlsConfigurationFailed;
+    return false;
+  }
   _client.stop();
   if (!_client.setTlsSecurityLevel(SecureClientTlsSecurityLevel::Medium) ||
       !_client.setCryptoProvider(*resolvedPolicy.cryptoProvider) ||
