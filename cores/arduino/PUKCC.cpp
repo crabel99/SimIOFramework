@@ -7,6 +7,22 @@ inline volatile uint32_t &statusRegister() {
   return *reinterpret_cast<volatile uint32_t *>(pukcc::StatusRegisterAddress);
 }
 
+void enableBusClock() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  MCLK->AHBMASK.reg |= MCLK_AHBMASK_PUKCC;
+#else
+  MCLK_REGS->MCLK_AHBMASK |= MCLK_AHBMASK_PUKCC_Msk;
+#endif
+}
+
+void disableBusClock() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  MCLK->AHBMASK.reg &= ~MCLK_AHBMASK_PUKCC;
+#else
+  MCLK_REGS->MCLK_AHBMASK &= ~MCLK_AHBMASK_PUKCC_Msk;
+#endif
+}
+
 uint32_t enterCritical() {
   const uint32_t primask = __get_PRIMASK();
   __disable_irq();
@@ -259,27 +275,27 @@ bool ensurePendSvServiceRegistered() {
 
 int pukcc::irqNumber() { return static_cast<int>(PUKCC_IRQn); }
 
+uintptr_t pukcc::apbBaseAddress() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return reinterpret_cast<uintptr_t>(PUKCC);
+#else
+  return StatusRegisterAddress & ~static_cast<uintptr_t>(0x3Fu);
+#endif
+}
+
+uintptr_t pukcc::ahbBaseAddress() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return reinterpret_cast<uintptr_t>(PUKCC_AHB);
+#else
+  return RomJumpTableAddress & ~static_cast<uintptr_t>(0xFFu);
+#endif
+}
+
 void pukcc::end() { disableClock(); }
 
-void pukcc::enableClock() {
-#if defined(MCLK_AHBMASK_PUKCC_Msk)
-#if defined(MCLK_REGS)
-  MCLK_REGS->MCLK_AHBMASK |= MCLK_AHBMASK_PUKCC_Msk;
-#else
-  MCLK->AHBMASK.reg |= MCLK_AHBMASK_PUKCC_Msk;
-#endif
-#endif
-}
+void pukcc::enableClock() { enableBusClock(); }
 
-void pukcc::disableClock() {
-#if defined(MCLK_AHBMASK_PUKCC_Msk)
-#if defined(MCLK_REGS)
-  MCLK_REGS->MCLK_AHBMASK &= ~MCLK_AHBMASK_PUKCC_Msk;
-#else
-  MCLK->AHBMASK.reg &= ~MCLK_AHBMASK_PUKCC_Msk;
-#endif
-#endif
-}
+void pukcc::disableClock() { disableBusClock(); }
 
 uint32_t pukcc::status() { return statusRegister(); }
 
@@ -529,6 +545,12 @@ bool pukcc::asyncBusy() {
   exitCritical(primask);
   return busy;
 }
+
+int pukcc::instanceId() { return 76; }
+
+uint8_t pukcc::ramAddressSize() { return 12; }
+
+uint8_t pukcc::romAddressSize() { return 16; }
 
 void pukcc::handleInterrupt() {
   PendSV::instance().setPending(pendSvServiceId());

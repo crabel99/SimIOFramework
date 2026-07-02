@@ -3,25 +3,18 @@
 #include "sam.h"
 #include "PendSV.h"
 
+#if __has_include("instance/pukcc.h")
+#include "instance/pukcc.h"
+#endif
+
 #include <stdint.h>
 
-#if defined(PUKCC) || defined(ID_PUKCC) || defined(PUKCC_INSTANCE_ID)
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) ||       \
+    defined(__SAME54__)
 #define PUKCC_AVAILABLE 1
 #else
 #define PUKCC_AVAILABLE 0
-#endif /* PUKCC || ID_PUKCC || PUKCC_INSTANCE_ID */
-
-#if defined(PUKCC)
-#define PUKCC_PERIPH_APB (reinterpret_cast<uintptr_t>(PUKCC))
-#else
-#define PUKCC_PERIPH_APB (static_cast<uintptr_t>(0))
-#endif /* PUKCC */
-
-#if defined(PUKCC_AHB)
-#define PUKCC_PERIPH_AHB (reinterpret_cast<uintptr_t>(PUKCC_AHB))
-#else
-#define PUKCC_PERIPH_AHB (static_cast<uintptr_t>(0))
-#endif /* PUKCC_AHB */
+#endif /* SAMD5x/E5x PUKCC target */
 
 #if PUKCC_AVAILABLE
 
@@ -189,8 +182,8 @@ public:
     Severe,
   };
 
-  inline static uintptr_t apbBaseAddress() { return PUKCC_PERIPH_APB; }
-  inline static uintptr_t ahbBaseAddress() { return PUKCC_PERIPH_AHB; }
+  static uintptr_t apbBaseAddress();
+  static uintptr_t ahbBaseAddress();
   inline static uint8_t pendSvServiceId() { return PendSVChannels::Pukcc; }
   inline static uintptr_t cryptoRamBaseAddress() {
     return CryptoRamAddressPrefix | CryptoRamNearBase;
@@ -276,30 +269,10 @@ public:
   /** @brief Schedule PUKCC PendSV work from the PUKCC IRQ, when used. */
   static void handleInterrupt();
   /** @brief Return the CMSIS peripheral instance ID when exposed. */
-  inline static int instanceId() {
-#if defined(PUKCC_INSTANCE_ID)
-    return static_cast<int>(PUKCC_INSTANCE_ID);
-#elif defined(ID_PUKCC)
-    return static_cast<int>(ID_PUKCC);
-#else
-    return -1;
-#endif
-  }
+  static int instanceId();
   /** @brief Return PUKCC RAM address width metadata from CMSIS. */
-  inline static uint8_t ramAddressSize() {
-#if defined(PUKCC_RAM_ADDR_SIZE)
-    return static_cast<uint8_t>(PUKCC_RAM_ADDR_SIZE);
-#else
-    return 0;
-#endif
-  }
+  static uint8_t ramAddressSize();
   /** @brief Return PUKCC ROM address width metadata from CMSIS. */
-  inline static uint8_t romAddressSize() {
-#if defined(PUKCC_ROM_ADDR_SIZE)
-    return static_cast<uint8_t>(PUKCC_ROM_ADDR_SIZE);
-#else
-    return 0;
-#endif
-  }
+  static uint8_t romAddressSize();
 };
 #endif /* PUKCC_AVAILABLE */

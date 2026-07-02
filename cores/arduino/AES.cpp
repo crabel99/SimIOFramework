@@ -3,9 +3,84 @@
 #if AES_AVAILABLE
 
 namespace {
-inline aes_registers_t *regs() {
-  return reinterpret_cast<aes_registers_t *>(AES_PERIPH);
+constexpr uint8_t kEncryptionCompleteInterrupt =
+    aes::EncryptionCompleteInterrupt;
+constexpr uint8_t kGaloisMultiplyCompleteInterrupt =
+    aes::GaloisMultiplyCompleteInterrupt;
+constexpr uint8_t kInterruptMask =
+    kEncryptionCompleteInterrupt | kGaloisMultiplyCompleteInterrupt;
+
+#if defined(__SAMD51__) || defined(__SAME51__)
+constexpr uint32_t kControlSoftwareReset = AES_CTRLA_SWRST;
+constexpr uint32_t kControlEnable = AES_CTRLA_ENABLE;
+constexpr uint8_t kControlNewMessage = AES_CTRLB_NEWMSG;
+constexpr uint8_t kControlStart = AES_CTRLB_START;
+constexpr uint8_t kControlGaloisMultiply = AES_CTRLB_GFMUL;
+
+uint32_t controlA() { return AES->CTRLA.reg; }
+void writeControlA(uint32_t value) { AES->CTRLA.reg = value; }
+void writeControlB(uint8_t value) { AES->CTRLB.reg = value; }
+uint8_t rawInterruptFlags() { return AES->INTFLAG.reg; }
+void writeInterruptFlags(uint8_t value) { AES->INTFLAG.reg = value; }
+void writeInterruptEnableSet(uint8_t value) { AES->INTENSET.reg = value; }
+void writeInterruptEnableClear(uint8_t value) { AES->INTENCLR.reg = value; }
+void writeDataBufferPointer(uint8_t value) { AES->DATABUFPTR.reg = value; }
+void writeKeyword(uint8_t index, uint32_t value) {
+  AES->KEYWORD[index].reg = value;
 }
+void writeInputData(uint32_t value) { AES->INDATA.reg = value; }
+uint32_t inputData() { return AES->INDATA.reg; }
+void writeInitializationVectorWord(uint8_t index, uint32_t value) {
+  AES->INTVECTV[index].reg = value;
+}
+void writeHashKeyWord(uint8_t index, uint32_t value) {
+  AES->HASHKEY[index].reg = value;
+}
+void writeGhashWord(uint8_t index, uint32_t value) {
+  AES->GHASH[index].reg = value;
+}
+uint32_t ghashWord(uint8_t index) { return AES->GHASH[index].reg; }
+void enableBusClock() { MCLK->APBCMASK.reg |= MCLK_APBCMASK_AES; }
+void disableBusClock() { MCLK->APBCMASK.reg &= ~MCLK_APBCMASK_AES; }
+#else
+constexpr uint32_t kControlSoftwareReset = AES_CTRLA_SWRST_Msk;
+constexpr uint32_t kControlEnable = AES_CTRLA_ENABLE_Msk;
+constexpr uint8_t kControlNewMessage = AES_CTRLB_NEWMSG_Msk;
+constexpr uint8_t kControlStart = AES_CTRLB_START_Msk;
+constexpr uint8_t kControlGaloisMultiply = AES_CTRLB_GFMUL_Msk;
+
+uint32_t controlA() { return AES_REGS->AES_CTRLA; }
+void writeControlA(uint32_t value) { AES_REGS->AES_CTRLA = value; }
+void writeControlB(uint8_t value) { AES_REGS->AES_CTRLB = value; }
+uint8_t rawInterruptFlags() { return AES_REGS->AES_INTFLAG; }
+void writeInterruptFlags(uint8_t value) { AES_REGS->AES_INTFLAG = value; }
+void writeInterruptEnableSet(uint8_t value) {
+  AES_REGS->AES_INTENSET = value;
+}
+void writeInterruptEnableClear(uint8_t value) {
+  AES_REGS->AES_INTENCLR = value;
+}
+void writeDataBufferPointer(uint8_t value) {
+  AES_REGS->AES_DATABUFPTR = value;
+}
+void writeKeyword(uint8_t index, uint32_t value) {
+  AES_REGS->AES_KEYWORD[index] = value;
+}
+void writeInputData(uint32_t value) { AES_REGS->AES_INDATA = value; }
+uint32_t inputData() { return AES_REGS->AES_INDATA; }
+void writeInitializationVectorWord(uint8_t index, uint32_t value) {
+  AES_REGS->AES_INTVECTV[index] = value;
+}
+void writeHashKeyWord(uint8_t index, uint32_t value) {
+  AES_REGS->AES_HASHKEY[index] = value;
+}
+void writeGhashWord(uint8_t index, uint32_t value) {
+  AES_REGS->AES_GHASH[index] = value;
+}
+uint32_t ghashWord(uint8_t index) { return AES_REGS->AES_GHASH[index]; }
+void enableBusClock() { MCLK_REGS->MCLK_APBCMASK |= MCLK_APBCMASK_AES_Msk; }
+void disableBusClock() { MCLK_REGS->MCLK_APBCMASK &= ~MCLK_APBCMASK_AES_Msk; }
+#endif
 
 uint32_t enterCritical() {
   const uint32_t primask = __get_PRIMASK();
@@ -67,12 +142,12 @@ void aesPendSvService(uint8_t serviceId, void *context) {
   exitCritical(primask);
 
   aes::EventMask events = aes::EventNone;
-  if ((flags & aes::EncryptionCompleteInterrupt) != 0u) {
+  if ((flags & kEncryptionCompleteInterrupt) != 0u) {
     if (output != nullptr && outputKind == AsyncState::OutputKind::DataBlock)
       aes::readOutputBlock(output);
     events |= aes::EventComplete;
   }
-  if ((flags & aes::GaloisMultiplyCompleteInterrupt) != 0u) {
+  if ((flags & kGaloisMultiplyCompleteInterrupt) != 0u) {
     if (output != nullptr && outputKind == AsyncState::OutputKind::GhashBlock)
       aes::readGhash(output);
     events |= aes::EventGaloisComplete;
@@ -104,59 +179,51 @@ bool ensurePendSvServiceRegistered() {
 
 int aes::irqNumber() { return static_cast<int>(AES_IRQn); }
 
-void aes::enableClock() {
-#if defined(MCLK_APBCMASK_AES_Msk)
-#if defined(MCLK_REGS)
-  MCLK_REGS->MCLK_APBCMASK |= MCLK_APBCMASK_AES_Msk;
+uintptr_t aes::baseAddress() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return reinterpret_cast<uintptr_t>(AES);
 #else
-  MCLK->APBCMASK.reg |= MCLK_APBCMASK_AES_Msk;
-#endif
+  return reinterpret_cast<uintptr_t>(AES_REGS);
 #endif
 }
 
-void aes::disableClock() {
-#if defined(MCLK_APBCMASK_AES_Msk)
-#if defined(MCLK_REGS)
-  MCLK_REGS->MCLK_APBCMASK &= ~MCLK_APBCMASK_AES_Msk;
-#else
-  MCLK->APBCMASK.reg &= ~MCLK_APBCMASK_AES_Msk;
-#endif
-#endif
-}
+void aes::enableClock() { enableBusClock(); }
+
+void aes::disableClock() { disableBusClock(); }
 
 void aes::reset() {
-  regs()->AES_CTRLA = AES_CTRLA_SWRST_Msk;
-  while ((regs()->AES_CTRLA & AES_CTRLA_SWRST_Msk) != 0) {
+  writeControlA(kControlSoftwareReset);
+  while ((controlA() & kControlSoftwareReset) != 0) {
   }
 }
 
 void aes::begin() {
   enableClock();
   reset();
-  regs()->AES_INTENCLR = AES_INTENCLR_Msk;
-  regs()->AES_INTFLAG = AES_INTFLAG_Msk;
-  regs()->AES_CTRLA = AES_CTRLA_ENABLE_Msk;
+  writeInterruptEnableClear(kInterruptMask);
+  writeInterruptFlags(kInterruptMask);
+  writeControlA(kControlEnable);
 }
 
 void aes::end() {
-  regs()->AES_INTENCLR = AES_INTENCLR_Msk;
-  regs()->AES_CTRLA = 0;
+  writeInterruptEnableClear(kInterruptMask);
+  writeControlA(0);
 }
 
 bool aes::enabled() {
-  return (regs()->AES_CTRLA & AES_CTRLA_ENABLE_Msk) != 0;
+  return (controlA() & kControlEnable) != 0;
 }
 
 void aes::configure(Mode mode, KeySize keySize, Direction direction,
                     bool autoStart) {
-  regs()->AES_CTRLA = 0;
-  uint32_t control = AES_CTRLA_ENABLE_Msk;
+  writeControlA(0);
+  uint32_t control = kControlEnable;
   control |= AES_CTRLA_AESMODE(static_cast<uint32_t>(mode));
   control |= AES_CTRLA_KEYSIZE(static_cast<uint32_t>(keySize));
-  control |= AES_CTRLA_CIPHER(static_cast<uint32_t>(direction));
+  control |= static_cast<uint32_t>(direction) << AES_CTRLA_CIPHER_Pos;
   if (autoStart)
     control |= AES_CTRLA_STARTMODE_AUTO;
-  regs()->AES_CTRLA = control;
+  writeControlA(control);
 }
 
 bool aes::writeKey(const uint32_t *words, uint8_t wordCount) {
@@ -169,76 +236,76 @@ bool aes::writeKey(const uint32_t *words, uint8_t wordCount) {
   }
 
   for (uint8_t i = 0; i < wordCount; ++i)
-    regs()->AES_KEYWORD[i] = words[i];
+    writeKeyword(i, words[i]);
   return true;
 }
 
 void aes::writeInputBlock(const uint32_t words[4]) {
-  regs()->AES_DATABUFPTR = 0;
+  writeDataBufferPointer(0);
   for (uint8_t i = 0; i < 4; ++i)
-    regs()->AES_INDATA = words[i];
+    writeInputData(words[i]);
 }
 
 void aes::readOutputBlock(uint32_t words[4]) {
-  regs()->AES_DATABUFPTR = 0;
+  writeDataBufferPointer(0);
   for (uint8_t i = 0; i < 4; ++i)
-    words[i] = regs()->AES_INDATA;
+    words[i] = inputData();
 }
 
 void aes::writeInitializationVector(const uint32_t words[4]) {
   for (uint8_t i = 0; i < 4; ++i)
-    regs()->AES_INTVECTV[i] = words[i];
+    writeInitializationVectorWord(i, words[i]);
 }
 
 void aes::writeHashKey(const uint32_t words[4]) {
   for (uint8_t i = 0; i < 4; ++i)
-    regs()->AES_HASHKEY[i] = words[i];
+    writeHashKeyWord(i, words[i]);
 }
 
 void aes::writeGhash(const uint32_t words[4]) {
   for (uint8_t i = 0; i < 4; ++i)
-    regs()->AES_GHASH[i] = words[i];
+    writeGhashWord(i, words[i]);
 }
 
 void aes::readGhash(uint32_t words[4]) {
   for (uint8_t i = 0; i < 4; ++i)
-    words[i] = regs()->AES_GHASH[i];
+    words[i] = ghashWord(i);
 }
 
 void aes::beginMessage() {
-  regs()->AES_CTRLB = AES_CTRLB_NEWMSG_Msk;
+  writeControlB(kControlNewMessage);
 }
 
-void aes::start() {
-  regs()->AES_CTRLB = AES_CTRLB_START_Msk;
-}
+void aes::start() { writeControlB(kControlStart); }
 
-void aes::startGaloisMultiply() { regs()->AES_CTRLB = AES_CTRLB_GFMUL_Msk; }
+void aes::startGaloisMultiply() {
+  writeControlB(kControlGaloisMultiply);
+}
 
 static void startGaloisMultiplyBlock(const uint32_t words[4]) {
-  regs()->AES_CTRLB = AES_CTRLB_GFMUL_Msk;
+  writeControlB(kControlGaloisMultiply);
   aes::writeInputBlock(words);
-  regs()->AES_CTRLB = AES_CTRLB_GFMUL_Msk | AES_CTRLB_START_Msk;
+  writeControlB(kControlGaloisMultiply | kControlStart);
 }
 
 bool aes::operationComplete() {
-  return (regs()->AES_INTFLAG & AES_INTFLAG_ENCCMP_Msk) != 0;
+  return (rawInterruptFlags() & kEncryptionCompleteInterrupt) != 0;
 }
 
 uint8_t aes::interruptFlags() {
-  return regs()->AES_INTFLAG & AES_INTFLAG_Msk;
+  return rawInterruptFlags() & kInterruptMask;
 }
 
 void aes::clearInterruptFlags(uint8_t flags) {
-  regs()->AES_INTFLAG = flags & AES_INTFLAG_Msk;
+  writeInterruptFlags(flags & kInterruptMask);
 }
 
 void aes::enableInterrupts(uint8_t mask) {
-  regs()->AES_INTENSET = mask & AES_INTENSET_Msk;
+  writeInterruptEnableSet(mask & kInterruptMask);
 }
 
 void aes::disableInterrupts(uint8_t mask) {
-  regs()->AES_INTENCLR = mask & AES_INTENCLR_Msk;
+  writeInterruptEnableClear(mask & kInterruptMask);
 }
 
 bool aes::registerEventCallback(EventCallback callback, void *context) {
@@ -263,8 +330,7 @@ void aes::clearEventCallback() {
   asyncState.outputKind = AsyncState::OutputKind::None;
   asyncState.busy = false;
   exitCritical(primask);
-  disableInterrupts(EncryptionCompleteInterrupt |
-                    GaloisMultiplyCompleteInterrupt);
+  disableInterrupts(kInterruptMask);
   PendSV::instance().clearService(pendSvServiceId());
   asyncState.serviceRegistered = false;
 }
@@ -299,11 +365,10 @@ bool aes::startEcb128Async(Direction direction, const uint32_t key[4],
     return false;
   }
 
-  clearInterruptFlags(EncryptionCompleteInterrupt |
-                      GaloisMultiplyCompleteInterrupt);
+  clearInterruptFlags(kInterruptMask);
   beginMessage();
   writeInputBlock(input);
-  enableInterrupts(EncryptionCompleteInterrupt);
+  enableInterrupts(kEncryptionCompleteInterrupt);
   NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
   NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
   start();
@@ -332,9 +397,8 @@ bool aes::startGaloisMultiplyAsync(const uint32_t hashKey[4],
   begin();
   configure(Mode::Gcm, KeySize::Bits128, Direction::Encrypt);
   writeHashKey(hashKey);
-  clearInterruptFlags(EncryptionCompleteInterrupt |
-                      GaloisMultiplyCompleteInterrupt);
-  enableInterrupts(GaloisMultiplyCompleteInterrupt);
+  clearInterruptFlags(kInterruptMask);
+  enableInterrupts(kGaloisMultiplyCompleteInterrupt);
   NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
   NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
   startGaloisMultiplyBlock(input);
@@ -350,8 +414,7 @@ bool aes::asyncBusy() {
 
 void aes::handleInterrupt() {
   const uint8_t flags = interruptFlags();
-  const uint8_t handled =
-      flags & (EncryptionCompleteInterrupt | GaloisMultiplyCompleteInterrupt);
+  const uint8_t handled = flags & kInterruptMask;
   if (handled == 0u)
     return;
 

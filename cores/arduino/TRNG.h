@@ -5,15 +5,12 @@
 
 #include <stdint.h>
 
-#ifdef TRNG_REGS
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) ||       \
+    defined(__SAME54__)
 #define TRNG_AVAILABLE 1
-#define TRNG_PERIPH (reinterpret_cast<uintptr_t>(TRNG_REGS))
-#elif defined(TRNG)
-#define TRNG_AVAILABLE 1
-#define TRNG_PERIPH (reinterpret_cast<uintptr_t>(TRNG))
 #else
 #define TRNG_AVAILABLE 0
-#endif /*TRNG_REGS || TRNG */
+#endif /* SAMD5x/E5x TRNG target */
 
 #if TRNG_AVAILABLE
 
@@ -46,9 +43,7 @@ public:
   static constexpr EventMask EventDataReady = 1u << 0;
   static constexpr EventMask EventError = 1u << 1;
 
-  static constexpr uint8_t DataReadyInterrupt = TRNG_INTFLAG_DATARDY_Msk;
-
-  inline static uintptr_t baseAddress() { return TRNG_PERIPH; }
+  static uintptr_t baseAddress();
   inline static uint8_t pendSvServiceId() { return PendSVChannels::Trng; }
 
   /** @brief Return the CMSIS IRQ number for the TRNG peripheral. */

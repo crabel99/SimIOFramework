@@ -5,15 +5,12 @@
 
 #include <stdint.h>
 
-#if defined(AES_REGS)
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) ||       \
+    defined(__SAME54__)
 #define AES_AVAILABLE 1
-#define AES_PERIPH (reinterpret_cast<uintptr_t>(AES_REGS))
-#elif defined(AES)
-#define AES_AVAILABLE 1
-#define AES_PERIPH (reinterpret_cast<uintptr_t>(AES))
 #else
 #define AES_AVAILABLE 0
-#endif /* AES_REGS || AES */
+#endif /* SAMD5x/E5x AES target */
 
 #if AES_AVAILABLE
 
@@ -60,11 +57,16 @@ public:
     Encrypt = AES_CTRLA_CIPHER_ENC_Val,
   };
 
+#if defined(__SAMD51__) || defined(__SAME51__)
+  static constexpr uint8_t EncryptionCompleteInterrupt = AES_INTFLAG_ENCCMP;
+  static constexpr uint8_t GaloisMultiplyCompleteInterrupt = AES_INTFLAG_GFMCMP;
+#else
   static constexpr uint8_t EncryptionCompleteInterrupt = AES_INTFLAG_ENCCMP_Msk;
   static constexpr uint8_t GaloisMultiplyCompleteInterrupt =
       AES_INTFLAG_GFMCMP_Msk;
+#endif
 
-  inline static uintptr_t baseAddress() { return AES_PERIPH; }
+  static uintptr_t baseAddress();
   inline static uint8_t pendSvServiceId() { return PendSVChannels::Aes; }
 
   /** @brief Return the CMSIS IRQ number for the AES peripheral. */

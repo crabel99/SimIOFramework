@@ -3,9 +3,41 @@
 #if TRNG_AVAILABLE
 
 namespace {
-inline trng_registers_t *regs() {
-  return reinterpret_cast<trng_registers_t *>(TRNG_PERIPH);
+#if defined(__SAMD51__) || defined(__SAME51__)
+constexpr uint8_t kDataReadyInterrupt = TRNG_INTFLAG_DATARDY;
+constexpr uint8_t kControlEnable = TRNG_CTRLA_ENABLE;
+constexpr uint8_t kControlRunStandby = TRNG_CTRLA_RUNSTDBY;
+
+uint8_t controlA() { return TRNG->CTRLA.reg; }
+void writeControlA(uint8_t value) { TRNG->CTRLA.reg = value; }
+uint8_t rawInterruptFlags() { return TRNG->INTFLAG.reg; }
+void writeInterruptFlags(uint8_t value) { TRNG->INTFLAG.reg = value; }
+void writeInterruptEnableSet(uint8_t value) { TRNG->INTENSET.reg = value; }
+void writeInterruptEnableClear(uint8_t value) { TRNG->INTENCLR.reg = value; }
+uint32_t data() { return TRNG->DATA.reg; }
+void enableBusClock() { MCLK->APBCMASK.reg |= MCLK_APBCMASK_TRNG; }
+void disableBusClock() { MCLK->APBCMASK.reg &= ~MCLK_APBCMASK_TRNG; }
+#else
+constexpr uint8_t kDataReadyInterrupt = TRNG_INTFLAG_DATARDY_Msk;
+constexpr uint8_t kControlEnable = TRNG_CTRLA_ENABLE_Msk;
+constexpr uint8_t kControlRunStandby = TRNG_CTRLA_RUNSTDBY_Msk;
+
+uint8_t controlA() { return TRNG_REGS->TRNG_CTRLA; }
+void writeControlA(uint8_t value) { TRNG_REGS->TRNG_CTRLA = value; }
+uint8_t rawInterruptFlags() { return TRNG_REGS->TRNG_INTFLAG; }
+void writeInterruptFlags(uint8_t value) { TRNG_REGS->TRNG_INTFLAG = value; }
+void writeInterruptEnableSet(uint8_t value) {
+  TRNG_REGS->TRNG_INTENSET = value;
 }
+void writeInterruptEnableClear(uint8_t value) {
+  TRNG_REGS->TRNG_INTENCLR = value;
+}
+uint32_t data() { return TRNG_REGS->TRNG_DATA; }
+void enableBusClock() { MCLK_REGS->MCLK_APBCMASK |= MCLK_APBCMASK_TRNG_Msk; }
+void disableBusClock() { MCLK_REGS->MCLK_APBCMASK &= ~MCLK_APBCMASK_TRNG_Msk; }
+#endif
+
+constexpr uint8_t kInterruptMask = kDataReadyInterrupt;
 
 uint32_t enterCritical() {
   const uint32_t primask = __get_PRIMASK();
@@ -60,7 +92,7 @@ void trngPendSvService(uint8_t serviceId, void *context) {
     trng::end();
 
   trng::EventMask events = trng::EventNone;
-  if ((flags & trng::DataReadyInterrupt) != 0u)
+  if ((flags & kDataReadyInterrupt) != 0u)
     events |= trng::EventDataReady;
 
   if (callback != nullptr && events != trng::EventNone)
@@ -85,69 +117,56 @@ int trng::irqNumber() {
   return static_cast<int>(TRNG_IRQn);
 }
 
-void trng::enableClock() {
-#if defined(MCLK_APBCMASK_TRNG_Msk)
-#if defined(MCLK_REGS)
-  MCLK_REGS->MCLK_APBCMASK |= MCLK_APBCMASK_TRNG_Msk;
+uintptr_t trng::baseAddress() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return reinterpret_cast<uintptr_t>(TRNG);
 #else
-  MCLK->APBCMASK.reg |= MCLK_APBCMASK_TRNG_Msk;
-#endif
+  return reinterpret_cast<uintptr_t>(TRNG_REGS);
 #endif
 }
 
-void trng::disableClock() {
-#if defined(MCLK_APBCMASK_TRNG_Msk)
-#if defined(MCLK_REGS)
-  MCLK_REGS->MCLK_APBCMASK &= ~MCLK_APBCMASK_TRNG_Msk;
-#else
-  MCLK->APBCMASK.reg &= ~MCLK_APBCMASK_TRNG_Msk;
-#endif
-#endif
-}
+void trng::enableClock() { enableBusClock(); }
+
+void trng::disableClock() { disableBusClock(); }
 
 void trng::begin(bool runStandby) {
   enableClock();
-  regs()->TRNG_INTENCLR = TRNG_INTENCLR_Msk;
-  regs()->TRNG_INTFLAG = TRNG_INTFLAG_Msk;
-  regs()->TRNG_CTRLA =
-      TRNG_CTRLA_ENABLE_Msk | (runStandby ? TRNG_CTRLA_RUNSTDBY_Msk : 0u);
+  writeInterruptEnableClear(kInterruptMask);
+  writeInterruptFlags(kInterruptMask);
+  writeControlA(kControlEnable | (runStandby ? kControlRunStandby : 0u));
 }
 
 void trng::end() {
-  regs()->TRNG_INTENCLR = TRNG_INTENCLR_Msk;
-  regs()->TRNG_CTRLA = 0;
+  writeInterruptEnableClear(kInterruptMask);
+  writeControlA(0);
 }
 
-bool trng::enabled() {
-  return (regs()->TRNG_CTRLA & TRNG_CTRLA_ENABLE_Msk) != 0;
-}
+bool trng::enabled() { return (controlA() & kControlEnable) != 0; }
 
 bool trng::dataReady() {
-  return (regs()->TRNG_INTFLAG & TRNG_INTFLAG_DATARDY_Msk) != 0;
+  return (rawInterruptFlags() & kDataReadyInterrupt) != 0;
 }
 
 bool trng::read(uint32_t &value) {
   if (!dataReady())
     return false;
 
-  value = regs()->TRNG_DATA;
+  value = data();
   return true;
 }
 
-uint8_t trng::interruptFlags() {
-  return regs()->TRNG_INTFLAG & TRNG_INTFLAG_Msk;
-}
+uint8_t trng::interruptFlags() { return rawInterruptFlags() & kInterruptMask; }
 
 void trng::clearInterruptFlags(uint8_t flags) {
-  regs()->TRNG_INTFLAG = flags & TRNG_INTFLAG_Msk;
+  writeInterruptFlags(flags & kInterruptMask);
 }
 
 void trng::enableInterrupts(uint8_t mask) {
-  regs()->TRNG_INTENSET = mask & TRNG_INTENSET_Msk;
+  writeInterruptEnableSet(mask & kInterruptMask);
 }
 
 void trng::disableInterrupts(uint8_t mask) {
-  regs()->TRNG_INTENCLR = mask & TRNG_INTENCLR_Msk;
+  writeInterruptEnableClear(mask & kInterruptMask);
 }
 
 bool trng::registerEventCallback(EventCallback callback, void *context) {
@@ -195,7 +214,7 @@ bool trng::requestWordAsync(bool runStandby, bool stopAfterWord) {
   const bool alreadyEnabled = enabled();
   if (!alreadyEnabled)
     begin(runStandby);
-  enableInterrupts(DataReadyInterrupt);
+  enableInterrupts(kDataReadyInterrupt);
   NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
   NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
   return true;
@@ -210,7 +229,7 @@ bool trng::asyncBusy() {
 
 void trng::handleInterrupt() {
   const uint8_t flags = interruptFlags();
-  const uint8_t handled = flags & DataReadyInterrupt;
+  const uint8_t handled = flags & kDataReadyInterrupt;
   if (handled == 0u)
     return;
 
