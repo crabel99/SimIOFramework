@@ -109,7 +109,7 @@ enum class TlsSoftwareKdfAlgorithm : uint8_t {
  * New operation code must request randomness with `randomBytesAsync()` so the
  * hardware TRNG writes directly into operation-owned sensitive buffers. The
  * synchronous `generateRandom()` compatibility hook exists only in
- * `SIMIO_MBEDTLS_TEST_SYNC_COMPAT` builds for legacy Mbed TLS callback tests;
+ * `MBEDTLS_TEST_SYNC_COMPAT` builds for legacy Mbed TLS callback tests;
  * production builds do not expose that fallback path.
  */
 class TlsCryptoProvider {
@@ -120,7 +120,7 @@ public:
                                     void *context) = 0;
   virtual void reset() = 0;
   virtual bool ready() const = 0;
-#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
+#if defined(MBEDTLS_TEST_SYNC_COMPAT)
   virtual bool generateRandom(uint8_t *buffer, size_t length) = 0;
 #endif
 
@@ -553,11 +553,11 @@ struct TlsClientPolicy {
 
 constexpr uint16_t DefaultTlsOperationPollLimit = 20000;
 constexpr size_t TlsSha256DigestLength = 32;
-#ifndef SIMIO_TLS_ECC_OPERATION_BUDGET
-#define SIMIO_TLS_ECC_OPERATION_BUDGET 32
+#ifndef TLS_ECC_OPERATION_BUDGET
+#define TLS_ECC_OPERATION_BUDGET 32
 #endif
 constexpr uint32_t DefaultTlsEccOperationBudget =
-    SIMIO_TLS_ECC_OPERATION_BUDGET;
+    TLS_ECC_OPERATION_BUDGET;
 
 class TlsClientSession {
 public:
@@ -771,7 +771,7 @@ public:
    * network/peripheral service loop and call `poll()` again to resume the same
    * Mbed TLS operation. This is the TLS-level contract that prevents
    * ECDHE/ECDSA work from monopolizing the cooperative runtime. Boards may
-   * raise `SIMIO_TLS_ECC_OPERATION_BUDGET` to trade longer bounded poll slices
+   * raise `TLS_ECC_OPERATION_BUDGET` to trade longer bounded poll slices
    * for fewer resumes while keeping TLS progress cooperative.
    *
    * This budget is a temporary containment mechanism for Mbed TLS/PSA software

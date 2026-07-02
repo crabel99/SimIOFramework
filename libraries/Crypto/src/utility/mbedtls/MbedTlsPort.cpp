@@ -727,7 +727,7 @@ bool MbedTlsCryptoProvider::ready() const {
   return true;
 }
 
-#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
+#if defined(MBEDTLS_TEST_SYNC_COMPAT)
 bool MbedTlsCryptoProvider::generateRandom(uint8_t *buffer, size_t length) {
   (void)buffer;
   (void)length;

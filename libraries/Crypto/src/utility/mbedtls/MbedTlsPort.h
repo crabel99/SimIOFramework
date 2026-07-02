@@ -154,7 +154,7 @@ bool entropyRequestAsync(EntropyContext &context, uint8_t *buffer,
 
 bool setExternalRandomProvider(Crypto::TlsCryptoProvider *provider);
 void clearExternalRandomProvider(Crypto::TlsCryptoProvider *provider);
-#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
+#if defined(MBEDTLS_TEST_SYNC_COMPAT)
 bool generateExternalRandom(uint8_t *buffer, size_t length);
 #endif
 
@@ -165,7 +165,7 @@ bool generateExternalRandom(uint8_t *buffer, size_t length);
  * operation-owned buffers directly from TRNG callback completions without a
  * reusable provider pool. The concrete hardware provider never prefetches TRNG
  * bytes for handshake readiness and never services synchronous random requests;
- * those fail closed. Test builds may enable `SIMIO_MBEDTLS_TEST_SYNC_COMPAT`
+ * those fail closed. Test builds may enable `MBEDTLS_TEST_SYNC_COMPAT`
  * so native mock providers can exercise legacy Mbed TLS callback points, but
  * that compatibility path is not implemented by this hardware provider.
  * TLS protocol state remains owned by `TlsClientSession`; this provider only
@@ -186,7 +186,7 @@ public:
                             void *context) override;
   void reset() override;
   bool ready() const override;
-#if defined(SIMIO_MBEDTLS_TEST_SYNC_COMPAT)
+#if defined(MBEDTLS_TEST_SYNC_COMPAT)
   bool generateRandom(uint8_t *buffer, size_t length) override;
 #endif
   bool randomBytesAsync(uint8_t *buffer, size_t length,
