@@ -53,7 +53,6 @@ public:
     return _provisionalClient.active() || _trustedClient.active();
   }
 
-
 private:
   friend class NetworkTimeClient;
   friend class TrustedTimeClient;

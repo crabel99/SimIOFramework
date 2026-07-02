@@ -58,8 +58,6 @@ bool NetworkTimeService::configureProvisionalSource(
     return false;
 
   _provisionalSource = source;
-  if (_begun && _provider != nullptr)
-    startSourceUpdate();
   return true;
 }
 
@@ -79,8 +77,6 @@ bool NetworkTimeService::configureTrustedSource(
     return false;
 
   _trustedSource = policy;
-  if (_begun && _provider != nullptr)
-    startSourceUpdate();
   return true;
 }
 
@@ -159,19 +155,6 @@ bool NetworkTimeService::startSourceUpdate() {
   if (_provisionalClient.active() || _trustedClient.active())
     return true;
 
-  if (_provisionalSource.configured() &&
-      (_highestLevel == NetworkTimeLevel::Unset ||
-       _highestLevel == NetworkTimeLevel::Manual)) {
-    if (_provisionalClient.beginRequest(_provisionalSource.server,
-                                        _provisionalSource.serverPort,
-                                        _provisionalSource.localPort)) {
-      _status = NetworkTimeServiceStatus::SourceUpdatePending;
-      return true;
-    }
-    recordSourceFailure(NetworkTimeLevel::Provisional);
-    return false;
-  }
-
   if (_trustedSource.valid() &&
       _highestLevel >= NetworkTimeLevel::Provisional &&
       _highestLevel < NetworkTimeLevel::Trusted) {
@@ -180,6 +163,18 @@ bool NetworkTimeService::startSourceUpdate() {
       return true;
     }
     recordSourceFailure(NetworkTimeLevel::Trusted);
+    return false;
+  }
+
+  if (_provisionalSource.configured() &&
+      _highestLevel < NetworkTimeLevel::Trusted) {
+    if (_provisionalClient.beginRequest(_provisionalSource.server,
+                                        _provisionalSource.serverPort,
+                                        _provisionalSource.localPort)) {
+      _status = NetworkTimeServiceStatus::SourceUpdatePending;
+      return true;
+    }
+    recordSourceFailure(NetworkTimeLevel::Provisional);
     return false;
   }
 
