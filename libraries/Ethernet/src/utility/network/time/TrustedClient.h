@@ -8,7 +8,7 @@
 
 class NetworkTimeService;
 
-enum class TrustedTimeClientStatus : uint8_t {
+enum class NetworkTimeTrustedClientStatus : uint8_t {
   Idle = 0,
   Connecting = 1,
   Handshaking = 2,
@@ -19,7 +19,7 @@ enum class TrustedTimeClientStatus : uint8_t {
   Authenticating = 7,
 };
 
-enum class TrustedTimeClientError : uint8_t {
+enum class NetworkTimeTrustedClientError : uint8_t {
   None = 0,
   InvalidArgument = 1,
   TlsConfigurationFailed = 2,
@@ -37,32 +37,32 @@ enum class TrustedTimeClientError : uint8_t {
 /**
  * @brief Bounded HTTPS client that promotes network time after authentication.
  *
- * `TrustedTimeClient` owns the `SecureClient` session used for bootstrap time.
- * It does not weaken general TLS policy: provisional time is applied only to
- * the configured time-source connection, and trusted clock promotion occurs
- * only after TLS succeeds and the response authenticator accepts the returned
- * Unix time.
+ * `NetworkTimeTrustedClient` owns the `SecureClient` session used for
+ * bootstrap time. It does not weaken general TLS policy: provisional time is
+ * applied only to the configured time-source connection, and trusted clock
+ * promotion occurs only after TLS succeeds and the response authenticator
+ * accepts the returned Unix time.
  */
-class TrustedTimeClient {
+class NetworkTimeTrustedClient {
 public:
   static constexpr size_t RequestCapacity = 160;
   static constexpr size_t ResponseCapacity = 384;
   static constexpr uint16_t DefaultPollLimit = 2000;
 
-  TrustedTimeClient() = default;
-  TrustedTimeClient(TransportProvider &provider,
-                    NetworkTimeService &timeService);
+  NetworkTimeTrustedClient() = default;
+  NetworkTimeTrustedClient(TransportProvider &provider,
+                           NetworkTimeService &timeService);
 
   void attach(TransportProvider &provider, NetworkTimeService &timeService);
 
-  bool begin(const TrustedTimeSourcePolicy &policy);
+  bool begin(const NetworkTimeTrustedSourcePolicy &policy);
   bool setPollLimit(uint16_t pollLimit);
-  TrustedTimeClientStatus poll();
+  NetworkTimeTrustedClientStatus poll();
   void stop();
 
   bool active() const;
-  TrustedTimeClientStatus status() const { return _status; }
-  TrustedTimeClientError lastError() const { return _lastError; }
+  NetworkTimeTrustedClientStatus status() const { return _status; }
+  NetworkTimeTrustedClientError lastError() const { return _lastError; }
   uint64_t receivedUnixTime() const { return _receivedUnixTime; }
   uint16_t pollLimit() const { return _pollLimit; }
 
@@ -73,7 +73,7 @@ public:
                                         uint64_t &unixTimeOut);
 
 private:
-  TrustedTimeClientStatus fail(TrustedTimeClientError error);
+  NetworkTimeTrustedClientStatus fail(NetworkTimeTrustedClientError error);
   bool buildRequest(const char *host, const char *path);
   bool receiveAvailable();
   bool processResponse();
@@ -87,9 +87,10 @@ private:
 
   NetworkTimeService *_timeService = nullptr;
   SecureClient _client;
-  TrustedTimeSourcePolicy _policy = {};
-  TrustedTimeClientStatus _status = TrustedTimeClientStatus::Idle;
-  TrustedTimeClientError _lastError = TrustedTimeClientError::None;
+  NetworkTimeTrustedSourcePolicy _policy = {};
+  NetworkTimeTrustedClientStatus _status = NetworkTimeTrustedClientStatus::Idle;
+  NetworkTimeTrustedClientError _lastError =
+      NetworkTimeTrustedClientError::None;
   uint64_t _receivedUnixTime = 0;
   uint16_t _pollLimit = DefaultPollLimit;
   uint16_t _pollCount = 0;
@@ -100,8 +101,8 @@ private:
   uint64_t _authenticatedUnixTime = 0;
   uint8_t _responseSignatureHash[Crypto::TlsSha256DigestLength] = {};
   uint8_t
-      _responseSignature[TrustedTimeSourcePolicy::EcdsaP256SignatureLength] =
-          {};
+      _responseSignature
+          [NetworkTimeTrustedSourcePolicy::EcdsaP256SignatureLength] = {};
   bool _responseSignatureVerified = false;
   bool _responseSignatureComplete = false;
 };

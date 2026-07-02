@@ -188,12 +188,12 @@ bool parseHexHeader(const uint8_t *headers, size_t headersLength,
 }
 
 bool readPeerPin(
-    SecureClient &client, TrustedTimePinKind pinKind,
-    uint8_t digest[TrustedTimeSourcePolicy::CertificateSha256Length]) {
+    SecureClient &client, NetworkTimeTrustedPinKind pinKind,
+    uint8_t digest[NetworkTimeTrustedSourcePolicy::CertificateSha256Length]) {
   switch (pinKind) {
-  case TrustedTimePinKind::LeafCertificateSha256:
+  case NetworkTimeTrustedPinKind::LeafCertificateSha256:
     return client.peerCertificateSha256(digest);
-  case TrustedTimePinKind::SubjectPublicKeyInfoSha256:
+  case NetworkTimeTrustedPinKind::SubjectPublicKeyInfoSha256:
     return client.peerSubjectPublicKeyInfoSha256(digest);
   default:
     return false;
@@ -201,33 +201,33 @@ bool readPeerPin(
 }
 } // namespace
 
-TrustedTimeClient::TrustedTimeClient(TransportProvider &provider,
+NetworkTimeTrustedClient::NetworkTimeTrustedClient(TransportProvider &provider,
                                      NetworkTimeService &timeService)
     : _client(provider) {
   attach(provider, timeService);
 }
 
-void TrustedTimeClient::attach(TransportProvider &provider,
+void NetworkTimeTrustedClient::attach(TransportProvider &provider,
                                NetworkTimeService &timeService) {
   _client.setTransportProvider(provider);
   _timeService = &timeService;
 }
 
-bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
+bool NetworkTimeTrustedClient::begin(const NetworkTimeTrustedSourcePolicy &policy) {
   if (_timeService == nullptr) {
-    _lastError = TrustedTimeClientError::InvalidArgument;
+    _lastError = NetworkTimeTrustedClientError::InvalidArgument;
     return false;
   }
   if (active()) {
-    _lastError = TrustedTimeClientError::InvalidArgument;
+    _lastError = NetworkTimeTrustedClientError::InvalidArgument;
     return false;
   }
   if (!policy.valid()) {
-    _lastError = TrustedTimeClientError::InvalidArgument;
+    _lastError = NetworkTimeTrustedClientError::InvalidArgument;
     return false;
   }
   if (!buildRequest(policy.host, policy.path)) {
-    _lastError = TrustedTimeClientError::InvalidArgument;
+    _lastError = NetworkTimeTrustedClientError::InvalidArgument;
     return false;
   }
 
@@ -235,13 +235,13 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
   if (provisionalUnixTime == 0) {
     const NetworkTimeSnapshot snapshot = _timeService->unixTime();
     if (!snapshot.valid() || snapshot.unixTime < MinTrustedUnixTime) {
-      _lastError = TrustedTimeClientError::InvalidArgument;
+      _lastError = NetworkTimeTrustedClientError::InvalidArgument;
       return false;
     }
     provisionalUnixTime = snapshot.unixTime;
   }
 
-  TrustedTimeSourcePolicy resolvedPolicy = policy;
+  NetworkTimeTrustedSourcePolicy resolvedPolicy = policy;
   resolvedPolicy.provisionalUnixTime = provisionalUnixTime;
 
   _client.stop();
@@ -251,7 +251,7 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
                                resolvedPolicy.trustAnchorLength) ||
       !_client.setTrustedTime(resolvedPolicy.provisionalUnixTime) ||
       !_client.setHostname(resolvedPolicy.host)) {
-    _lastError = TrustedTimeClientError::TlsConfigurationFailed;
+    _lastError = NetworkTimeTrustedClientError::TlsConfigurationFailed;
     return false;
   }
 
@@ -260,13 +260,13 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
           ? _client.connect(resolvedPolicy.connectIp, resolvedPolicy.port)
           : _client.connect(resolvedPolicy.host, resolvedPolicy.port);
   if (connectResult != 1) {
-    _lastError = TrustedTimeClientError::ConnectFailed;
+    _lastError = NetworkTimeTrustedClientError::ConnectFailed;
     return false;
   }
 
   _policy = resolvedPolicy;
-  _status = TrustedTimeClientStatus::Handshaking;
-  _lastError = TrustedTimeClientError::None;
+  _status = NetworkTimeTrustedClientStatus::Handshaking;
+  _lastError = NetworkTimeTrustedClientError::None;
   _receivedUnixTime = 0;
   _responseLength = 0;
   _pollCount = 0;
@@ -278,7 +278,7 @@ bool TrustedTimeClient::begin(const TrustedTimeSourcePolicy &policy) {
   return true;
 }
 
-bool TrustedTimeClient::setPollLimit(uint16_t pollLimit) {
+bool NetworkTimeTrustedClient::setPollLimit(uint16_t pollLimit) {
   if (active() || pollLimit == 0)
     return false;
 
@@ -286,63 +286,63 @@ bool TrustedTimeClient::setPollLimit(uint16_t pollLimit) {
   return true;
 }
 
-TrustedTimeClientStatus TrustedTimeClient::poll() {
+NetworkTimeTrustedClientStatus NetworkTimeTrustedClient::poll() {
   if (active() && !consumePollBudget())
-    return fail(TrustedTimeClientError::OperationDeadlineExceeded);
+    return fail(NetworkTimeTrustedClientError::OperationDeadlineExceeded);
 
   switch (_status) {
-  case TrustedTimeClientStatus::Handshaking: {
+  case NetworkTimeTrustedClientStatus::Handshaking: {
     const Crypto::TlsAsyncStatus tlsStatus = _client.pollTls();
     if (_client.connected()) {
-      uint8_t peerPin[TrustedTimeSourcePolicy::CertificateSha256Length] = {};
+      uint8_t peerPin[NetworkTimeTrustedSourcePolicy::CertificateSha256Length] = {};
       const bool pinAccepted =
           readPeerPin(_client, _policy.pinKind, peerPin) &&
           constantTimeEqual(peerPin, _policy.certificateSha256,
                             _policy.certificateSha256Length);
       memset(peerPin, 0, sizeof(peerPin));
       if (!pinAccepted)
-        return fail(TrustedTimeClientError::CertificatePinMismatch);
+        return fail(NetworkTimeTrustedClientError::CertificatePinMismatch);
 
-      _status = TrustedTimeClientStatus::Requesting;
+      _status = NetworkTimeTrustedClientStatus::Requesting;
       return poll();
     }
     if (tlsStatus == Crypto::TlsAsyncStatus::Error ||
         _client.lastError() != SecureClientNoError) {
-      return fail(TrustedTimeClientError::TlsHandshakeFailed);
+      return fail(NetworkTimeTrustedClientError::TlsHandshakeFailed);
     }
     return _status;
   }
-  case TrustedTimeClientStatus::Requesting:
+  case NetworkTimeTrustedClientStatus::Requesting:
     if (_client.write(_request, _requestLength) != _requestLength)
-      return fail(TrustedTimeClientError::WriteFailed);
-    _status = TrustedTimeClientStatus::Receiving;
+      return fail(NetworkTimeTrustedClientError::WriteFailed);
+    _status = NetworkTimeTrustedClientStatus::Receiving;
     return _status;
-  case TrustedTimeClientStatus::Receiving:
+  case NetworkTimeTrustedClientStatus::Receiving:
     if (!receiveAvailable())
       return _status;
     processResponse();
     return _status;
-  case TrustedTimeClientStatus::Authenticating:
+  case NetworkTimeTrustedClientStatus::Authenticating:
     if (!_responseSignatureComplete)
       return _status;
     if (!_responseSignatureVerified)
-      return fail(TrustedTimeClientError::AuthenticationFailed);
+      return fail(NetworkTimeTrustedClientError::AuthenticationFailed);
     finishAuthenticatedResponse();
     return _status;
-  case TrustedTimeClientStatus::Idle:
-  case TrustedTimeClientStatus::Connecting:
-  case TrustedTimeClientStatus::Updated:
-  case TrustedTimeClientStatus::Failed:
+  case NetworkTimeTrustedClientStatus::Idle:
+  case NetworkTimeTrustedClientStatus::Connecting:
+  case NetworkTimeTrustedClientStatus::Updated:
+  case NetworkTimeTrustedClientStatus::Failed:
   default:
     return _status;
   }
 }
 
-void TrustedTimeClient::stop() {
+void NetworkTimeTrustedClient::stop() {
   if (active())
     _client.stop();
-  _status = TrustedTimeClientStatus::Idle;
-  _lastError = TrustedTimeClientError::None;
+  _status = NetworkTimeTrustedClientStatus::Idle;
+  _lastError = NetworkTimeTrustedClientError::None;
   _receivedUnixTime = 0;
   _requestLength = 0;
   _responseLength = 0;
@@ -354,7 +354,7 @@ void TrustedTimeClient::stop() {
   memset(_responseSignature, 0, sizeof(_responseSignature));
 }
 
-bool TrustedTimeClient::parseHttpUnixTimeResponse(const uint8_t *response,
+bool NetworkTimeTrustedClient::parseHttpUnixTimeResponse(const uint8_t *response,
                                                   size_t responseLength,
                                                   const uint8_t *&bodyOut,
                                                   size_t &bodyLengthOut,
@@ -400,14 +400,14 @@ bool TrustedTimeClient::parseHttpUnixTimeResponse(const uint8_t *response,
   return true;
 }
 
-TrustedTimeClientStatus TrustedTimeClient::fail(TrustedTimeClientError error) {
+NetworkTimeTrustedClientStatus NetworkTimeTrustedClient::fail(NetworkTimeTrustedClientError error) {
   _client.stop();
-  _status = TrustedTimeClientStatus::Failed;
+  _status = NetworkTimeTrustedClientStatus::Failed;
   _lastError = error;
   return _status;
 }
 
-bool TrustedTimeClient::buildRequest(const char *host, const char *path) {
+bool NetworkTimeTrustedClient::buildRequest(const char *host, const char *path) {
   memset(_request, 0, sizeof(_request));
   _requestLength = 0;
 
@@ -420,12 +420,12 @@ bool TrustedTimeClient::buildRequest(const char *host, const char *path) {
                        "\r\nConnection: close\r\nAccept: text/plain\r\n\r\n");
 }
 
-bool TrustedTimeClient::receiveAvailable() {
+bool NetworkTimeTrustedClient::receiveAvailable() {
   _client.pollTls();
 
   while (_client.available() > 0) {
     if (_responseLength >= sizeof(_response)) {
-      fail(TrustedTimeClientError::ResponseTooLarge);
+      fail(NetworkTimeTrustedClientError::ResponseTooLarge);
       return false;
     }
 
@@ -444,36 +444,36 @@ bool TrustedTimeClient::receiveAvailable() {
   }
 
   if (!_client.connected() && _responseLength != 0) {
-    fail(TrustedTimeClientError::InvalidResponse);
+    fail(NetworkTimeTrustedClientError::InvalidResponse);
     return false;
   }
   if (!_client.connected() && _responseLength == 0) {
-    fail(TrustedTimeClientError::InvalidResponse);
+    fail(NetworkTimeTrustedClientError::InvalidResponse);
     return false;
   }
 
   return false;
 }
 
-bool TrustedTimeClient::processResponse() {
+bool NetworkTimeTrustedClient::processResponse() {
   const uint8_t *body = nullptr;
   size_t bodyLength = 0;
   uint64_t unixTime = 0;
   if (!parseHttpUnixTimeResponse(_response, _responseLength, body, bodyLength,
                                  unixTime)) {
-    fail(TrustedTimeClientError::InvalidResponse);
+    fail(NetworkTimeTrustedClientError::InvalidResponse);
     return false;
   }
 
   if (!authenticateResponse(body, bodyLength, unixTime)) {
-    fail(TrustedTimeClientError::AuthenticationFailed);
+    fail(NetworkTimeTrustedClientError::AuthenticationFailed);
     return false;
   }
 
   return true;
 }
 
-bool TrustedTimeClient::authenticateResponse(const uint8_t *body,
+bool NetworkTimeTrustedClient::authenticateResponse(const uint8_t *body,
                                              size_t bodyLength,
                                              uint64_t unixTime) {
   if (_policy.authenticate != nullptr &&
@@ -483,7 +483,7 @@ bool TrustedTimeClient::authenticateResponse(const uint8_t *body,
   }
 
   if (_policy.responseSignatureAlgorithm ==
-      TrustedTimeResponseSignatureAlgorithm::None) {
+      NetworkTimeTrustedResponseSignatureAlgorithm::None) {
     _authenticatedUnixTime = unixTime;
     return finishAuthenticatedResponse();
   }
@@ -491,11 +491,11 @@ bool TrustedTimeClient::authenticateResponse(const uint8_t *body,
   return startResponseSignatureVerification(body, bodyLength, unixTime);
 }
 
-bool TrustedTimeClient::startResponseSignatureVerification(const uint8_t *body,
+bool NetworkTimeTrustedClient::startResponseSignatureVerification(const uint8_t *body,
                                                            size_t bodyLength,
                                                            uint64_t unixTime) {
   if (_policy.responseSignatureAlgorithm !=
-      TrustedTimeResponseSignatureAlgorithm::EcdsaP256Sha256) {
+      NetworkTimeTrustedResponseSignatureAlgorithm::EcdsaP256Sha256) {
     return false;
   }
 
@@ -522,7 +522,7 @@ bool TrustedTimeClient::startResponseSignatureVerification(const uint8_t *body,
   _authenticatedUnixTime = unixTime;
   _responseSignatureVerified = false;
   _responseSignatureComplete = false;
-  _status = TrustedTimeClientStatus::Authenticating;
+  _status = NetworkTimeTrustedClientStatus::Authenticating;
 
   if (!_policy.cryptoProvider->signatureVerifyAsync(
           Crypto::TlsSignatureAlgorithm::EcdsaP256Sha256,
@@ -538,26 +538,26 @@ bool TrustedTimeClient::startResponseSignatureVerification(const uint8_t *body,
   return true;
 }
 
-bool TrustedTimeClient::finishAuthenticatedResponse() {
+bool NetworkTimeTrustedClient::finishAuthenticatedResponse() {
   if (_timeService == nullptr ||
       !_timeService->applyTime(_authenticatedUnixTime,
                                NetworkTimeLevel::Trusted)) {
-    fail(TrustedTimeClientError::TimeRejected);
+    fail(NetworkTimeTrustedClientError::TimeRejected);
     return false;
   }
 
   _receivedUnixTime = _authenticatedUnixTime;
   _client.stop();
-  _status = TrustedTimeClientStatus::Updated;
-  _lastError = TrustedTimeClientError::None;
+  _status = NetworkTimeTrustedClientStatus::Updated;
+  _lastError = NetworkTimeTrustedClientError::None;
   memset(_responseSignatureHash, 0, sizeof(_responseSignatureHash));
   memset(_responseSignature, 0, sizeof(_responseSignature));
   return true;
 }
 
-void TrustedTimeClient::handleResponseSignatureVerified(bool success,
+void NetworkTimeTrustedClient::handleResponseSignatureVerified(bool success,
                                                         void *context) {
-  auto *client = static_cast<TrustedTimeClient *>(context);
+  auto *client = static_cast<NetworkTimeTrustedClient *>(context);
   if (client == nullptr)
     return;
 
@@ -570,15 +570,15 @@ void TrustedTimeClient::handleResponseSignatureVerified(bool success,
   }
 }
 
-bool TrustedTimeClient::active() const {
-  return _status == TrustedTimeClientStatus::Connecting ||
-         _status == TrustedTimeClientStatus::Handshaking ||
-         _status == TrustedTimeClientStatus::Requesting ||
-         _status == TrustedTimeClientStatus::Receiving ||
-         _status == TrustedTimeClientStatus::Authenticating;
+bool NetworkTimeTrustedClient::active() const {
+  return _status == NetworkTimeTrustedClientStatus::Connecting ||
+         _status == NetworkTimeTrustedClientStatus::Handshaking ||
+         _status == NetworkTimeTrustedClientStatus::Requesting ||
+         _status == NetworkTimeTrustedClientStatus::Receiving ||
+         _status == NetworkTimeTrustedClientStatus::Authenticating;
 }
 
-bool TrustedTimeClient::consumePollBudget() {
+bool NetworkTimeTrustedClient::consumePollBudget() {
   if (_pollLimit == 0)
     return false;
   if (_pollCount >= _pollLimit)

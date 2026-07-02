@@ -34,7 +34,7 @@ public:
       IPAddress server,
       uint16_t serverPort = NetworkTimeProvisionalSource::DefaultServerPort,
       uint16_t localPort = NetworkTimeProvisionalSource::DefaultLocalPort);
-  bool configureTrustedSource(const TrustedTimeSourcePolicy &policy);
+  bool configureTrustedSource(const NetworkTimeTrustedSourcePolicy &policy);
 
   bool setRefreshInterval(uint32_t seconds);
   uint32_t refreshInterval() const { return _refreshIntervalSeconds; }
@@ -55,7 +55,7 @@ public:
 
 private:
   friend class NetworkTimeClient;
-  friend class TrustedTimeClient;
+  friend class NetworkTimeTrustedClient;
   friend class NetworkService;
 
   NetworkTimeService() = default;
@@ -73,9 +73,9 @@ private:
 
   TransportProvider *_provider = nullptr;
   NetworkTimeProvisionalSource _provisionalSource;
-  TrustedTimeSourcePolicy _trustedSource;
+  NetworkTimeTrustedSourcePolicy _trustedSource;
   NetworkTimeClient _provisionalClient;
-  TrustedTimeClient _trustedClient;
+  NetworkTimeTrustedClient _trustedClient;
   uint64_t _unixTime = 0;
   NetworkTimeLevel _currentLevel = NetworkTimeLevel::Unset;
   NetworkTimeLevel _highestLevel = NetworkTimeLevel::Unset;

@@ -35,7 +35,7 @@ bool NetworkTimeService::begin(TransportProvider &provider) {
 
 void NetworkTimeService::reset() {
   _provisionalSource = NetworkTimeProvisionalSource{};
-  _trustedSource = TrustedTimeSourcePolicy{};
+  _trustedSource = NetworkTimeTrustedSourcePolicy{};
   _unixTime = 0;
   _currentLevel = NetworkTimeLevel::Unset;
   _highestLevel = NetworkTimeLevel::Unset;
@@ -72,7 +72,7 @@ bool NetworkTimeService::configureProvisionalSource(IPAddress server,
 }
 
 bool NetworkTimeService::configureTrustedSource(
-    const TrustedTimeSourcePolicy &policy) {
+    const NetworkTimeTrustedSourcePolicy &policy) {
   if (!policy.valid())
     return false;
 
@@ -198,19 +198,19 @@ bool NetworkTimeService::advance() {
   }
 
   if (_trustedClient.active()) {
-    const TrustedTimeClientStatus status = _trustedClient.poll();
-    if (status == TrustedTimeClientStatus::Connecting ||
-        status == TrustedTimeClientStatus::Handshaking ||
-        status == TrustedTimeClientStatus::Requesting ||
-        status == TrustedTimeClientStatus::Receiving ||
-        status == TrustedTimeClientStatus::Authenticating) {
+    const NetworkTimeTrustedClientStatus status = _trustedClient.poll();
+    if (status == NetworkTimeTrustedClientStatus::Connecting ||
+        status == NetworkTimeTrustedClientStatus::Handshaking ||
+        status == NetworkTimeTrustedClientStatus::Requesting ||
+        status == NetworkTimeTrustedClientStatus::Receiving ||
+        status == NetworkTimeTrustedClientStatus::Authenticating) {
       return true;
     }
-    if (status == TrustedTimeClientStatus::Failed) {
+    if (status == NetworkTimeTrustedClientStatus::Failed) {
       recordSourceFailure(NetworkTimeLevel::Trusted);
       return false;
     }
-    if (status == TrustedTimeClientStatus::Updated)
+    if (status == NetworkTimeTrustedClientStatus::Updated)
       scheduleRefreshAlarm();
     return true;
   }

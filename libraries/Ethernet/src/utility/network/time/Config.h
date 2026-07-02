@@ -57,21 +57,21 @@ struct NetworkTimeProvisionalSource {
   bool configured() const { return server != IPAddress() && serverPort != 0; }
 };
 
-using TrustedTimeResponseAuthenticator =
+using NetworkTimeTrustedResponseAuthenticator =
     bool (*)(const uint8_t *body, size_t bodyLength, uint64_t unixTime,
              void *context);
 
-enum class TrustedTimePinKind : uint8_t {
+enum class NetworkTimeTrustedPinKind : uint8_t {
   LeafCertificateSha256 = 0,
   SubjectPublicKeyInfoSha256 = 1,
 };
 
-enum class TrustedTimeResponseSignatureAlgorithm : uint8_t {
+enum class NetworkTimeTrustedResponseSignatureAlgorithm : uint8_t {
   None = 0,
   EcdsaP256Sha256 = 1,
 };
 
-struct TrustedTimeSourcePolicy {
+struct NetworkTimeTrustedSourcePolicy {
   static constexpr size_t CertificateSha256Length =
       Crypto::TlsSha256DigestLength;
   static constexpr size_t EcdsaP256PublicKeyLength = 65;
@@ -86,22 +86,23 @@ struct TrustedTimeSourcePolicy {
   size_t trustAnchorLength = 0;
   const uint8_t *certificateSha256 = nullptr;
   size_t certificateSha256Length = 0;
-  TrustedTimePinKind pinKind = TrustedTimePinKind::LeafCertificateSha256;
-  TrustedTimeResponseSignatureAlgorithm responseSignatureAlgorithm =
-      TrustedTimeResponseSignatureAlgorithm::None;
+  NetworkTimeTrustedPinKind pinKind =
+      NetworkTimeTrustedPinKind::LeafCertificateSha256;
+  NetworkTimeTrustedResponseSignatureAlgorithm responseSignatureAlgorithm =
+      NetworkTimeTrustedResponseSignatureAlgorithm::None;
   const char *responseSignatureHeader = "X-Arduino-Time-Signature";
   const uint8_t *responseSigningPublicKey = nullptr;
   size_t responseSigningPublicKeyLength = 0;
   Crypto::TlsCryptoProvider *cryptoProvider = nullptr;
   uint64_t provisionalUnixTime = 0;
-  TrustedTimeResponseAuthenticator authenticate = nullptr;
+  NetworkTimeTrustedResponseAuthenticator authenticate = nullptr;
   void *authenticationContext = nullptr;
 
   bool valid() const {
     const bool hasCallbackAuthenticator = authenticate != nullptr;
     const bool hasResponseSignature =
         responseSignatureAlgorithm !=
-            TrustedTimeResponseSignatureAlgorithm::None &&
+            NetworkTimeTrustedResponseSignatureAlgorithm::None &&
         responseSignatureHeader != nullptr &&
         responseSignatureHeader[0] != '\0' &&
         responseSigningPublicKey != nullptr &&
