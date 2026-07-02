@@ -49,6 +49,11 @@ IPAddress makeIPAddressFromIp(const ip_addr_t *address) {
   return address == nullptr ? IPAddress()
                             : makeIPAddressFromIp4(ip_2_ip4(address));
 }
+
+bool tcpBackendCarrierUp(void *context) {
+  return context != nullptr &&
+         static_cast<EthernetLwipPort *>(context)->carrierUp();
+}
 } // namespace
 
 EthernetLwipPort::EthernetLwipPort(EthernetNetif &netif) : _netif(&netif) {}
@@ -199,6 +204,7 @@ IPAddress EthernetLwipPort::dnsServerIP() const {
 void EthernetLwipPort::setTcpBackend(LwipTcpSocketBackend &backend) {
   clearTcpBackend();
   _tcpBackend = &backend;
+  _tcpBackend->setCarrierProvider(tcpBackendCarrierUp, this);
 }
 
 void EthernetLwipPort::clearTcpBackend() {
@@ -209,6 +215,7 @@ void EthernetLwipPort::clearTcpBackend() {
       _tcpBackend->releaseSocket(_secureClientSocket.handle());
     if (_acceptedSocket.attached())
       _tcpBackend->releaseSocket(_acceptedSocket.handle());
+    _tcpBackend->clearCarrierProvider();
   }
 
   _clientSocket.detach();

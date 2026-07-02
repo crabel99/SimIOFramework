@@ -42,8 +42,31 @@ public:
     int lastTcpOutputError = 0;
   };
 
+  enum class TcpState : uint8_t {
+    Idle,
+    DnsPending,
+    TcpConnecting,
+    Connected,
+    DnsFailed,
+    ConnectFailed,
+    CarrierDown,
+    Closed,
+  };
+
   LwipTransportBackend();
   ~LwipTransportBackend() override;
+
+  /**
+   * @brief Attach the netif carrier source used by TCP handles.
+   *
+   * Production wiring installs `EthernetLwipPort::carrierUp()` here so socket
+   * operations fail closed on link loss. Tests that exercise the backend in
+   * isolation may leave this unset; in that case handle carrier falls back to
+   * PCB presence.
+   */
+  void setCarrierProvider(CarrierProvider provider,
+                          void *context = nullptr) override;
+  void clearCarrierProvider() override;
 
   /**
    * @brief Allocate one provider-owned TCP client handle.
@@ -70,6 +93,7 @@ public:
                      size_t size) override;
 
   bool carrierUp(void *handle) const override;
+  TcpState state(void *handle) const;
 
   /**
    * @brief Return receive-path diagnostics for the secure TCP slot.
@@ -134,8 +158,11 @@ private:
   UdpState *_udp;
   void *_serverPcb;
   uint16_t _serverPort;
+  CarrierProvider _carrierProvider;
+  void *_carrierProviderContext;
 
   TcpHandle *asTcpHandle(void *handle) const;
+  bool transportCarrierUp() const;
   void closeTcpHandle(TcpHandle *handle);
   TcpDiagnostics diagnosticsFor(const TcpHandle *handle) const;
   size_t writeServerToAccepted(const uint8_t *buffer, size_t size);

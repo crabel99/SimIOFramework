@@ -18,7 +18,22 @@
 
 class LwipTcpSocketBackend {
 public:
+  using CarrierProvider = bool (*)(void *context);
+
   virtual ~LwipTcpSocketBackend() = default;
+
+  /**
+   * @brief Attach the carrier source used to fail TCP handles closed.
+   *
+   * The lwIP port installs its netif carrier state here. Mock or standalone
+   * backends may ignore this and use their own carrier model.
+   */
+  virtual void setCarrierProvider(CarrierProvider provider,
+                                  void *context = nullptr) {
+    (void)provider;
+    (void)context;
+  }
+  virtual void clearCarrierProvider() {}
 
   /**
    * @brief Acquire and release bounded provider-owned TCP/TLS handles.
