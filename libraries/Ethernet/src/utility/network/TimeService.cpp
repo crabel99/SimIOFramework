@@ -37,7 +37,6 @@ void NetworkTimeService::reset() {
   _provisionalSource = NetworkTimeProvisionalSource{};
   _trustedSource = NetworkTimeTrustedSourcePolicy{};
   _unixTime = 0;
-  _currentLevel = NetworkTimeLevel::Unset;
   _highestLevel = NetworkTimeLevel::Unset;
   _status = NetworkTimeServiceStatus::Stopped;
   _warnings = NetworkTimeWarningNone;
@@ -96,6 +95,7 @@ NetworkTimeSnapshot NetworkTimeService::unixTime() const {
   NetworkTimeSnapshot snapshot;
   snapshot.unixTime = _unixTime;
   snapshot.trustLevel = _highestLevel;
+  snapshot.highestConnectedLevel = _highestLevel;
   snapshot.status = _status;
   snapshot.warnings = _warnings;
 
@@ -126,7 +126,6 @@ bool NetworkTimeService::applyTime(uint64_t unixTime, NetworkTimeLevel level) {
   }
 
   _unixTime = unixTime;
-  _currentLevel = level;
   if (level > _highestLevel)
     _highestLevel = level;
   _status = NetworkTimeServiceStatus::TimeSet;

@@ -77,7 +77,6 @@ private:
   NetworkTimeClient _provisionalClient;
   NetworkTimeTrustedClient _trustedClient;
   uint64_t _unixTime = 0;
-  NetworkTimeLevel _currentLevel = NetworkTimeLevel::Unset;
   NetworkTimeLevel _highestLevel = NetworkTimeLevel::Unset;
   NetworkTimeServiceStatus _status = NetworkTimeServiceStatus::Stopped;
   uint16_t _warnings = NetworkTimeWarningNone;

@@ -7,7 +7,9 @@
 
 enum class NetworkTimeLevel : uint8_t {
   Unset = 0,
-  Manual = 1,
+  // Manual and provisional time share the same TLS trust rank. Manual time is
+  // local/user supplied; provisional time is network supplied but not trusted.
+  Manual = 2,
   Provisional = 2,
   Trusted = 3,
   Gps = 4,
@@ -33,6 +35,7 @@ enum NetworkTimeWarning : uint16_t {
 struct NetworkTimeSnapshot {
   uint64_t unixTime = 0;
   NetworkTimeLevel trustLevel = NetworkTimeLevel::Unset;
+  NetworkTimeLevel highestConnectedLevel = NetworkTimeLevel::Unset;
   NetworkTimeServiceStatus status = NetworkTimeServiceStatus::Stopped;
   uint16_t warnings = NetworkTimeWarningNone;
 
