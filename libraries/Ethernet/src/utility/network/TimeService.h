@@ -47,11 +47,6 @@ public:
   bool provisionalSourceConfigured() const {
     return _provisionalSource.configured();
   }
-  bool trustedSourceConfigured() const { return _trustedSource.valid(); }
-  bool transportProviderConfigured() const { return _provider != nullptr; }
-  bool updateActive() const {
-    return _provisionalClient.active() || _trustedClient.active();
-  }
 
 private:
   friend class NetworkTimeClient;
