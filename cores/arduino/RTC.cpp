@@ -1,110 +1,244 @@
 #include "RTC.h"
 
-#if RTC_AVAILABLE
-
 namespace {
-#if defined(RTC_REGS) && defined(RTC_MODE2_CTRLA_ENABLE_Msk)
-#define SIMIO_RTC_NEW_CTRLA_REGS 1
-inline rtc_registers_t *regs() { return RTC_REGS; }
-#elif defined(RTC_MODE2_CTRLA_ENABLE)
-#define SIMIO_RTC_OLD_CTRLA_REGS 1
-inline Rtc *regs() { return reinterpret_cast<Rtc *>(RTC_PERIPH); }
-#elif defined(RTC_MODE2_CTRL_ENABLE)
-#define SIMIO_RTC_CTRL_REGS 1
-inline Rtc *regs() { return reinterpret_cast<Rtc *>(RTC_PERIPH); }
+
+#if defined(__SAMD51__) || defined(__SAME51__)
+inline Rtc *rtcRegs() { return RTC; }
+static constexpr uint16_t ControlEnable = RTC_MODE2_CTRLA_ENABLE;
+static constexpr uint8_t ControlModePosition = RTC_MODE2_CTRLA_MODE_Pos;
+static constexpr uint8_t ControlPrescalerPosition =
+    RTC_MODE2_CTRLA_PRESCALER_Pos;
+static constexpr uint16_t ControlPrescalerMask = RTC_MODE2_CTRLA_PRESCALER_Msk;
+static constexpr uint32_t SyncEnable = RTC_MODE2_SYNCBUSY_ENABLE;
+static constexpr uint32_t SyncClock = RTC_MODE2_SYNCBUSY_CLOCK;
+static constexpr uint32_t SyncCount32 = RTC_MODE0_SYNCBUSY_COUNT;
+static constexpr uint32_t SyncCount16 = RTC_MODE1_SYNCBUSY_COUNT;
+static constexpr uint16_t PeriodicInterruptMask = RTC_MODE2_INTFLAG_PER_Msk;
+static constexpr uint32_t PeriodicEventMask = RTC_MODE2_EVCTRL_PEREO_Msk;
+static constexpr uint16_t Alarm0Interrupt = RTC_MODE2_INTFLAG_ALARM0;
+static constexpr uint16_t Alarm1Interrupt = RTC_MODE2_INTFLAG_ALARM1;
+static constexpr uint16_t OverflowInterrupt = RTC_MODE2_INTFLAG_OVF;
+#elif defined(__SAME53__) || defined(__SAME54__)
+inline rtc_registers_t *rtcRegs() { return RTC_REGS; }
+static constexpr uint16_t ControlEnable = RTC_MODE2_CTRLA_ENABLE_Msk;
+static constexpr uint8_t ControlModePosition = RTC_MODE2_CTRLA_MODE_Pos;
+static constexpr uint8_t ControlPrescalerPosition =
+    RTC_MODE2_CTRLA_PRESCALER_Pos;
+static constexpr uint16_t ControlPrescalerMask = RTC_MODE2_CTRLA_PRESCALER_Msk;
+static constexpr uint32_t SyncEnable = RTC_MODE2_SYNCBUSY_ENABLE_Msk;
+static constexpr uint32_t SyncClock = RTC_MODE2_SYNCBUSY_CLOCK_Msk;
+static constexpr uint32_t SyncCount32 = RTC_MODE0_SYNCBUSY_COUNT_Msk;
+static constexpr uint32_t SyncCount16 = RTC_MODE1_SYNCBUSY_COUNT_Msk;
+static constexpr uint16_t PeriodicInterruptMask = RTC_MODE2_INTFLAG_PER_Msk;
+static constexpr uint32_t PeriodicEventMask = RTC_MODE2_EVCTRL_PEREO_Msk;
+static constexpr uint16_t Alarm0Interrupt = RTC_MODE2_INTFLAG_ALARM0_Msk;
+static constexpr uint16_t Alarm1Interrupt = RTC_MODE2_INTFLAG_ALARM1_Msk;
+static constexpr uint16_t OverflowInterrupt = RTC_MODE2_INTFLAG_OVF_Msk;
 #else
-#error "Unsupported RTC CMSIS register layout"
+inline Rtc *rtcRegs() { return RTC; }
+static constexpr uint16_t ControlEnable = RTC_MODE2_CTRL_ENABLE;
+static constexpr uint8_t ControlModePosition = RTC_MODE2_CTRL_MODE_Pos;
+static constexpr uint8_t ControlPrescalerPosition =
+    RTC_MODE2_CTRL_PRESCALER_Pos;
+static constexpr uint16_t ControlPrescalerMask = RTC_MODE2_CTRL_PRESCALER_Msk;
+static constexpr uint32_t SyncEnable = 0;
+static constexpr uint32_t SyncClock = 0;
+static constexpr uint32_t SyncCount32 = 0;
+static constexpr uint32_t SyncCount16 = 0;
+static constexpr uint16_t PeriodicInterruptMask = 0;
+static constexpr uint32_t PeriodicEventMask = RTC_MODE2_EVCTRL_PEREO_Msk;
+static constexpr uint16_t Alarm0Interrupt = RTC_MODE2_INTFLAG_ALARM0;
+static constexpr uint16_t Alarm1Interrupt = 0;
+static constexpr uint16_t OverflowInterrupt = RTC_MODE2_INTFLAG_OVF;
 #endif
 
-#if defined(RTC_MODE2_CTRLA_ENABLE_Msk)
-constexpr uint16_t kCtrlEnable = RTC_MODE2_CTRLA_ENABLE_Msk;
-constexpr uint8_t kCtrlModePosition = RTC_MODE2_CTRLA_MODE_Pos;
-constexpr uint16_t kCtrlPrescalerDiv1024 =
-    RTC_MODE2_CTRLA_PRESCALER_DIV1024;
-constexpr uint32_t kSyncEnable = RTC_MODE2_SYNCBUSY_ENABLE_Msk;
-constexpr uint32_t kSyncClock = RTC_MODE2_SYNCBUSY_CLOCK_Msk;
-#elif defined(RTC_MODE2_CTRLA_ENABLE)
-constexpr uint16_t kCtrlEnable = RTC_MODE2_CTRLA_ENABLE;
-constexpr uint8_t kCtrlModePosition = RTC_MODE2_CTRLA_MODE_Pos;
-constexpr uint16_t kCtrlPrescalerDiv1024 =
-    RTC_MODE2_CTRLA_PRESCALER_DIV1024;
-constexpr uint32_t kSyncEnable = RTC_MODE2_SYNCBUSY_ENABLE;
-constexpr uint32_t kSyncClock = RTC_MODE2_SYNCBUSY_CLOCK;
-#else
-constexpr uint16_t kCtrlEnable = RTC_MODE2_CTRL_ENABLE;
-constexpr uint8_t kCtrlModePosition = RTC_MODE2_CTRL_MODE_Pos;
-constexpr uint16_t kCtrlPrescalerDiv1024 = RTC_MODE2_CTRL_PRESCALER_DIV1024;
-constexpr uint32_t kSyncEnable = 0;
-constexpr uint32_t kSyncClock = 0;
-#endif
+static constexpr uint16_t BaseInterruptMask =
+    Alarm0Interrupt | Alarm1Interrupt | OverflowInterrupt;
 
-constexpr uint16_t controlModeBits(rtc::OperatingMode mode) {
+uint16_t controlModeBits(rtc::OperatingMode mode) {
   return static_cast<uint16_t>(static_cast<uint16_t>(mode)
-                              << kCtrlModePosition);
+                               << ControlModePosition);
 }
 
-constexpr uint16_t kCtrlModeClock =
-    controlModeBits(rtc::OperatingMode::Clock);
-
-#if defined(RTC_MODE2_INTFLAG_PER0_Msk)
-constexpr uint16_t kPeriodic0Interrupt = RTC_MODE2_INTFLAG_PER0_Msk;
-#elif defined(RTC_MODE2_INTFLAG_PER0)
-constexpr uint16_t kPeriodic0Interrupt = RTC_MODE2_INTFLAG_PER0;
-#else
-constexpr uint16_t kPeriodic0Interrupt = 0;
-#endif
-
-#if defined(RTC_MODE2_INTFLAG_PER_Msk)
-constexpr uint16_t kPeriodicInterruptMask = RTC_MODE2_INTFLAG_PER_Msk;
-#else
-constexpr uint16_t kPeriodicInterruptMask = 0;
-#endif
-
-#if defined(RTC_MODE2_INTFLAG_ALARM0_Msk)
-constexpr uint16_t kAlarm0Interrupt = RTC_MODE2_INTFLAG_ALARM0_Msk;
-#elif defined(RTC_MODE2_INTFLAG_ALARM0)
-constexpr uint16_t kAlarm0Interrupt = RTC_MODE2_INTFLAG_ALARM0;
-#else
-constexpr uint16_t kAlarm0Interrupt = 0;
-#endif
-
-#if defined(RTC_MODE2_INTFLAG_ALARM1_Msk)
-constexpr uint16_t kAlarm1Interrupt = RTC_MODE2_INTFLAG_ALARM1_Msk;
-#elif defined(RTC_MODE2_INTFLAG_ALARM1)
-constexpr uint16_t kAlarm1Interrupt = RTC_MODE2_INTFLAG_ALARM1;
-#else
-constexpr uint16_t kAlarm1Interrupt = 0;
-#endif
-
-#if defined(RTC_MODE2_INTFLAG_OVF_Msk)
-constexpr uint16_t kOverflowInterrupt = RTC_MODE2_INTFLAG_OVF_Msk;
-#elif defined(RTC_MODE2_INTFLAG_OVF)
-constexpr uint16_t kOverflowInterrupt = RTC_MODE2_INTFLAG_OVF;
-#else
-constexpr uint16_t kOverflowInterrupt = 0;
-#endif
-
-constexpr uint16_t kBaseInterruptMask =
-    kPeriodic0Interrupt | kAlarm0Interrupt | kAlarm1Interrupt |
-    kOverflowInterrupt;
+uint16_t controlPrescalerBits(rtc::Prescaler prescaler) {
+  return static_cast<uint16_t>(
+      (static_cast<uint16_t>(prescaler) << ControlPrescalerPosition) &
+      ControlPrescalerMask);
+}
 
 uint16_t controlReg() {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  return regs()->MODE2.RTC_CTRLA;
-#elif defined(SIMIO_RTC_OLD_CTRLA_REGS)
-  return regs()->MODE2.CTRLA.reg;
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return rtcRegs()->MODE2.CTRLA.reg;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  return rtcRegs()->MODE2.RTC_CTRLA;
 #else
-  return regs()->MODE2.CTRL.reg;
+  return rtcRegs()->MODE2.CTRL.reg;
 #endif
 }
 
 void writeControl(uint16_t value) {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  regs()->MODE2.RTC_CTRLA = value;
-#elif defined(SIMIO_RTC_OLD_CTRLA_REGS)
-  regs()->MODE2.CTRLA.reg = value;
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE2.CTRLA.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  rtcRegs()->MODE2.RTC_CTRLA = value;
 #else
-  regs()->MODE2.CTRL.reg = value;
+  rtcRegs()->MODE2.CTRL.reg = value;
+#endif
+}
+
+uint32_t syncBusyReg() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return rtcRegs()->MODE2.SYNCBUSY.reg;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  return rtcRegs()->MODE2.RTC_SYNCBUSY;
+#else
+  return rtcRegs()->MODE2.STATUS.bit.SYNCBUSY;
+#endif
+}
+
+uint32_t clockReg() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return rtcRegs()->MODE2.CLOCK.reg;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  return rtcRegs()->MODE2.RTC_CLOCK;
+#else
+  return rtcRegs()->MODE2.CLOCK.reg;
+#endif
+}
+
+void writeClock(uint32_t value) {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE2.CLOCK.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  rtcRegs()->MODE2.RTC_CLOCK = value;
+#else
+  rtcRegs()->MODE2.CLOCK.reg = value;
+#endif
+}
+
+uint16_t interruptFlagReg() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return rtcRegs()->MODE2.INTFLAG.reg;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  return rtcRegs()->MODE2.RTC_INTFLAG;
+#else
+  return rtcRegs()->MODE2.INTFLAG.reg;
+#endif
+}
+
+void writeInterruptFlag(uint16_t value) {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE2.INTFLAG.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  rtcRegs()->MODE2.RTC_INTFLAG = value;
+#else
+  rtcRegs()->MODE2.INTFLAG.reg = value;
+#endif
+}
+
+void writeInterruptEnableSet(uint16_t value) {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE2.INTENSET.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  rtcRegs()->MODE2.RTC_INTENSET = value;
+#else
+  rtcRegs()->MODE2.INTENSET.reg = value;
+#endif
+}
+
+void writeInterruptEnableClear(uint16_t value) {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE2.INTENCLR.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  rtcRegs()->MODE2.RTC_INTENCLR = value;
+#else
+  rtcRegs()->MODE2.INTENCLR.reg = value;
+#endif
+}
+
+uint32_t eventControlReg() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return rtcRegs()->MODE2.EVCTRL.reg;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  return rtcRegs()->MODE2.RTC_EVCTRL;
+#else
+  return rtcRegs()->MODE2.EVCTRL.reg;
+#endif
+}
+
+void writeEventControl(uint32_t value) {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE2.EVCTRL.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  rtcRegs()->MODE2.RTC_EVCTRL = value;
+#else
+  rtcRegs()->MODE2.EVCTRL.reg = value;
+#endif
+}
+
+uint32_t count32Reg() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return rtcRegs()->MODE0.COUNT.reg;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  return rtcRegs()->MODE0.RTC_COUNT;
+#else
+  return rtcRegs()->MODE0.COUNT.reg;
+#endif
+}
+
+void writeCount32(uint32_t value) {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE0.COUNT.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  rtcRegs()->MODE0.RTC_COUNT = value;
+#else
+  rtcRegs()->MODE0.COUNT.reg = value;
+#endif
+}
+
+uint16_t count16Reg() {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  return rtcRegs()->MODE1.COUNT.reg;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  return rtcRegs()->MODE1.RTC_COUNT;
+#else
+  return rtcRegs()->MODE1.COUNT.reg;
+#endif
+}
+
+void writeCount16(uint16_t value) {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE1.COUNT.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  rtcRegs()->MODE1.RTC_COUNT = value;
+#else
+  rtcRegs()->MODE1.COUNT.reg = value;
+#endif
+}
+
+void writeAlarm(uint8_t index, uint32_t value) {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE2.Mode2Alarm[index].ALARM.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  if (index == 0)
+    rtcRegs()->MODE2.RTC_ALARM0 = value;
+  else
+    rtcRegs()->MODE2.RTC_ALARM1 = value;
+#else
+  rtcRegs()->MODE2.Mode2Alarm[index].ALARM.reg = value;
+#endif
+}
+
+void writeAlarmMask(uint8_t index, uint8_t value) {
+#if defined(__SAMD51__) || defined(__SAME51__)
+  rtcRegs()->MODE2.Mode2Alarm[index].MASK.reg = value;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  if (index == 0)
+    rtcRegs()->MODE2.RTC_MASK0 = value;
+  else
+    rtcRegs()->MODE2.RTC_MASK1 = value;
+#else
+  rtcRegs()->MODE2.Mode2Alarm[index].MASK.reg = value;
 #endif
 }
 
@@ -112,88 +246,51 @@ void setControlBits(uint16_t mask) { writeControl(controlReg() | mask); }
 
 void clearControlBits(uint16_t mask) { writeControl(controlReg() & ~mask); }
 
-uint32_t syncBusyReg() {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  return regs()->MODE2.RTC_SYNCBUSY;
-#elif defined(SIMIO_RTC_OLD_CTRLA_REGS)
-  return regs()->MODE2.SYNCBUSY.reg;
+uint8_t mode2AlarmCount() {
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) ||       \
+    defined(__SAME54__)
+  return RTC_NUM_OF_ALARMS > 2 ? 2 : RTC_NUM_OF_ALARMS;
 #else
-  return regs()->MODE2.STATUS.bit.SYNCBUSY;
+  return RTC_ALARM_NUM > 2 ? 2 : RTC_ALARM_NUM;
 #endif
 }
 
-uint32_t clockReg() {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  return regs()->MODE2.RTC_CLOCK;
-#else
-  return regs()->MODE2.CLOCK.reg;
-#endif
+bool mode2AlarmSupported(uint8_t index) {
+  return index == 0 || (index == 1 && Alarm1Interrupt != 0);
 }
 
-void writeClock(uint32_t value) {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  regs()->MODE2.RTC_CLOCK = value;
-#else
-  regs()->MODE2.CLOCK.reg = value;
-#endif
+uint16_t periodicInterruptMask(rtc::PeriodicInterval interval) {
+  if (interval == rtc::PeriodicInterval::Disabled)
+    return PeriodicInterruptMask;
+
+  const uint8_t index = static_cast<uint8_t>(interval);
+  if (index > 7u)
+    return 0;
+
+  const uint16_t mask = static_cast<uint16_t>(1u << index);
+  return static_cast<uint16_t>(mask & PeriodicInterruptMask);
 }
 
-uint16_t interruptFlagReg() {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  return regs()->MODE2.RTC_INTFLAG;
-#else
-  return regs()->MODE2.INTFLAG.reg;
-#endif
+uint32_t periodicEventMask(rtc::PeriodicInterval interval) {
+  if (interval == rtc::PeriodicInterval::Disabled)
+    return PeriodicEventMask;
+
+  const uint8_t index = static_cast<uint8_t>(interval);
+  if (index > 7u)
+    return 0;
+
+  const uint32_t mask = static_cast<uint32_t>(1u << index);
+  return mask & PeriodicEventMask;
 }
 
-void writeInterruptFlag(uint16_t value) {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  regs()->MODE2.RTC_INTFLAG = value;
-#else
-  regs()->MODE2.INTFLAG.reg = value;
-#endif
-}
-
-void writeInterruptEnableSet(uint16_t value) {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  regs()->MODE2.RTC_INTENSET = value;
-#else
-  regs()->MODE2.INTENSET.reg = value;
-#endif
-}
-
-void writeInterruptEnableClear(uint16_t value) {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  regs()->MODE2.RTC_INTENCLR = value;
-#else
-  regs()->MODE2.INTENCLR.reg = value;
-#endif
-}
-
-bool alarmSupported(uint8_t index) {
-  return index == 0 || (index == 1 && kAlarm1Interrupt != 0);
-}
-
-void writeAlarm(uint8_t index, uint32_t value) {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  if (index == 0)
-    regs()->MODE2.RTC_ALARM0 = value;
-  else
-    regs()->MODE2.RTC_ALARM1 = value;
-#else
-  regs()->MODE2.Alarm[index].ALARM.reg = value;
-#endif
-}
-
-void writeAlarmMask(uint8_t index, uint8_t value) {
-#if defined(SIMIO_RTC_NEW_CTRLA_REGS)
-  if (index == 0)
-    regs()->MODE2.RTC_MASK0 = value;
-  else
-    regs()->MODE2.RTC_MASK1 = value;
-#else
-  regs()->MODE2.Alarm[index].MASK.reg = value;
-#endif
+rtc::EventMask periodicEventsFromFlags(uint16_t flags) {
+  const uint16_t periodicFlags = flags & PeriodicInterruptMask;
+  rtc::EventMask events = rtc::EventNone;
+  for (uint8_t index = 0; index < 8u; ++index) {
+    if ((periodicFlags & (static_cast<uint16_t>(1u << index))) != 0u)
+      events |= static_cast<rtc::EventMask>(1u << index);
+  }
+  return events;
 }
 
 uint32_t enterCritical() {
@@ -308,7 +405,7 @@ rtc::Mode2Time unpackMode2Time(uint32_t value) {
 
 bool waitSync(uint32_t mask) {
   for (uint32_t attempt = 0; attempt < 100000u; ++attempt) {
-#if defined(SIMIO_RTC_CTRL_REGS)
+#if defined(__SAMD21__)
     (void)mask;
     if (syncBusyReg() == 0)
       return true;
@@ -350,8 +447,7 @@ void rtcPendSvService(uint8_t serviceId, void *context) {
 }
 
 void processInterruptFlags(uint16_t flags, bool clearHardwareFlags) {
-  const uint16_t handled =
-      flags & (kBaseInterruptMask | kPeriodicInterruptMask);
+  const uint16_t handled = flags & (BaseInterruptMask | PeriodicInterruptMask);
   if (handled == 0u)
     return;
 
@@ -360,15 +456,12 @@ void processInterruptFlags(uint16_t flags, bool clearHardwareFlags) {
 
   uint64_t unixTimeValue = 0;
   rtc::EventMask events = rtc::EventNone;
-  if ((handled & kPeriodic0Interrupt) != 0)
-    events |= rtc::EventSecond;
-  if ((handled & (kPeriodicInterruptMask & ~kPeriodic0Interrupt)) != 0)
-    events |= rtc::EventDebounce;
-  if ((handled & kAlarm0Interrupt) != 0)
+  events |= periodicEventsFromFlags(handled);
+  if ((handled & Alarm0Interrupt) != 0)
     events |= rtc::EventAlarm0;
-  if ((handled & kAlarm1Interrupt) != 0)
+  if ((handled & Alarm1Interrupt) != 0)
     events |= rtc::EventAlarm1;
-  const bool overflow = (handled & kOverflowInterrupt) != 0;
+  const bool overflow = (handled & OverflowInterrupt) != 0;
   if (overflow)
     events |= rtc::EventOverflow;
 
@@ -402,48 +495,45 @@ bool ensurePendSvServiceRegistered() {
 }
 
 bool configureRtcClock() {
-#if defined(SIMIO_RTC_CTRL_REGS)
-  GCLK->GENDIV.reg = GCLK_GENDIV_ID(2u) | GCLK_GENDIV_DIV(32u);
-  while ((GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY) != 0u) {
-  }
-  GCLK->GENCTRL.reg =
-      GCLK_GENCTRL_ID(2u) |
-#if defined(CRYSTALLESS)
-      GCLK_GENCTRL_SRC_OSC32K |
-#else
-      GCLK_GENCTRL_SRC_XOSC32K |
-#endif
-      GCLK_GENCTRL_GENEN;
-  while ((GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY) != 0u) {
-  }
-  GCLK->CLKCTRL.reg =
-      static_cast<uint16_t>(GCLK_CLKCTRL_ID_RTC | GCLK_CLKCTRL_GEN_GCLK2 |
-                            GCLK_CLKCTRL_CLKEN);
-  while ((GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY) != 0u) {
-  }
-  return true;
-#elif defined(OSC32KCTRL_RTCCTRL_RTCSEL_XOSC1K)
-#if defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
-#if defined(OSC32KCTRL_REGS)
-  OSC32KCTRL_REGS->OSC32KCTRL_RTCCTRL =
-#else
-  OSC32KCTRL->OSC32KCTRL_RTCCTRL =
-#endif
-#if defined(CRYSTALLESS)
-      OSC32KCTRL_RTCCTRL_RTCSEL_ULP1K;
-#else
-      OSC32KCTRL_RTCCTRL_RTCSEL_XOSC1K;
-#endif
-#else
+#if defined(__SAMD51__) || defined(__SAME51__)
 #if defined(CRYSTALLESS)
   OSC32KCTRL->RTCCTRL.reg = OSC32KCTRL_RTCCTRL_RTCSEL_ULP1K;
 #else
   OSC32KCTRL->RTCCTRL.reg = OSC32KCTRL_RTCCTRL_RTCSEL_XOSC1K;
 #endif
+  return true;
+#elif defined(__SAME53__) || defined(__SAME54__)
+#if defined(CRYSTALLESS)
+  OSC32KCTRL_REGS->OSC32KCTRL_RTCCTRL = OSC32KCTRL_RTCCTRL_RTCSEL_ULP1K;
+#else
+  OSC32KCTRL_REGS->OSC32KCTRL_RTCCTRL = OSC32KCTRL_RTCCTRL_RTCSEL_XOSC1K;
 #endif
   return true;
 #else
-  return false;
+  constexpr uint8_t kRtcClockGenerator = 4u;
+
+  GCLK->GENCTRL.reg = GCLK_GENCTRL_ID(kRtcClockGenerator);
+  while ((GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY) != 0u) {
+  }
+
+  GCLK->GENDIV.reg = GCLK_GENDIV_ID(kRtcClockGenerator) | GCLK_GENDIV_DIV(32u);
+  while ((GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY) != 0u) {
+  }
+  GCLK->GENCTRL.reg = GCLK_GENCTRL_ID(kRtcClockGenerator) |
+#if defined(CRYSTALLESS)
+                      GCLK_GENCTRL_SRC_OSC32K |
+#else
+                      GCLK_GENCTRL_SRC_XOSC32K |
+#endif
+                      GCLK_GENCTRL_GENEN;
+  while ((GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY) != 0u) {
+  }
+  GCLK->CLKCTRL.reg = static_cast<uint16_t>(
+      GCLK_CLKCTRL_ID_RTC | GCLK_CLKCTRL_GEN(kRtcClockGenerator) |
+      GCLK_CLKCTRL_CLKEN);
+  while ((GCLK->STATUS.reg & GCLK_STATUS_SYNCBUSY) != 0u) {
+  }
+  return true;
 #endif
 }
 
@@ -451,30 +541,61 @@ bool configureRtcClock() {
 
 int rtc::irqNumber() { return static_cast<int>(RTC_IRQn); }
 
-bool rtc::available() { return true; }
-
 void rtc::enableClock() {
-#if defined(SIMIO_RTC_CTRL_REGS)
-  PM->APBAMASK.reg |= PM_APBAMASK_RTC;
-#elif defined(MCLK_REGS) && defined(MCLK_APBAMASK_RTC_Msk)
-  MCLK_REGS->MCLK_APBAMASK |= MCLK_APBAMASK_RTC_Msk;
-#elif defined(MCLK_APBAMASK_RTC)
+#if defined(__SAMD51__) || defined(__SAME51__)
   MCLK->APBAMASK.reg |= MCLK_APBAMASK_RTC;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  MCLK_REGS->MCLK_APBAMASK |= MCLK_APBAMASK_RTC_Msk;
+#else
+  PM->APBAMASK.reg |= PM_APBAMASK_RTC;
 #endif
 }
 
 void rtc::disableClock() {
-#if defined(SIMIO_RTC_CTRL_REGS)
-  PM->APBAMASK.reg &= ~PM_APBAMASK_RTC;
-#elif defined(MCLK_REGS) && defined(MCLK_APBAMASK_RTC_Msk)
-  MCLK_REGS->MCLK_APBAMASK &= ~MCLK_APBAMASK_RTC_Msk;
-#elif defined(MCLK_APBAMASK_RTC)
+#if defined(__SAMD51__) || defined(__SAME51__)
   MCLK->APBAMASK.reg &= ~MCLK_APBAMASK_RTC;
+#elif defined(__SAME53__) || defined(__SAME54__)
+  MCLK_REGS->MCLK_APBAMASK &= ~MCLK_APBAMASK_RTC_Msk;
+#else
+  PM->APBAMASK.reg &= ~PM_APBAMASK_RTC;
 #endif
 }
 
 bool rtc::begin(bool runStandby) {
-  (void)runStandby;
+  ClockConfig config;
+  config.runStandby = runStandby;
+  return configureClock(config);
+}
+
+void rtc::end() {
+  disableInterrupts(BaseInterruptMask | PeriodicInterruptMask);
+  NVIC_DisableIRQ(static_cast<IRQn_Type>(irqNumber()));
+  clearControlBits(ControlEnable);
+  waitSync(SyncEnable);
+}
+
+bool rtc::enabled() { return (controlReg() & ControlEnable) != 0u; }
+
+bool rtc::configure(OperatingMode mode, Prescaler prescaler) {
+  if (mode == OperatingMode::Reserved) {
+    rtcState.lastError = Error::ClockConfigurationFailed;
+    return false;
+  }
+
+  if (enabled()) {
+    rtcState.lastError = Error::ClockConfigurationFailed;
+    return false;
+  }
+
+  writeControl(controlModeBits(mode) | controlPrescalerBits(prescaler));
+  rtcState.lastError = Error::None;
+  return true;
+}
+
+bool rtc::configureClock() { return configureClock(ClockConfig{}); }
+
+bool rtc::configureClock(const ClockConfig &config) {
+  (void)config.runStandby;
   if (!ensurePendSvServiceRegistered()) {
     rtcState.lastError = Error::PendSvRegistrationFailed;
     return false;
@@ -486,18 +607,26 @@ bool rtc::begin(bool runStandby) {
     return false;
   }
 
-  disableInterrupts(kBaseInterruptMask | kPeriodicInterruptMask);
-  clearInterruptFlags(kBaseInterruptMask | kPeriodicInterruptMask);
+  disableInterrupts(BaseInterruptMask | PeriodicInterruptMask);
+  clearInterruptFlags(BaseInterruptMask | PeriodicInterruptMask);
 
-  if ((controlReg() & kCtrlEnable) == 0u) {
-    writeControl(kCtrlModeClock | kCtrlPrescalerDiv1024);
-    writeClock(packMode2Time(Mode2Time{0, 1, 1, 0, 0, 0}));
-    if (!waitSync(kSyncClock)) {
+  if (enabled() && operatingMode() != OperatingMode::Clock) {
+    clearControlBits(ControlEnable);
+    if (!waitSync(SyncEnable)) {
+      rtcState.lastError = Error::EnableSyncTimeout;
+      return false;
+    }
+  }
+
+  if ((controlReg() & ControlEnable) == 0u) {
+    if (!configure(OperatingMode::Clock, config.prescaler))
+      return false;
+    if (!write(Mode2Time{0, 1, 1, 0, 0, 0})) {
       rtcState.lastError = Error::ClockWriteTimeout;
       return false;
     }
-    setControlBits(kCtrlEnable);
-    if (!waitSync(kSyncEnable)) {
+    setControlBits(ControlEnable);
+    if (!waitSync(SyncEnable)) {
       rtcState.lastError = Error::EnableSyncTimeout;
       return false;
     }
@@ -505,19 +634,26 @@ bool rtc::begin(bool runStandby) {
 
   NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
   NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
-  enableInterrupts(kPeriodic0Interrupt | kOverflowInterrupt);
+  uint16_t interruptMask = 0;
+  if (config.enablePeriodicSecondInterrupt)
+    interruptMask |= periodicInterruptMask(PeriodicInterval::Per7);
+  if (config.enableOverflowInterrupt)
+    interruptMask |= OverflowInterrupt;
+  enableInterrupts(interruptMask);
   rtcState.lastError = Error::None;
   return true;
 }
 
-void rtc::end() {
-  disableInterrupts(kBaseInterruptMask | kPeriodicInterruptMask);
-  NVIC_DisableIRQ(static_cast<IRQn_Type>(irqNumber()));
-  clearControlBits(kCtrlEnable);
-  waitSync(kSyncEnable);
+rtc::OperatingMode rtc::operatingMode() {
+  return static_cast<OperatingMode>((controlReg() >> ControlModePosition) &
+                                    0x3u);
 }
 
-bool rtc::enabled() { return (controlReg() & kCtrlEnable) != 0u; }
+uint8_t rtc::alarmCount() { return mode2AlarmCount(); }
+
+bool rtc::alarmSupported(uint8_t index) {
+  return index < mode2AlarmCount() && mode2AlarmSupported(index);
+}
 
 bool rtc::setUnixTime(uint64_t unixTimeValue, TimeState state) {
   if (unixTimeValue == 0) {
@@ -545,8 +681,7 @@ bool rtc::setUnixTime(uint64_t unixTimeValue, TimeState state) {
   rtcState.lastError = Error::None;
   exitCritical(primask);
 
-  writeClock(packMode2Time(mode2Time));
-  if (!waitSync(kSyncClock)) {
+  if (!write(mode2Time)) {
     rtcState.lastError = Error::ClockWriteTimeout;
     return false;
   }
@@ -584,6 +719,86 @@ bool rtc::trustedUnixTime(uint64_t &unixTimeOut) {
   const bool configured = rtcState.timeState == TimeState::Trusted;
   exitCritical(primask);
   return configured && unixTime(unixTimeOut);
+}
+
+bool rtc::read(uint32_t &value) {
+  switch (operatingMode()) {
+  case OperatingMode::Count32:
+    value = count32Reg();
+    return true;
+  case OperatingMode::Count16:
+    value = count16Reg();
+    return true;
+  case OperatingMode::Clock:
+    value = clockReg();
+    return true;
+  case OperatingMode::Reserved:
+  default:
+    rtcState.lastError = Error::ClockConfigurationFailed;
+    return false;
+  }
+}
+
+bool rtc::write(uint32_t value) {
+  switch (operatingMode()) {
+  case OperatingMode::Count32:
+    writeCount32(value);
+    if (!waitSync(SyncCount32)) {
+      rtcState.lastError = Error::CountWriteTimeout;
+      return false;
+    }
+    rtcState.lastError = Error::None;
+    return true;
+  case OperatingMode::Count16:
+    writeCount16(static_cast<uint16_t>(value));
+    if (!waitSync(SyncCount16)) {
+      rtcState.lastError = Error::CountWriteTimeout;
+      return false;
+    }
+    rtcState.lastError = Error::None;
+    return true;
+  case OperatingMode::Clock:
+    writeClock(value);
+    if (!waitSync(SyncClock)) {
+      rtcState.lastError = Error::ClockWriteTimeout;
+      return false;
+    }
+    rtcState.lastError = Error::None;
+    return true;
+  case OperatingMode::Reserved:
+  default:
+    rtcState.lastError = Error::ClockConfigurationFailed;
+    return false;
+  }
+}
+
+bool rtc::read(Mode2Time &time) {
+  if (operatingMode() != OperatingMode::Clock) {
+    rtcState.lastError = Error::ClockConfigurationFailed;
+    return false;
+  }
+
+  time = unpackMode2Time(clockReg());
+  if (!mode2TimeIsValid(time)) {
+    rtcState.lastError = Error::InvalidUnixTime;
+    return false;
+  }
+
+  rtcState.lastError = Error::None;
+  return true;
+}
+
+bool rtc::write(const Mode2Time &time) {
+  if (operatingMode() != OperatingMode::Clock) {
+    rtcState.lastError = Error::ClockConfigurationFailed;
+    return false;
+  }
+  if (!mode2TimeIsValid(time)) {
+    rtcState.lastError = Error::InvalidUnixTime;
+    return false;
+  }
+
+  return write(packMode2Time(time));
 }
 
 bool rtc::unixTimeToMode2(uint64_t unixTimeValue, Mode2Time &mode2Time) {
@@ -633,7 +848,7 @@ bool rtc::mode2ToUnixTime(const Mode2Time &mode2Time, uint64_t &unixTimeOut) {
 }
 
 bool rtc::setAlarm(uint8_t index, const Mode2Time &time, AlarmMatch match) {
-  if (!alarmSupported(index)) {
+  if (!rtc::alarmSupported(index)) {
     rtcState.lastError = Error::UnsupportedAlarm;
     return false;
   }
@@ -644,11 +859,11 @@ bool rtc::setAlarm(uint8_t index, const Mode2Time &time, AlarmMatch match) {
   if (!begin())
     return false;
 
-  const uint16_t interrupt = index == 0 ? kAlarm0Interrupt : kAlarm1Interrupt;
+  const uint16_t interrupt = index == 0 ? Alarm0Interrupt : Alarm1Interrupt;
   disableInterrupts(interrupt);
   writeAlarm(index, packMode2Time(time));
   writeAlarmMask(index, static_cast<uint8_t>(match));
-  if (!waitSync(kSyncClock)) {
+  if (!waitSync(SyncClock)) {
     rtcState.lastError = Error::AlarmWriteTimeout;
     return false;
   }
@@ -669,11 +884,11 @@ bool rtc::setAlarm(uint8_t index, uint64_t unixTimeValue, AlarmMatch match) {
 }
 
 bool rtc::clearAlarm(uint8_t index) {
-  if (!alarmSupported(index)) {
+  if (!rtc::alarmSupported(index)) {
     rtcState.lastError = Error::UnsupportedAlarm;
     return false;
   }
-  const uint16_t interrupt = index == 0 ? kAlarm0Interrupt : kAlarm1Interrupt;
+  const uint16_t interrupt = index == 0 ? Alarm0Interrupt : Alarm1Interrupt;
   disableInterrupts(interrupt);
   clearInterruptFlags(interrupt);
   writeAlarmMask(index, static_cast<uint8_t>(AlarmMatch::Disabled));
@@ -681,15 +896,124 @@ bool rtc::clearAlarm(uint8_t index) {
   return true;
 }
 
-bool rtc::configureDebounce(PeriodicInterval interval, bool interrupt) {
-  (void)interrupt;
-  if (interval == PeriodicInterval::Disabled) {
-    rtcState.lastError = Error::None;
-    return true;
+bool rtc::setPeriodicInterrupt(PeriodicInterval interval, bool enabled) {
+  const uint16_t mask = periodicInterruptMask(interval);
+  if (mask == 0u && interval != PeriodicInterval::Disabled) {
+    rtcState.lastError = Error::UnsupportedDebounce;
+    return false;
   }
 
-  rtcState.lastError = Error::UnsupportedDebounce;
-  return false;
+  if (enabled)
+    enableInterrupts(mask);
+  else
+    disableInterrupts(mask);
+  if (interval == PeriodicInterval::Disabled)
+    clearInterruptFlags(mask);
+
+  rtcState.lastError = Error::None;
+  return true;
+}
+
+bool rtc::setPeriodicEventOutput(PeriodicInterval interval, bool enabled) {
+  const uint32_t mask = periodicEventMask(interval);
+  if (mask == 0u && interval != PeriodicInterval::Disabled) {
+    rtcState.lastError = Error::UnsupportedDebounce;
+    return false;
+  }
+
+  const bool wasEnabled = rtc::enabled();
+  if (wasEnabled) {
+    clearControlBits(ControlEnable);
+    if (!waitSync(SyncEnable)) {
+      rtcState.lastError = Error::EnableSyncTimeout;
+      return false;
+    }
+  }
+
+  uint32_t evctrl = eventControlReg();
+  if (enabled)
+    evctrl |= mask;
+  else
+    evctrl &= ~mask;
+  writeEventControl(evctrl);
+
+  if (wasEnabled) {
+    setControlBits(ControlEnable);
+    if (!waitSync(SyncEnable)) {
+      rtcState.lastError = Error::EnableSyncTimeout;
+      return false;
+    }
+  }
+
+  rtcState.lastError = Error::None;
+  return true;
+}
+
+bool rtc::configureDebounce() { return configureDebounce(DebounceConfig{}); }
+
+bool rtc::configureDebounce(const DebounceConfig &config) {
+  (void)config.runStandby;
+  if (config.interval == PeriodicInterval::Disabled)
+    return configureDebounce(PeriodicInterval::Disabled, config.interrupt);
+
+  if (config.mode == OperatingMode::Reserved ||
+      config.prescaler == Prescaler::Div1) {
+    rtcState.lastError = Error::UnsupportedDebounce;
+    return false;
+  }
+
+  if (config.interrupt && !ensurePendSvServiceRegistered()) {
+    rtcState.lastError = Error::PendSvRegistrationFailed;
+    return false;
+  }
+
+  enableClock();
+  if (!configureRtcClock()) {
+    rtcState.lastError = Error::ClockConfigurationFailed;
+    return false;
+  }
+
+  disableInterrupts(BaseInterruptMask | PeriodicInterruptMask);
+  clearInterruptFlags(BaseInterruptMask | PeriodicInterruptMask);
+
+  if (enabled()) {
+    clearControlBits(ControlEnable);
+    if (!waitSync(SyncEnable)) {
+      rtcState.lastError = Error::EnableSyncTimeout;
+      return false;
+    }
+  }
+
+  setPeriodicEventOutput(PeriodicInterval::Disabled, false);
+
+  if (!configure(config.mode, config.prescaler))
+    return false;
+
+  setControlBits(ControlEnable);
+  if (!waitSync(SyncEnable)) {
+    rtcState.lastError = Error::EnableSyncTimeout;
+    return false;
+  }
+
+  if (config.interrupt) {
+    NVIC_ClearPendingIRQ(static_cast<IRQn_Type>(irqNumber()));
+    NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
+  }
+
+  return configureDebounce(config.interval, config.interrupt);
+}
+
+bool rtc::configureDebounce(PeriodicInterval interval, bool interrupt) {
+  if (interval == PeriodicInterval::Disabled) {
+    const bool interruptDisabled =
+        setPeriodicInterrupt(PeriodicInterval::Disabled, false);
+    const bool eventDisabled =
+        setPeriodicEventOutput(PeriodicInterval::Disabled, false);
+    return interruptDisabled && eventDisabled;
+  }
+
+  return interrupt ? setPeriodicInterrupt(interval, true)
+                   : setPeriodicEventOutput(interval, true);
 }
 
 bool rtc::trusted() {
@@ -771,5 +1095,3 @@ void rtc::handleInterruptFlagsForTesting(uint16_t flags) {
 #endif
 
 extern "C" void RTC_Handler(void) { rtc::handleInterrupt(); }
-
-#endif /* RTC_AVAILABLE */

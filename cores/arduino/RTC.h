@@ -5,34 +5,23 @@
 
 #include <stdint.h>
 
-#if defined(RTC_REGS)
-#define RTC_AVAILABLE 1
+#if defined(__SAME53__) || defined(__SAME54__)
 #define RTC_PERIPH (reinterpret_cast<uintptr_t>(RTC_REGS))
-#elif defined(RTC)
-#define RTC_AVAILABLE 1
-#define RTC_PERIPH (reinterpret_cast<uintptr_t>(RTC))
 #else
-#define RTC_AVAILABLE 0
+#define RTC_PERIPH (reinterpret_cast<uintptr_t>(RTC))
 #endif
 
-#if RTC_AVAILABLE
-
 /**
- * @brief SAMD/SAME RTC Mode2 clock/calendar service.
+ * @brief SAMD/SAME RTC peripheral abstraction.
  *
- * The RTC runs the hardware clock/calendar in Mode2 with a 1 Hz counter clock.
- * Public Unix-time APIs are intentionally bounded to the 64-year hardware
- * window from 2000-01-01 00:00:00 UTC through 2063-12-31 23:59:59 UTC.
+ * This class owns the supported SAMD/SAME RTC register-layout differences,
+ * hardware clock enable/disable, Mode0/Mode1/Mode2 read/write helpers, alarm
+ * register access, interrupt flags, and PendSV callback dispatch. Higher-level
+ * code such as NetworkTimeService owns time source authority and trust policy.
  *
- * Time authority is tracked separately from the raw hardware clock:
- * - TimeState::Unset means the calendar may tick, but it must not be used for
- *   certificate validation or other trust-sensitive checks.
- * - TimeState::Manual means an application supplied plausible time.
- * - TimeState::Trusted means time came from a trusted authority.
- *
- * A trusted RTC value may only be replaced by another trusted value. Any RTC
- * overflow event clears the authority state because the calendar continuity has
- * been lost.
+ * Legacy Unix-time authority helpers remain temporarily for existing callers
+ * while the network time daemon is introduced. New code should use the raw
+ * peripheral operations plus explicit daemon-owned trust state.
  */
 class rtc {
 public:
@@ -109,19 +98,13 @@ public:
   };
 
   /**
-   * @brief Future RTC debounce prescaler selector.
-   *
-   * Debounce cannot share the Mode2 1 Hz calendar clock. A functional debounce
-   * configuration must switch to a debounce-specific RTC clock source, divider,
-   * and operating mode. Active debounce requests currently fail with
-   * Error::UnsupportedDebounce instead of silently using the calendar clock.
+   * @brief RTC input clock prescaler selector.
    *
    * Values intentionally match the 4-bit RTC prescaler encoding: 0x0 selects
    * DIV1 and 0xA selects DIV1024. Encodings 0xB..0xF are reserved by the
    * supported SAMD/SAME RTC hardware and are not exposed here.
    */
-  enum class PeriodicInterval : uint8_t {
-    Disabled = 0xFF,
+  enum class Prescaler : uint8_t {
     Div1 = 0x0,
     Div2 = 0x1,
     Div4 = 0x2,
@@ -133,6 +116,33 @@ public:
     Div256 = 0x8,
     Div512 = 0x9,
     Div1024 = 0xA,
+  };
+
+  /**
+   * @brief RTC periodic interval selector for PER0..PER7 sources.
+   *
+   * These values map directly to the RTC periodic event/interrupt source index.
+   * Per SAMD21 19.6.9.1 and SAMD5x/E5x 21.6.8.1, PERn is generated from the
+   * RTC prescaler on the 0-to-1 transition of prescaler bit n+2, so the source
+   * period is 2^(n + 3) cycles of the internal RTC prescaler clock. For
+   * example, PER0 fires every 8 cycles, PER1 every 16 cycles, and PER7 every
+   * 1024 cycles.
+   *
+   * Periodic sources are independent of the counter prescaler except that the
+   * hardware does not generate periodic events when the RTC prescaler is DIV1.
+   * For the standard Mode2 clock path configured by configureClock(), the RTC
+   * input is 1.024 kHz and PER7 is therefore the one-second periodic source.
+   */
+  enum class PeriodicInterval : uint8_t {
+    Disabled = 0xFF,
+    Per0 = 0,
+    Per1 = 1,
+    Per2 = 2,
+    Per3 = 3,
+    Per4 = 4,
+    Per5 = 5,
+    Per6 = 6,
+    Per7 = 7,
   };
 
   /**
@@ -151,16 +161,78 @@ public:
     uint8_t second; // 0-59.
   };
 
+  /**
+   * @brief Mode2 clock/calendar configuration.
+   *
+   * The helper configures the silicon-specific RTC clock source for a 1.024 kHz
+   * RTC input where supported, then uses DIV1024 by default so Mode2 advances
+   * at 1 Hz as required by the SAMD21 and SAMD5x/E5x datasheets.
+   */
+  struct ClockConfig {
+    Prescaler prescaler = Prescaler::Div1024;
+    bool enableOverflowInterrupt = true;
+    /**
+     * @brief Optionally enable the PER7 interrupt for the default 1.024 kHz
+     * path.
+     *
+     * This is not needed for the hardware calendar to advance. Mode2 increments
+     * seconds from the configured 1 Hz counter clock without software service.
+     * Enable this only when an application needs a PendSV callback every
+     * second. NetworkTimeService should use Mode2 alarms for refresh scheduling
+     * instead of a periodic one-second interrupt.
+     */
+    bool enablePeriodicSecondInterrupt = false;
+    bool runStandby = false;
+  };
+
+  /**
+   * @brief Debounce-oriented RTC configuration.
+   *
+   * The default preset uses the same chip-family 1.024 kHz RTC input as
+   * configureClock(), switches the counter to Mode1, keeps the counter
+   * prescaler away from DIV1 so periodic sources are generated, and enables
+   * PER2 as an event output by default. PER2 is 32 cycles of the 1.024 kHz RTC
+   * input, or about 31.25 ms.
+   *
+   * Periodic events are generated from the RTC prescaler taps and are
+   * independent of the counter mode except that the hardware suppresses them
+   * when the counter prescaler is DIV1.
+   */
+  struct DebounceConfig {
+    OperatingMode mode = OperatingMode::Count16;
+    Prescaler prescaler = Prescaler::Div2;
+    PeriodicInterval interval = PeriodicInterval::Per2;
+    bool interrupt = false;
+    bool runStandby = false;
+  };
+
   /** @brief No pending RTC event. */
   static constexpr EventMask EventNone = 0;
-  /** @brief One-second periodic RTC event. */
-  static constexpr EventMask EventSecond = 1u << 0;
+  /** @brief Hardware periodic interval 0 event. */
+  static constexpr EventMask EventPeriodic0 = 1u << 0;
+  /** @brief Hardware periodic interval 1 event. */
+  static constexpr EventMask EventPeriodic1 = 1u << 1;
+  /** @brief Hardware periodic interval 2 event. */
+  static constexpr EventMask EventPeriodic2 = 1u << 2;
+  /** @brief Hardware periodic interval 3 event. */
+  static constexpr EventMask EventPeriodic3 = 1u << 3;
+  /** @brief Hardware periodic interval 4 event. */
+  static constexpr EventMask EventPeriodic4 = 1u << 4;
+  /** @brief Hardware periodic interval 5 event. */
+  static constexpr EventMask EventPeriodic5 = 1u << 5;
+  /** @brief Hardware periodic interval 6 event. */
+  static constexpr EventMask EventPeriodic6 = 1u << 6;
+  /** @brief Hardware periodic interval 7 event. */
+  static constexpr EventMask EventPeriodic7 = 1u << 7;
+  /** @brief One-second periodic event for configureClock()'s 1.024 kHz input.
+   */
+  static constexpr EventMask EventSecond = EventPeriodic7;
   /** @brief RTC time was explicitly set. */
-  static constexpr EventMask EventTimeSet = 1u << 1;
+  static constexpr EventMask EventTimeSet = 1u << 8;
   /** @brief Alarm 0 matched. */
-  static constexpr EventMask EventAlarm0 = 1u << 2;
+  static constexpr EventMask EventAlarm0 = 1u << 9;
   /** @brief Alarm 1 matched, when supported by the target. */
-  static constexpr EventMask EventAlarm1 = 1u << 3;
+  static constexpr EventMask EventAlarm1 = 1u << 10;
   /**
    * @brief Calendar continuity was lost.
    *
@@ -168,9 +240,11 @@ public:
    * when a clear-on-match path such as MATCHCLR resets the counter. Treat this
    * event as authority loss and re-establish time before trust-sensitive use.
    */
-  static constexpr EventMask EventOverflow = 1u << 4;
-  /** @brief Reserved for a future debounce-specific RTC configuration. */
-  static constexpr EventMask EventDebounce = 1u << 5;
+  static constexpr EventMask EventOverflow = 1u << 11;
+  /** @brief Any periodic interval event useful for debounce sampling. */
+  static constexpr EventMask EventDebounce =
+      EventPeriodic0 | EventPeriodic1 | EventPeriodic2 | EventPeriodic3 |
+      EventPeriodic4 | EventPeriodic5 | EventPeriodic6 | EventPeriodic7;
   /** @brief Calendar year represented by Mode2 year offset 0. */
   static constexpr uint16_t Mode2ReferenceYear = 2000u;
   /** @brief Number of calendar years representable by the 6-bit Mode2 year. */
@@ -183,8 +257,6 @@ public:
 
   /** @brief Return the CMSIS IRQ number for the RTC peripheral. */
   static int irqNumber();
-  /** @brief Return true when this target exposes an RTC peripheral. */
-  static bool available();
   /**
    * @brief Start the RTC in Mode2 clock/calendar mode.
    * @param runStandby Reserved for standby behavior; currently ignored.
@@ -195,6 +267,30 @@ public:
   static void end();
   /** @brief Return true when the RTC hardware enable bit is set. */
   static bool enabled();
+  /**
+   * @brief Configure the RTC operating mode and prescaler while disabled.
+   *
+   * This does not select the chip's RTC clock source; call enableClock() and
+   * configure the appropriate GCLK/OSC32K path before enabling the peripheral.
+   */
+  static bool configure(OperatingMode mode, Prescaler prescaler);
+  /**
+   * @brief Configure Mode2 clock/calendar mode with a 1 Hz counter tick.
+   *
+   * This enables the RTC bus clock, selects the chip-family RTC clock source
+   * used for a 1.024 kHz RTC input, configures Mode2 with the requested
+   * prescaler, initializes the calendar register if the RTC was disabled, and
+   * enables the requested Mode2 interrupts.
+   */
+  static bool configureClock();
+  static bool configureClock(const ClockConfig &config);
+  /** @brief Return the current hardware operating mode. */
+  static OperatingMode operatingMode();
+  /** @brief Return the number of Mode2 alarm channels exposed by this target.
+   */
+  static uint8_t alarmCount();
+  /** @brief Return true when the target exposes the selected Mode2 alarm. */
+  static bool alarmSupported(uint8_t index);
 
   /**
    * @brief Set the RTC calendar from Unix time and assign authority state.
@@ -243,6 +339,24 @@ public:
   static bool mode2ToUnixTime(const Mode2Time &mode2Time,
                               uint64_t &unixTime);
   /**
+   * @brief Read the current RTC count/calendar register for the active mode.
+   *
+   * Mode0 returns the 32-bit COUNT value, Mode1 returns COUNT[15:0], and Mode2
+   * returns the packed CLOCK register.
+   */
+  static bool read(uint32_t &value);
+  /**
+   * @brief Write the current RTC count/calendar register for the active mode.
+   *
+   * Mode0 writes COUNT[31:0], Mode1 writes COUNT[15:0], and Mode2 writes the
+   * packed CLOCK register.
+   */
+  static bool write(uint32_t value);
+  /** @brief Read hardware Mode2 calendar fields from the CLOCK register. */
+  static bool read(Mode2Time &time);
+  /** @brief Write hardware Mode2 calendar fields to the CLOCK register. */
+  static bool write(const Mode2Time &time);
+  /**
    * @brief Program a hardware Mode2 alarm.
    * @param index Alarm index, usually 0; alarm 1 is target-dependent.
    * @param time Calendar fields to match.
@@ -259,14 +373,36 @@ public:
   /** @brief Disable and clear a hardware Mode2 alarm. */
   static bool clearAlarm(uint8_t index);
   /**
-   * @brief Configure RTC debounce timing.
-   * @param interval Debounce interval source, or Disabled.
-   * @param interrupt Also enable deferred callback delivery when supported.
-   * @return true only for Disabled today; active debounce is not supported while
-   * the RTC is owned by the Mode2 1 Hz calendar service.
+   * @brief Enable or disable a periodic interval interrupt source.
    *
-   * @todo Add a separate debounce mode that selects an appropriate RTC clock
-   * source/divider and operating mode instead of reusing the calendar clock.
+   * PeriodicInterval::Disabled clears all periodic interval interrupts. The
+   * actual wall-clock interval depends on the currently configured RTC clock
+   * source, prescaler, and operating mode.
+   */
+  static bool setPeriodicInterrupt(PeriodicInterval interval, bool enabled);
+  /**
+   * @brief Enable or disable a periodic interval event output.
+   *
+   * PeriodicInterval::Disabled clears all periodic interval event outputs.
+   */
+  static bool setPeriodicEventOutput(PeriodicInterval interval, bool enabled);
+  /**
+   * @brief Configure the RTC for an approximately 30 ms debounce source.
+   *
+   * This preset owns RTC mode/clock/prescaler selection. Use the PERn overload
+   * only when the RTC has already been configured elsewhere.
+   */
+  static bool configureDebounce();
+  static bool configureDebounce(const DebounceConfig &config);
+  /**
+   * @brief Configure a periodic RTC source for debounce sampling.
+   * @param interval Periodic interval source, or Disabled.
+   * @param interrupt true for PendSV callback delivery, false for event output.
+   * @return false when the requested periodic path is not supported.
+   *
+   * This helper does not choose the RTC operating mode, clock source, or
+   * prescaler. Callers that need debounce must configure an RTC mode/clock fast
+   * enough for their debounce window before enabling this periodic source.
    */
   static bool configureDebounce(PeriodicInterval interval,
                                 bool interrupt = false);
@@ -311,5 +447,3 @@ public:
   static void handleInterruptFlagsForTesting(uint16_t flags);
 #endif
 };
-
-#endif /* RTC_AVAILABLE */
