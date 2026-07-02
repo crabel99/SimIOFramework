@@ -536,7 +536,7 @@ bool SecureClient::applyProviderTimeForTls() {
   const NetworkTimeLevel required =
       _tlsSecurityLevel == SecureClientTlsSecurityLevel::High
           ? NetworkTimeLevel::Trusted
-          : NetworkTimeLevel::Manual;
+          : NetworkTimeLevel::Provisional;
   if (snapshot.satisfies(required))
     return setTrustedTime(snapshot.unixTime);
 

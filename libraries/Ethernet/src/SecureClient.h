@@ -28,7 +28,7 @@ enum SecureClientError : int {
 enum class SecureClientTlsSecurityLevel : uint8_t {
   /** Skip certificate verification. Intended only for explicit test/bring-up. */
   Low = 0,
-  /** Require certificate verification, accepting manual/provisional RTC time. */
+  /** Require certificate verification, accepting provisional RTC time. */
   Medium = 1,
   /** Require certificate verification and trusted RTC/provider time. */
   High = 2,
@@ -103,7 +103,7 @@ public:
    * @brief Configure UTC Unix time for TLS certificate validity.
    *
    * `High` security requires this to come from trusted RTC/provider time.
-   * `Medium` security may use provisional/manual RTC time for date validation.
+   * `Medium` security may use provisional RTC time for date validation.
    * `Low` security skips certificate verification and does not require time.
    */
   bool setTrustedTime(uint64_t unixTime);
@@ -132,7 +132,7 @@ public:
    *
    * The default is `High`: certificate verification is required and only
    * trusted RTC/provider time is accepted. `Medium` still verifies certificates
-   * but may use manual/provisional RTC time. `Low` maps to an explicit
+   * but may use provisional RTC time. `Low` maps to an explicit
    * no-verification Crypto policy for test/bring-up paths.
    */
   bool setTlsSecurityLevel(SecureClientTlsSecurityLevel level);
