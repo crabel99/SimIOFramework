@@ -1,4 +1,4 @@
-#include "TrustedTimeClient.h"
+#include "TrustedClient.h"
 
 #include <psa/crypto.h>
 #include <utility/network/TimeService.h>

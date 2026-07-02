@@ -2,9 +2,9 @@
 
 #include <RTC.h>
 #include <stdint.h>
-#include <utility/network/NetworkTimeClient.h>
-#include <utility/network/TrustedTimeClient.h>
+#include <utility/network/time/Client.h>
 #include <utility/network/time/Config.h>
+#include <utility/network/time/TrustedClient.h>
 
 class NetworkService;
 class TransportProvider;

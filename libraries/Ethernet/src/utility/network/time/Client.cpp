@@ -1,4 +1,4 @@
-#include "NetworkTimeClient.h"
+#include "Client.h"
 
 #include <string.h>
 #include <utility/network/TimeService.h>
