@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include <utility/EthernetTarget.h>
+
 #include <Client.h>
 #include <utility/transport/TransportProvider.h>
 

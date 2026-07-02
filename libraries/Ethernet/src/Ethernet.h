@@ -13,6 +13,8 @@
  * ownership, or socket behavior. Those belong above this boundary.
  */
 
+#include <utility/EthernetTarget.h>
+
 #include <GMAC.h>
 #include <utility/phy/PhyLinkManager.h>
 

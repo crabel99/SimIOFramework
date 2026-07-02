@@ -1,9 +1,9 @@
 /**
  * @file lwipopts.h
- * @brief SimIO Ethernet lwIP configuration.
+ * @brief Ethernet lwIP configuration.
  *
  * This configuration imports lwIP as a service-driven, no-OS TCP/IP stack.
- * Public Arduino sockets remain behind SimIO transport adapters; do not enable
+ * Public Arduino sockets remain behind Arduino transport adapters; do not enable
  * lwIP's BSD socket/netconn layer here unless a real `sys_arch` port is added.
  */
 #pragma once
@@ -103,9 +103,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-uint32_t simio_lwip_rand(void);
+uint32_t samd_lwip_rand(void);
 #ifdef __cplusplus
 }
 #endif
 
-#define LWIP_RAND() simio_lwip_rand()
+#define LWIP_RAND() samd_lwip_rand()

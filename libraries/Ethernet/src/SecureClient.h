@@ -11,6 +11,8 @@
  */
 #pragma once
 
+#include <utility/EthernetTarget.h>
+
 #include <EthernetClient.h>
 #include <utility/tls/TlsClientSession.h>
 #include <utility/transport/TransportProvider.h>

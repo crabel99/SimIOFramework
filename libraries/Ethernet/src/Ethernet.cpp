@@ -16,15 +16,15 @@
 
 namespace {
 EthernetPhy defaultPhy;
-#ifndef SIMIO_ETHERNET_RX_DESCRIPTOR_COUNT
-#define SIMIO_ETHERNET_RX_DESCRIPTOR_COUNT 32
+#ifndef ETHERNET_RX_DESCRIPTOR_COUNT
+#define ETHERNET_RX_DESCRIPTOR_COUNT 32
 #endif
-#ifndef SIMIO_ETHERNET_TX_DESCRIPTOR_COUNT
-#define SIMIO_ETHERNET_TX_DESCRIPTOR_COUNT 8
+#ifndef ETHERNET_TX_DESCRIPTOR_COUNT
+#define ETHERNET_TX_DESCRIPTOR_COUNT 8
 #endif
 
-constexpr uint8_t kRxDescriptorCount = SIMIO_ETHERNET_RX_DESCRIPTOR_COUNT;
-constexpr uint8_t kTxDescriptorCount = SIMIO_ETHERNET_TX_DESCRIPTOR_COUNT;
+constexpr uint8_t kRxDescriptorCount = ETHERNET_RX_DESCRIPTOR_COUNT;
+constexpr uint8_t kTxDescriptorCount = ETHERNET_TX_DESCRIPTOR_COUNT;
 constexpr uint16_t kFrameBufferSize = 1536;
 
 alignas(4) gmac::Descriptor rxDescriptors[kRxDescriptorCount];
