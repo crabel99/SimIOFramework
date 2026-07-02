@@ -23,10 +23,18 @@ bool NetworkService::begin() {
     _started = false;
     return false;
   }
+  if (!rtc::attachPeriodicInterrupt(rtc::PeriodicInterval::Per4,
+                                    handleRtcTimeout, this)) {
+    NetworkTime.detachProvider(_lwipPort);
+    _lwipPort.end();
+    _started = false;
+    return false;
+  }
   return true;
 }
 
 void NetworkService::end() {
+  rtc::detachPeriodicInterrupt(rtc::PeriodicInterval::Per4);
   NetworkTime.detachProvider(_lwipPort);
   _lwipPort.end();
   _started = false;
@@ -39,6 +47,14 @@ bool NetworkService::service() {
   const bool serviced = _lwipPort.service();
   NetworkTime.advance();
   return serviced;
+}
+
+void NetworkService::handleRtcTimeout(rtc::EventMask events, uint64_t,
+                                      void *context) {
+  if ((events & rtc::EventPeriodic4) == 0u || context == nullptr)
+    return;
+
+  static_cast<NetworkService *>(context)->_lwipPort.checkTimeouts();
 }
 
 bool NetworkService::carrierUp() const { return _lwipPort.carrierUp(); }

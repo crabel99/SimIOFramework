@@ -11,8 +11,8 @@ NetworkTimeService &NetworkTimeService::instance() {
 NetworkTimeService &NetworkTime = NetworkTimeService::instance();
 
 bool NetworkTimeService::begin() {
-  if (!rtc::configureClock() ||
-      !rtc::registerEventCallback(handleRtcEvent, this)) {
+  if (!rtc::configureClock() || !rtc::attachAlarmHandler(0, handleRtcEvent,
+                                                         this)) {
     _status = NetworkTimeServiceStatus::RtcUnavailable;
     _warnings |= NetworkTimeWarningRtcSetFailed;
     return false;
@@ -48,7 +48,7 @@ void NetworkTimeService::reset() {
   _provisionalClient.stop();
   _trustedClient.stop();
   rtc::clearAlarm(0);
-  rtc::clearEventCallback();
+  rtc::detachAlarmHandler(0);
   rtc::clearTime();
 }
 

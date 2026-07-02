@@ -115,9 +115,14 @@ bool EthernetLwipPort::service() {
   if (!_started || _netif == nullptr)
     return false;
 
-  const bool progressed = _netif->service();
+  return _netif->service();
+}
+
+void EthernetLwipPort::checkTimeouts() {
+  if (!_started)
+    return;
+
   sys_check_timeouts();
-  return progressed;
 }
 
 void EthernetLwipPort::setInputCallback(InputCallback callback, void *context) {

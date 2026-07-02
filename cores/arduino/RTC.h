@@ -47,7 +47,7 @@ public:
    * @brief Deferred RTC callback.
    * @param events ORed Event* bits that became pending.
    * @param unixTime Current Unix time when meaningful, or 0 when unavailable.
-   * @param context User pointer passed to registerEventCallback().
+   * @param context User pointer passed to the attached handler.
    *
    * The callback runs from the PendSV dispatch path, not directly from the RTC
    * interrupt handler.
@@ -93,6 +93,10 @@ public:
    *
    * Values map directly to the hardware MASK register encoding. Broader match
    * modes ignore fields above the selected precision.
+   *
+   * When the Ethernet stack is active, Mode2 alarm 0 is reserved for
+   * NetworkTimeService refresh scheduling. Applications using Ethernet must not
+   * reuse ALARM0 for their own RTC alarm callbacks.
    */
   enum class AlarmMatch : uint8_t {
     Disabled = 0,
@@ -121,9 +125,14 @@ public:
   /**
    * @brief RTC input clock prescaler selector.
    *
-   * Values intentionally match the 4-bit RTC prescaler encoding: 0x0 selects
-   * DIV1 and 0xA selects DIV1024. Encodings 0xB..0xF are reserved by the
-   * supported SAMD/SAME RTC hardware and are not exposed here.
+   * These values are API-level divider selectors. They are not portable raw
+   * CTRLA.PRESCALER bit patterns.
+   *
+   * Do not write static_cast<uint8_t>(Prescaler) directly into RTC hardware
+   * registers. SAMD21 encodes DIV1..DIV1024 as 0x0..0xA. SAMD5x/E5x reserves
+   * 0x0 as OFF and encodes DIV1..DIV1024 as 0x1..0xB. Use configure(),
+   * configureClock(), configureDebounce(), or the RTC.cpp encoder so the
+   * selected hardware family receives the correct raw field value.
    */
   enum class Prescaler : uint8_t {
     Div1 = 0x0,
@@ -143,16 +152,20 @@ public:
    * @brief RTC periodic interval selector for PER0..PER7 sources.
    *
    * These values map directly to the RTC periodic event/interrupt source index.
-   * Per SAMD21 19.6.9.1 and SAMD5x/E5x 21.6.8.1, PERn is generated from the
-   * RTC prescaler on the 0-to-1 transition of prescaler bit n+2, so the source
-   * period is 2^(n + 3) cycles of the internal RTC prescaler clock. For
-   * example, PER0 fires every 8 cycles, PER1 every 16 cycles, and PER7 every
-   * 1024 cycles.
+   * Per SAMD21 19.6.9.1 and SAMD5x/E5x 21.6.8.1, PERn is generated on the
+   * 0-to-1 transition of prescaler bit n+2, so the source period is 2^(n + 3)
+   * cycles of the periodic source clock. For example, PER0 fires every 8
+   * cycles, PER1 every 16 cycles, and PER7 every 1024 cycles.
    *
-   * Periodic sources are independent of the counter prescaler except that the
-   * hardware does not generate periodic events when the RTC prescaler is DIV1.
-   * For the standard Mode2 clock path configured by configureClock(), the RTC
-   * input is 1.024 kHz and PER7 is therefore the one-second periodic source.
+   * SAMD5x/E5x periodic sources are independent of the counter prescaler value
+   * except when the raw CTRLA.PRESCALER field is OFF. This API does not expose
+   * the OFF encoding. For the standard Mode2 clock path configured by
+   * configureClock(), the RTC input is 1.024 kHz and PER7 is therefore the
+   * one-second periodic source.
+   *
+   * When the Ethernet stack is active, PER4 is reserved for lwIP NO_SYS timer
+   * service. Applications using Ethernet must not reuse PER4 for debounce,
+   * alarms, or other periodic callbacks.
    */
   enum class PeriodicInterval : uint8_t {
     Disabled = 0xFF,
@@ -210,14 +223,14 @@ public:
    * @brief Debounce-oriented RTC configuration.
    *
    * The default preset uses the same chip-family 1.024 kHz RTC input as
-   * configureClock(), switches the counter to Mode1, keeps the counter
-   * prescaler away from DIV1 so periodic sources are generated, and enables
-   * PER2 as an event output by default. PER2 is 32 cycles of the 1.024 kHz RTC
-   * input, or about 31.25 ms.
+   * configureClock(), switches the counter to Mode1, and enables PER2 as an
+   * event output by default. PER2 is 32 cycles of the 1.024 kHz RTC input, or
+   * about 31.25 ms.
    *
    * Periodic events are generated from the RTC prescaler taps and are
-   * independent of the counter mode except that the hardware suppresses them
-   * when the counter prescaler is DIV1.
+   * independent of the counter mode. On SAMD5x/E5x they require the raw
+   * CTRLA.PRESCALER field to be something other than OFF, which this API
+   * already guarantees for every exposed Prescaler value.
    */
   struct DebounceConfig {
     OperatingMode mode = OperatingMode::Count16;
@@ -455,12 +468,41 @@ public:
   /** @brief Return the raw Mode2 CLOCK register value. */
   static uint32_t counter();
   /**
-   * @brief Register a deferred RTC event callback.
+   * @brief Attach a deferred handler to one periodic interrupt source.
+   *
+   * This enables the selected periodic interrupt. The callback runs from the
+   * PendSV dispatch path and receives the single matching EventPeriodic* bit.
+   */
+  static bool attachPeriodicInterrupt(PeriodicInterval interval,
+                                      EventCallback callback,
+                                      void *context = nullptr);
+  /** @brief Disable one periodic interrupt source and clear its handler. */
+  static void detachPeriodicInterrupt(PeriodicInterval interval);
+  /**
+   * @brief Attach a deferred handler to one Mode2 alarm interrupt source.
+   *
+   * This only installs the handler. Use setAlarm() to program and enable the
+   * hardware alarm match.
+   */
+  static bool attachAlarmHandler(uint8_t index, EventCallback callback,
+                                 void *context = nullptr);
+  /** @brief Clear one Mode2 alarm handler without changing the alarm register. */
+  static void detachAlarmHandler(uint8_t index);
+  /** @brief Attach a deferred handler to Mode2 overflow events. */
+  static bool attachOverflowHandler(EventCallback callback,
+                                    void *context = nullptr);
+  /** @brief Clear the Mode2 overflow handler. */
+  static void detachOverflowHandler();
+  /**
+   * @brief Register a deferred aggregate RTC event callback.
+   *
+   * Prefer the source-specific attach* APIs for new code. This compatibility
+   * callback observes all queued RTC events but does not own individual sources.
    * @return false when callback is null or PendSV registration fails.
    */
   static bool registerEventCallback(EventCallback callback,
                                     void *context = nullptr);
-  /** @brief Remove the RTC event callback and clear pending callback state. */
+  /** @brief Remove all RTC callbacks and clear pending callback state. */
   static void clearEventCallback();
 
   /** @brief Enable the RTC peripheral bus clock. */

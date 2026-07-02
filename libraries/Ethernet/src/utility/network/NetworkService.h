@@ -1,5 +1,6 @@
 #pragma once
 
+#include <RTC.h>
 #include <utility/lwip/LwipPort.h>
 #include <utility/lwip/LwipTransportBackend.h>
 #include <utility/netif/FrameDriver.h>
@@ -43,6 +44,11 @@ public:
    * @brief Advance bounded network work.
    *
    * This delegates to `LwipPort::service()` only after `begin()` succeeds.
+   * lwIP `NO_SYS=1` timer advancement is driven separately from the RTC PER4
+   * callback installed by `begin()`. PER4 is reserved while this network
+   * service is active and must not be used by application RTC periodic
+   * callbacks. This call must stay bounded and must not wait for a lease,
+   * socket data, or PHY state changes.
    */
   bool service();
 
@@ -160,6 +166,9 @@ public:
   void clearDefaultProvider();
 
 private:
+  static void handleRtcTimeout(rtc::EventMask events, uint64_t unixTime,
+                               void *context);
+
   EthernetPacketAllocator *_packetAllocator;
   EthernetNetif _netif;
   LwipTransportBackend _socketBackend;

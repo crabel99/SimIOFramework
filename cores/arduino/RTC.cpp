@@ -60,9 +60,23 @@ uint16_t controlModeBits(rtc::OperatingMode mode) {
                                << ControlModePosition);
 }
 
+// Prescaler is a semantic public enum, not a raw register field. D5x/E5x
+// hardware uses CTRLA.PRESCALER=0 as OFF and shifts DIV1..DIV1024 up by one;
+// D21 encodes DIV1..DIV1024 directly as 0x0..0xA. Keep all raw register writes
+// behind this encoder so call sites cannot accidentally use the public enum as
+// a family-portable bit pattern.
+uint16_t encodedPrescaler(rtc::Prescaler prescaler) {
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) ||       \
+    defined(__SAME54__)
+  return static_cast<uint16_t>(prescaler) + 1u;
+#else
+  return static_cast<uint16_t>(prescaler);
+#endif
+}
+
 uint16_t controlPrescalerBits(rtc::Prescaler prescaler) {
   return static_cast<uint16_t>(
-      (static_cast<uint16_t>(prescaler) << ControlPrescalerPosition) &
+      (encodedPrescaler(prescaler) << ControlPrescalerPosition) &
       ControlPrescalerMask);
 }
 
@@ -302,8 +316,16 @@ uint32_t enterCritical() {
 void exitCritical(uint32_t primask) { __set_PRIMASK(primask); }
 
 struct RtcState {
+  struct HandlerSlot {
+    rtc::EventCallback callback = nullptr;
+    void *context = nullptr;
+  };
+
   rtc::EventCallback callback = nullptr;
   void *callbackContext = nullptr;
+  HandlerSlot periodicHandlers[8];
+  HandlerSlot alarmHandlers[2];
+  HandlerSlot overflowHandler;
   rtc::EventMask pendingEvents = rtc::EventNone;
   uint64_t pendingUnixTime = 0;
   uint64_t unixTime = 0;
@@ -427,16 +449,44 @@ void rtcPendSvService(uint8_t serviceId, void *context) {
 
   rtc::EventCallback callback = nullptr;
   void *callbackContext = nullptr;
+  RtcState::HandlerSlot periodicHandlers[8];
+  RtcState::HandlerSlot alarmHandlers[2];
+  RtcState::HandlerSlot overflowHandler;
   rtc::EventMask events = rtc::EventNone;
   uint64_t unixTime = 0;
 
   const uint32_t primask = enterCritical();
   callback = rtcState.callback;
   callbackContext = rtcState.callbackContext;
+  for (uint8_t index = 0; index < 8u; ++index)
+    periodicHandlers[index] = rtcState.periodicHandlers[index];
+  for (uint8_t index = 0; index < 2u; ++index)
+    alarmHandlers[index] = rtcState.alarmHandlers[index];
+  overflowHandler = rtcState.overflowHandler;
   events = rtcState.pendingEvents;
   unixTime = rtcState.pendingUnixTime;
   rtcState.pendingEvents = rtc::EventNone;
   exitCritical(primask);
+
+  for (uint8_t index = 0; index < 8u; ++index) {
+    const rtc::EventMask event = static_cast<rtc::EventMask>(1u << index);
+    if ((events & event) != 0u && periodicHandlers[index].callback != nullptr)
+      periodicHandlers[index].callback(event, unixTime,
+                                       periodicHandlers[index].context);
+  }
+
+  if ((events & rtc::EventAlarm0) != 0u &&
+      alarmHandlers[0].callback != nullptr)
+    alarmHandlers[0].callback(rtc::EventAlarm0, unixTime,
+                              alarmHandlers[0].context);
+  if ((events & rtc::EventAlarm1) != 0u &&
+      alarmHandlers[1].callback != nullptr)
+    alarmHandlers[1].callback(rtc::EventAlarm1, unixTime,
+                              alarmHandlers[1].context);
+  if ((events & rtc::EventOverflow) != 0u &&
+      overflowHandler.callback != nullptr)
+    overflowHandler.callback(rtc::EventOverflow, unixTime,
+                             overflowHandler.context);
 
   if (callback != nullptr && events != rtc::EventNone)
     callback(events, unixTime, callbackContext);
@@ -971,8 +1021,7 @@ bool rtc::configureDebounce(const DebounceConfig &config) {
   if (config.interval == PeriodicInterval::Disabled)
     return configureDebounce(PeriodicInterval::Disabled, config.interrupt);
 
-  if (config.mode == OperatingMode::Reserved ||
-      config.prescaler == Prescaler::Div1) {
+  if (config.mode == OperatingMode::Reserved) {
     rtcState.lastError = Error::UnsupportedDebounce;
     return false;
   }
@@ -1058,6 +1107,89 @@ void rtc::clearTime() {
 
 uint32_t rtc::counter() { return clockReg(); }
 
+bool rtc::attachPeriodicInterrupt(PeriodicInterval interval,
+                                  EventCallback callback, void *context) {
+  const uint16_t mask = periodicInterruptMask(interval);
+  if (callback == nullptr || interval == PeriodicInterval::Disabled ||
+      mask == 0u || !ensurePendSvServiceRegistered()) {
+    rtcState.lastError = Error::UnsupportedDebounce;
+    return false;
+  }
+
+  const uint8_t index = static_cast<uint8_t>(interval);
+  const uint32_t primask = enterCritical();
+  rtcState.periodicHandlers[index].callback = callback;
+  rtcState.periodicHandlers[index].context = context;
+  exitCritical(primask);
+
+  return setPeriodicInterrupt(interval, true);
+}
+
+void rtc::detachPeriodicInterrupt(PeriodicInterval interval) {
+  if (interval == PeriodicInterval::Disabled)
+    return;
+
+  const uint8_t index = static_cast<uint8_t>(interval);
+  if (index >= 8u)
+    return;
+
+  setPeriodicInterrupt(interval, false);
+  const uint32_t primask = enterCritical();
+  rtcState.periodicHandlers[index] = RtcState::HandlerSlot{};
+  rtcState.pendingEvents &=
+      static_cast<EventMask>(~static_cast<EventMask>(1u << index));
+  exitCritical(primask);
+}
+
+bool rtc::attachAlarmHandler(uint8_t index, EventCallback callback,
+                             void *context) {
+  if (callback == nullptr || !alarmSupported(index) ||
+      !ensurePendSvServiceRegistered()) {
+    rtcState.lastError = Error::UnsupportedAlarm;
+    return false;
+  }
+
+  const uint32_t primask = enterCritical();
+  rtcState.alarmHandlers[index].callback = callback;
+  rtcState.alarmHandlers[index].context = context;
+  exitCritical(primask);
+  rtcState.lastError = Error::None;
+  return true;
+}
+
+void rtc::detachAlarmHandler(uint8_t index) {
+  if (index >= 2u)
+    return;
+
+  const uint32_t primask = enterCritical();
+  rtcState.alarmHandlers[index] = RtcState::HandlerSlot{};
+  rtcState.pendingEvents &=
+      static_cast<EventMask>(index == 0 ? ~EventAlarm0 : ~EventAlarm1);
+  exitCritical(primask);
+}
+
+bool rtc::attachOverflowHandler(EventCallback callback, void *context) {
+  if (callback == nullptr || !ensurePendSvServiceRegistered()) {
+    rtcState.lastError = Error::PendSvRegistrationFailed;
+    return false;
+  }
+
+  const uint32_t primask = enterCritical();
+  rtcState.overflowHandler.callback = callback;
+  rtcState.overflowHandler.context = context;
+  exitCritical(primask);
+  enableInterrupts(OverflowInterrupt);
+  rtcState.lastError = Error::None;
+  return true;
+}
+
+void rtc::detachOverflowHandler() {
+  const uint32_t primask = enterCritical();
+  rtcState.overflowHandler = RtcState::HandlerSlot{};
+  rtcState.pendingEvents &= static_cast<EventMask>(~EventOverflow);
+  exitCritical(primask);
+}
+
 bool rtc::registerEventCallback(EventCallback callback, void *context) {
   if (callback == nullptr || !ensurePendSvServiceRegistered())
     return false;
@@ -1074,6 +1206,11 @@ void rtc::clearEventCallback() {
   const uint32_t primask = enterCritical();
   rtcState.callback = nullptr;
   rtcState.callbackContext = nullptr;
+  for (uint8_t index = 0; index < 8u; ++index)
+    rtcState.periodicHandlers[index] = RtcState::HandlerSlot{};
+  for (uint8_t index = 0; index < 2u; ++index)
+    rtcState.alarmHandlers[index] = RtcState::HandlerSlot{};
+  rtcState.overflowHandler = RtcState::HandlerSlot{};
   rtcState.pendingEvents = EventNone;
   exitCritical(primask);
   PendSV::instance().clearService(pendSvServiceId());

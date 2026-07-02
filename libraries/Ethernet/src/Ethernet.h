@@ -9,6 +9,12 @@
  * owns hardware bring-up, raw frame RX/TX, cached link state, PHY interrupt
  * scheduling, MIIM link-refresh operations, and carrier/link callbacks.
  *
+ * The higher Ethernet network stack configures RTC as a Mode2 clock source.
+ * While Ethernet networking is active, RTC ALARM0 is reserved for
+ * NetworkTimeService refresh scheduling and RTC PER4 is reserved for lwIP
+ * NO_SYS timeout service. Applications that use Ethernet must not reuse those
+ * RTC sources. Ethernet examples should state this reservation explicitly.
+ *
  * This file intentionally does not define TCP, UDP, DHCP, DNS, TLS, lwIP pbuf
  * ownership, or socket behavior. Those belong above this boundary.
  */
@@ -49,6 +55,8 @@ enum EthernetHardwareStatus {
  * - Automatic runtime link-change detection requires an active PHY interrupt
  *   pin configured with `setPhyInterruptPin()`. This class does not contain a
  *   hidden PHY polling fallback.
+ * - The network stack above this class configures RTC as a Mode2 clock and
+ *   reserves RTC ALARM0 for time refresh and RTC PER4 for lwIP timers.
  *
  * `EthernetClass` is not a TCP/IP stack. It does not own sockets, IP
  * addresses, DHCP, DNS, TLS state, or lwIP packet lifetimes.
@@ -240,6 +248,11 @@ public:
 
   /**
    * @brief Advance pending MIIM/link-management work by one bounded step.
+   *
+   * Normal PHY interrupt handling schedules this work through the PHY PendSV
+   * path, and GMAC management-complete events also advance it. This public
+   * entry point remains for explicit setup, diagnostics, and tests; it must not
+   * become a blocking sketch-level polling requirement for frame RX/TX.
    */
   bool service();
 

@@ -96,6 +96,14 @@ public:
    * @brief Advance bounded netif/driver work only while started.
    */
   bool service();
+  /**
+   * @brief Run due lwIP NO_SYS timeout handlers.
+   *
+   * This is normally driven by the RTC periodic interrupt selected by
+   * NetworkService. It is separate from service() so packet/driver progress
+   * does not also own lwIP timer progression.
+   */
+  void checkTimeouts();
 
   void setInputCallback(InputCallback callback, void *context = nullptr);
   void clearInputCallback();
