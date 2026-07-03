@@ -128,13 +128,18 @@ public:
   /** @brief Clear the async AES callback and cancel queued callback dispatch. */
   static void clearEventCallback();
   /**
-   * @brief Start one AES-128 ECB block without blocking.
+   * @brief Start one AES ECB block without blocking.
    *
    * `output` is filled before `EventComplete` is delivered. `key`, `input`, and
    * `output` must remain valid until the callback fires. Returns false when AES
    * is unavailable, a pointer is invalid, the callback service is not
-   * registered, or a previous async block is still active.
+   * registered, or a previous async block is still active. `keySize` selects
+   * 128-, 192-, or 256-bit AES and `key` must contain the matching 4/6/8 words.
    */
+  static bool startEcbAsync(Direction direction, KeySize keySize,
+                            const uint32_t *key, const uint32_t input[4],
+                            uint32_t output[4]);
+  /** @brief Compatibility wrapper for the AES-128 ECB async path. */
   static bool startEcb128Async(Direction direction, const uint32_t key[4],
                                const uint32_t input[4], uint32_t output[4]);
   /**

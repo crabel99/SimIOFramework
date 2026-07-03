@@ -40,8 +40,11 @@ constexpr uint8_t Tls12Minor = 0x03;
 constexpr int StrictTls12CipherSuites[] = {
     MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, 0};
 
-constexpr int StrictTls13CipherSuites[] = {MBEDTLS_TLS1_3_AES_128_GCM_SHA256,
-                                           0};
+constexpr int StrictTls13Aes128GcmCipherSuites[] = {
+    MBEDTLS_TLS1_3_AES_128_GCM_SHA256, 0};
+
+constexpr int StrictTls13Aes256GcmCipherSuites[] = {
+    MBEDTLS_TLS1_3_AES_256_GCM_SHA384, 0};
 
 constexpr uint16_t StrictTlsSignatureAlgorithms[] = {
     MBEDTLS_TLS1_3_SIG_ECDSA_SECP256R1_SHA256,
@@ -59,8 +62,10 @@ bool policySupported(const TlsClientPolicy &policy) {
   const bool tls13Strict =
       policy.minVersion == TlsProtocolVersion::Tls13 &&
       policy.maxVersion == TlsProtocolVersion::Tls13 &&
-      policy.cipherSuite ==
-          TlsCipherSuite::Tls13EcdheEcdsaWithAes128GcmSha256;
+      (policy.cipherSuite ==
+           TlsCipherSuite::Tls13EcdheEcdsaWithAes128GcmSha256 ||
+       policy.cipherSuite ==
+           TlsCipherSuite::Tls13EcdheEcdsaWithAes256GcmSha384);
 
   return verificationSupported && (tls12Strict || tls13Strict);
 }
@@ -81,7 +86,9 @@ const int *ciphersuitesForPolicy(const TlsClientPolicy &policy) {
   case TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256:
     return StrictTls12CipherSuites;
   case TlsCipherSuite::Tls13EcdheEcdsaWithAes128GcmSha256:
-    return StrictTls13CipherSuites;
+    return StrictTls13Aes128GcmCipherSuites;
+  case TlsCipherSuite::Tls13EcdheEcdsaWithAes256GcmSha384:
+    return StrictTls13Aes256GcmCipherSuites;
   default:
     return StrictTls12CipherSuites;
   }

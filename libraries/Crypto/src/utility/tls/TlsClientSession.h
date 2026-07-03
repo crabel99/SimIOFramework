@@ -401,16 +401,68 @@ public:
   }
 
   /**
+   * @brief Start async AES-256-GCM encryption.
+   *
+   * This is the TLS record-protection primitive for
+   * TLS_AES_256_GCM_SHA384. It has the same nonce, AAD, and tag contract as
+   * AES-128-GCM but requires a 32-byte key and an exact hardware-backed AES-256
+   * path.
+   */
+  virtual bool
+  aesGcm256EncryptAsync(const uint8_t key[32], const uint8_t nonce[12],
+                        const uint8_t *aad, size_t aadLength,
+                        const uint8_t *plaintext, uint8_t *ciphertext,
+                        size_t length, uint8_t tag[16],
+                        TlsAesGcm128Callback callback, void *context) {
+    (void)key;
+    (void)nonce;
+    (void)aad;
+    (void)aadLength;
+    (void)plaintext;
+    (void)ciphertext;
+    (void)length;
+    (void)tag;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
+   * @brief Start async AES-256-GCM decryption and authentication.
+   *
+   * The plaintext output is valid only when the callback reports success.
+   * Providers without an exact hardware-backed AES-256-GCM path must fail
+   * closed.
+   */
+  virtual bool
+  aesGcm256DecryptAsync(const uint8_t key[32], const uint8_t nonce[12],
+                        const uint8_t *aad, size_t aadLength,
+                        const uint8_t *ciphertext, uint8_t *plaintext,
+                        size_t length, const uint8_t tag[16],
+                        TlsAesGcm128Callback callback, void *context) {
+    (void)key;
+    (void)nonce;
+    (void)aad;
+    (void)aadLength;
+    (void)ciphertext;
+    (void)plaintext;
+    (void)length;
+    (void)tag;
+    (void)callback;
+    (void)context;
+    return false;
+  }
+
+  /**
    * @brief Start async TLS AEAD encryption for a supported provider algorithm.
    *
-   * AES-128-GCM is the first implemented hardware path and is dispatched to
-   * `aesGcm128EncryptAsync()`. Other TLS AEAD algorithms are represented here
-   * so callers can fail closed through one generic Crypto boundary instead of
-   * falling back to software implicitly.
+   * AES-GCM is dispatched to the exact key-size provider hook. Other TLS AEAD
+   * algorithms are represented here so callers can fail closed through one
+   * generic Crypto boundary instead of falling back to software implicitly.
    *
-   * @todo Add async hardware implementations for AES-256-GCM, AES-CCM,
-   * AES-CCM-8, and ChaCha20-Poly1305 when those algorithms are required by
-   * non-Ethernet peripherals or expanded TLS profiles.
+   * @todo Add async hardware implementations for AES-CCM, AES-CCM-8, and
+   * ChaCha20-Poly1305 when those algorithms are required by non-Ethernet
+   * peripherals or expanded TLS profiles.
    */
   virtual bool aeadEncryptAsync(TlsAeadAlgorithm algorithm,
                                 const uint8_t *key, size_t keyLength,
@@ -423,6 +475,12 @@ public:
     if (algorithm == TlsAeadAlgorithm::Aes128Gcm && keyLength == 16 &&
         nonceLength == 12 && tagLength == 16) {
       return aesGcm128EncryptAsync(key, nonce, aad, aadLength, plaintext,
+                                   ciphertext, length, tag, callback,
+                                   context);
+    }
+    if (algorithm == TlsAeadAlgorithm::Aes256Gcm && keyLength == 32 &&
+        nonceLength == 12 && tagLength == 16) {
+      return aesGcm256EncryptAsync(key, nonce, aad, aadLength, plaintext,
                                    ciphertext, length, tag, callback,
                                    context);
     }
@@ -446,9 +504,9 @@ public:
    * Unsupported algorithms fail closed by default. This keeps Crypto generic
    * while making each production AEAD shape an explicit provider capability.
    *
-   * @todo Add async hardware implementations for AES-256-GCM, AES-CCM,
-   * AES-CCM-8, and ChaCha20-Poly1305 when those algorithms are promoted from
-   * stubs to supported Crypto provider capabilities.
+   * @todo Add async hardware implementations for AES-CCM, AES-CCM-8, and
+   * ChaCha20-Poly1305 when those algorithms are promoted from stubs to
+   * supported Crypto provider capabilities.
    */
   virtual bool aeadDecryptAsync(TlsAeadAlgorithm algorithm,
                                 const uint8_t *key, size_t keyLength,
@@ -461,6 +519,11 @@ public:
     if (algorithm == TlsAeadAlgorithm::Aes128Gcm && keyLength == 16 &&
         nonceLength == 12 && tagLength == 16) {
       return aesGcm128DecryptAsync(key, nonce, aad, aadLength, ciphertext,
+                                   plaintext, length, tag, callback, context);
+    }
+    if (algorithm == TlsAeadAlgorithm::Aes256Gcm && keyLength == 32 &&
+        nonceLength == 12 && tagLength == 16) {
+      return aesGcm256DecryptAsync(key, nonce, aad, aadLength, ciphertext,
                                    plaintext, length, tag, callback, context);
     }
 
@@ -537,6 +600,7 @@ enum class TlsProtocolVersion : uint8_t {
 enum class TlsCipherSuite : uint8_t {
   EcdheEcdsaWithAes128GcmSha256,
   Tls13EcdheEcdsaWithAes128GcmSha256,
+  Tls13EcdheEcdsaWithAes256GcmSha384,
 };
 
 /**

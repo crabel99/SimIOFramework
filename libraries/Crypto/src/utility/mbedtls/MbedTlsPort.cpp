@@ -121,12 +121,13 @@ template <typename T, size_t N> void secureZeroArray(T (&buffer)[N]) {
   secureZero(buffer, sizeof(buffer));
 }
 
-void copyAesKey(uint32_t destination[4], const uint32_t source[4]) {
-  for (uint8_t index = 0; index < 4; ++index)
+void copyAesKey(uint32_t destination[8], const uint32_t *source,
+                uint8_t wordCount) {
+  for (uint8_t index = 0; index < wordCount && index < 8; ++index)
     destination[index] = source[index];
 }
 
-void clearAesKey(uint32_t key[4]) { secureZero(key, sizeof(uint32_t) * 4); }
+void clearAesKey(uint32_t key[8]) { secureZero(key, sizeof(uint32_t) * 8); }
 
 void aesContextCallback(aes::EventMask events, void *context) {
   auto *aesContext = static_cast<AesEcb128Context *>(context);
@@ -138,12 +139,30 @@ void aesContextCallback(aes::EventMask events, void *context) {
     aesContext->callback(events, *aesContext, aesContext->callbackContext);
 }
 
-void loadWordsFromBytes(uint32_t words[4], const uint8_t bytes[16]) {
-  for (uint8_t word = 0; word < 4; ++word) {
+void loadWordsFromBytes(uint32_t *words, const uint8_t *bytes,
+                        uint8_t wordCount) {
+  for (uint8_t word = 0; word < wordCount; ++word) {
     words[word] = static_cast<uint32_t>(bytes[word * 4u]) |
                   (static_cast<uint32_t>(bytes[word * 4u + 1u]) << 8u) |
                   (static_cast<uint32_t>(bytes[word * 4u + 2u]) << 16u) |
                   (static_cast<uint32_t>(bytes[word * 4u + 3u]) << 24u);
+  }
+}
+
+void loadWordsFromBytes(uint32_t words[4], const uint8_t bytes[16]) {
+  loadWordsFromBytes(words, bytes, 4);
+}
+
+aes::KeySize keySizeFromWords(uint8_t keyWords) {
+  switch (keyWords) {
+  case 4:
+    return aes::KeySize::Bits128;
+  case 6:
+    return aes::KeySize::Bits192;
+  case 8:
+    return aes::KeySize::Bits256;
+  default:
+    return aes::KeySize::Bits128;
   }
 }
 
@@ -219,7 +238,7 @@ bool submitAesGcmEcb(AesGcm128Context &context, AesGcm128Context::Step step,
                                       void *),
                      const uint32_t input[4]) {
   context.step = step;
-  if (!aesEcb128SetEncryptKey(context.aes, context.key) ||
+  if (!aesEcbSetEncryptKey(context.aes, context.key, context.keyWords) ||
       !aesEcb128SetCallback(context.aes, callback, &context)) {
     return false;
   }
@@ -420,6 +439,7 @@ void entropyTrngCallback(trng::EventMask events, uint32_t value, void *context) 
 
 void aesEcb128Init(AesEcb128Context &context) {
   clearAesKey(context.key);
+  context.keyWords = 0;
   context.direction = aes::Direction::Encrypt;
   context.keyConfigured = false;
   context.busy = false;
@@ -433,21 +453,31 @@ void aesEcb128Free(AesEcb128Context &context) {
   aesEcb128Init(context);
 }
 
-bool aesEcb128SetEncryptKey(AesEcb128Context &context, const uint32_t key[4]) {
-  if (key == nullptr || context.busy)
+bool aesEcbSetEncryptKey(AesEcb128Context &context, const uint32_t *key,
+                         uint8_t keyWords) {
+  if (key == nullptr || context.busy ||
+      (keyWords != 4 && keyWords != 6 && keyWords != 8))
     return false;
 
-  copyAesKey(context.key, key);
+  clearAesKey(context.key);
+  copyAesKey(context.key, key, keyWords);
+  context.keyWords = keyWords;
   context.direction = aes::Direction::Encrypt;
   context.keyConfigured = true;
   return true;
+}
+
+bool aesEcb128SetEncryptKey(AesEcb128Context &context, const uint32_t key[4]) {
+  return aesEcbSetEncryptKey(context, key, 4);
 }
 
 bool aesEcb128SetDecryptKey(AesEcb128Context &context, const uint32_t key[4]) {
   if (key == nullptr || context.busy)
     return false;
 
-  copyAesKey(context.key, key);
+  clearAesKey(context.key);
+  copyAesKey(context.key, key, 4);
+  context.keyWords = 4;
   context.direction = aes::Direction::Decrypt;
   context.keyConfigured = true;
   return true;
@@ -474,10 +504,9 @@ bool aesEcb128CryptAsync(AesEcb128Context &context, const uint32_t input[4],
     return false;
 
   context.busy = true;
-  const bool submitted =
-      (context.direction == aes::Direction::Encrypt)
-          ? Crypto::encryptEcb128Async(context.key, input, output)
-          : Crypto::decryptEcb128Async(context.key, input, output);
+  const bool submitted = aes::startEcbAsync(
+      context.direction, keySizeFromWords(context.keyWords), context.key, input,
+      output);
   if (!submitted) {
     context.busy = false;
     Crypto::clearAesCallback();
@@ -489,6 +518,7 @@ bool aesEcb128CryptAsync(AesEcb128Context &context, const uint32_t input[4],
 void aesGcm128Init(AesGcm128Context &context) {
   aesEcb128Init(context.aes);
   clearAesKey(context.key);
+  context.keyWords = 0;
   secureZeroArray(context.hashKey);
   secureZeroArray(context.workInput);
   secureZeroArray(context.workOutput);
@@ -518,13 +548,21 @@ void aesGcm128Free(AesGcm128Context &context) {
   aesGcm128Init(context);
 }
 
-bool aesGcm128SetKey(AesGcm128Context &context, const uint8_t key[16]) {
-  if (context.busy || key == nullptr)
+bool aesGcmSetKey(AesGcm128Context &context, const uint8_t *key,
+                  size_t keyLength) {
+  if (context.busy || key == nullptr ||
+      (keyLength != 16 && keyLength != 24 && keyLength != 32))
     return false;
 
-  loadWordsFromBytes(context.key, key);
+  clearAesKey(context.key);
+  context.keyWords = static_cast<uint8_t>(keyLength / 4u);
+  loadWordsFromBytes(context.key, key, context.keyWords);
   context.keyConfigured = true;
   return true;
+}
+
+bool aesGcm128SetKey(AesGcm128Context &context, const uint8_t key[16]) {
+  return aesGcmSetKey(context, key, 16);
 }
 
 bool aesGcm128SetCallback(AesGcm128Context &context, AesGcm128Callback callback,
@@ -1231,6 +1269,68 @@ bool MbedTlsCryptoProvider::aesGcm128DecryptAsync(
   }
 
   if (!Crypto::MbedTlsPort::aesGcm128SetKey(_gcmOperation, key) ||
+      !Crypto::MbedTlsPort::aesGcm128SetCallback(
+          _gcmOperation, MbedTlsCryptoProvider::handleGcmComplete, this)) {
+    return false;
+  }
+
+  _gcmCallback = callback;
+  _gcmCallbackContext = context;
+  _gcmBusy = true;
+  if (!Crypto::MbedTlsPort::aesGcm128DecryptAsync(_gcmOperation, nonce, aad,
+                                                  aadLength, ciphertext,
+                                                  plaintext, length, tag)) {
+    finishGcm(false);
+    return false;
+  }
+
+  return true;
+}
+
+bool MbedTlsCryptoProvider::aesGcm256EncryptAsync(
+    const uint8_t key[32], const uint8_t nonce[12], const uint8_t *aad,
+    size_t aadLength, const uint8_t *plaintext, uint8_t *ciphertext,
+    size_t length, uint8_t tag[16], Crypto::TlsAesGcm128Callback callback,
+    void *context) {
+  if (_gcmBusy || key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (plaintext == nullptr && length != 0) ||
+      (ciphertext == nullptr && length != 0)) {
+    return false;
+  }
+
+  if (!Crypto::MbedTlsPort::aesGcmSetKey(_gcmOperation, key, 32) ||
+      !Crypto::MbedTlsPort::aesGcm128SetCallback(
+          _gcmOperation, MbedTlsCryptoProvider::handleGcmComplete, this)) {
+    return false;
+  }
+
+  _gcmCallback = callback;
+  _gcmCallbackContext = context;
+  _gcmBusy = true;
+  if (!Crypto::MbedTlsPort::aesGcm128EncryptAsync(_gcmOperation, nonce, aad,
+                                                  aadLength, plaintext,
+                                                  ciphertext, length, tag)) {
+    finishGcm(false);
+    return false;
+  }
+
+  return true;
+}
+
+bool MbedTlsCryptoProvider::aesGcm256DecryptAsync(
+    const uint8_t key[32], const uint8_t nonce[12], const uint8_t *aad,
+    size_t aadLength, const uint8_t *ciphertext, uint8_t *plaintext,
+    size_t length, const uint8_t tag[16], Crypto::TlsAesGcm128Callback callback,
+    void *context) {
+  if (_gcmBusy || key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (ciphertext == nullptr && length != 0) ||
+      (plaintext == nullptr && length != 0)) {
+    return false;
+  }
+
+  if (!Crypto::MbedTlsPort::aesGcmSetKey(_gcmOperation, key, 32) ||
       !Crypto::MbedTlsPort::aesGcm128SetCallback(
           _gcmOperation, MbedTlsCryptoProvider::handleGcmComplete, this)) {
     return false;

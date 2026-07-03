@@ -40,7 +40,8 @@ using AesEcb128Callback =
  * peripheral has raised its interrupt.
  */
 struct AesEcb128Context {
-  uint32_t key[4] = {};
+  uint32_t key[8] = {};
+  uint8_t keyWords = 0;
   aes::Direction direction = aes::Direction::Encrypt;
   bool keyConfigured = false;
   bool busy = false;
@@ -50,6 +51,8 @@ struct AesEcb128Context {
 
 void aesEcb128Init(AesEcb128Context &context);
 void aesEcb128Free(AesEcb128Context &context);
+bool aesEcbSetEncryptKey(AesEcb128Context &context, const uint32_t *key,
+                         uint8_t keyWords);
 bool aesEcb128SetEncryptKey(AesEcb128Context &context, const uint32_t key[4]);
 bool aesEcb128SetDecryptKey(AesEcb128Context &context, const uint32_t key[4]);
 bool aesEcb128SetCallback(AesEcb128Context &context,
@@ -64,7 +67,7 @@ using AesGcm128Callback = void (*)(bool success, AesGcm128Context &context,
                                    void *user);
 
 /**
- * @brief Async AES-128-GCM one-shot operation context.
+ * @brief Async AES-GCM one-shot operation context.
  *
  * The context implements GCM as a hardware-backed state machine: AES-ECB
  * encrypts counter blocks, AES GFMUL advances GHASH, and the wrapper performs
@@ -86,7 +89,8 @@ struct AesGcm128Context {
   };
 
   AesEcb128Context aes = {};
-  uint32_t key[4] = {};
+  uint32_t key[8] = {};
+  uint8_t keyWords = 0;
   uint32_t hashKey[4] = {};
   uint32_t workInput[4] = {};
   uint32_t workOutput[4] = {};
@@ -112,6 +116,8 @@ struct AesGcm128Context {
 
 void aesGcm128Init(AesGcm128Context &context);
 void aesGcm128Free(AesGcm128Context &context);
+bool aesGcmSetKey(AesGcm128Context &context, const uint8_t *key,
+                  size_t keyLength);
 bool aesGcm128SetKey(AesGcm128Context &context, const uint8_t key[16]);
 bool aesGcm128SetCallback(AesGcm128Context &context, AesGcm128Callback callback,
                           void *callbackContext = nullptr);
@@ -217,6 +223,18 @@ public:
                              Crypto::TlsAesGcm128Callback callback,
                              void *context) override;
   bool aesGcm128DecryptAsync(const uint8_t key[16], const uint8_t nonce[12],
+                             const uint8_t *aad, size_t aadLength,
+                             const uint8_t *ciphertext, uint8_t *plaintext,
+                             size_t length, const uint8_t tag[16],
+                             Crypto::TlsAesGcm128Callback callback,
+                             void *context) override;
+  bool aesGcm256EncryptAsync(const uint8_t key[32], const uint8_t nonce[12],
+                             const uint8_t *aad, size_t aadLength,
+                             const uint8_t *plaintext, uint8_t *ciphertext,
+                             size_t length, uint8_t tag[16],
+                             Crypto::TlsAesGcm128Callback callback,
+                             void *context) override;
+  bool aesGcm256DecryptAsync(const uint8_t key[32], const uint8_t nonce[12],
                              const uint8_t *aad, size_t aadLength,
                              const uint8_t *ciphertext, uint8_t *plaintext,
                              size_t length, const uint8_t tag[16],

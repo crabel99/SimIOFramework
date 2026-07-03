@@ -335,9 +335,13 @@ void aes::clearEventCallback() {
   asyncState.serviceRegistered = false;
 }
 
-bool aes::startEcb128Async(Direction direction, const uint32_t key[4],
-                           const uint32_t input[4], uint32_t output[4]) {
+bool aes::startEcbAsync(Direction direction, KeySize keySize,
+                        const uint32_t *key, const uint32_t input[4],
+                        uint32_t output[4]) {
   if (key == nullptr || input == nullptr || output == nullptr)
+    return false;
+  const uint8_t wordCount = expectedKeyWords(keySize);
+  if (wordCount == 0)
     return false;
   if (!ensurePendSvServiceRegistered())
     return false;
@@ -354,8 +358,8 @@ bool aes::startEcb128Async(Direction direction, const uint32_t key[4],
   exitCritical(primask);
 
   begin();
-  configure(Mode::Ecb, KeySize::Bits128, direction);
-  if (!writeKey(key, 4)) {
+  configure(Mode::Ecb, keySize, direction);
+  if (!writeKey(key, wordCount)) {
     end();
     primask = enterCritical();
     asyncState.busy = false;
@@ -373,6 +377,11 @@ bool aes::startEcb128Async(Direction direction, const uint32_t key[4],
   NVIC_EnableIRQ(static_cast<IRQn_Type>(irqNumber()));
   start();
   return true;
+}
+
+bool aes::startEcb128Async(Direction direction, const uint32_t key[4],
+                           const uint32_t input[4], uint32_t output[4]) {
+  return startEcbAsync(direction, KeySize::Bits128, key, input, output);
 }
 
 bool aes::startGaloisMultiplyAsync(const uint32_t hashKey[4],
