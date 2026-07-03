@@ -585,6 +585,56 @@ int samd_mbedtls_ecdsa_p384_sign_start(const uint8_t privateKey[48],
   return 1;
 }
 
+int samd_mbedtls_rsa_pss_verify_start(
+    int sha384, const uint8_t *publicKey, size_t publicKeyLength,
+    const uint8_t *hash, size_t hashLength, const uint8_t *signature,
+    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+    void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      publicKey == nullptr || publicKeyLength == 0 || hash == nullptr ||
+      signature == nullptr || signatureLength == 0 || callback == nullptr) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    samd_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->signatureVerifyAsync(
+          sha384 != 0 ? Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha384
+                      : Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha256,
+          publicKey, publicKeyLength, hash, hashLength, signature,
+          signatureLength,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            samd_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
 int samd_mbedtls_aes_gcm128_encrypt_start(
     const uint8_t key[16], const uint8_t nonce[12], const uint8_t *aad,
     size_t aadLength, const uint8_t *plaintext, uint8_t *ciphertext,

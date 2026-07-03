@@ -55,10 +55,9 @@ extern time_t mbedtls_platform_time(time_t *time);
   MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,                           \
       MBEDTLS_TLS1_3_AES_128_GCM_SHA256
 
-/* RSA support is intentionally not part of the Arduino TLS profile. TF-PSA may
- * still compile RSA internals as dependency glue, but this profile does not enable RSA
- * ciphersuites, RSA PSA wants, or RSA provider operations. Add RSA signing only
- * as an explicit future compatibility profile.
+/* RSA support is limited to async hardware-backed RSA-PSS public-key
+ * verification. RSA key exchange, RSA signing, RSA decryption, and PKCS#1 v1.5
+ * signature fallback are intentionally not part of this profile.
  */
 
 /* Mbed TLS 4.x delegates cryptographic feature selection to PSA. Keep the
@@ -74,6 +73,7 @@ extern time_t mbedtls_platform_time(time_t *time);
     defined(__SAME54__) || defined(TARGET_SAME54)
 #define MBEDTLS_ASYNC_HARDWARE_ECDH
 #define MBEDTLS_ASYNC_HARDWARE_ECDSA
+#define MBEDTLS_ASYNC_HARDWARE_RSA
 #define MBEDTLS_ASYNC_HARDWARE_AEAD
 #define MBEDTLS_ASYNC_HARDWARE_RANDOM
 #endif
@@ -99,3 +99,9 @@ extern time_t mbedtls_platform_time(time_t *time);
 #define PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_GENERATE 1
 #define PSA_WANT_KEY_TYPE_ECC_KEY_PAIR_IMPORT 1
 #define PSA_WANT_KEY_TYPE_ECC_PUBLIC_KEY 1
+
+#if defined(MBEDTLS_ASYNC_HARDWARE_RSA)
+#define MBEDTLS_X509_RSASSA_PSS_SUPPORT
+#define PSA_WANT_ALG_RSA_PSS 1
+#define PSA_WANT_KEY_TYPE_RSA_PUBLIC_KEY 1
+#endif

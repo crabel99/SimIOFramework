@@ -1,8 +1,15 @@
+#define MBEDTLS_DECLARE_PRIVATE_IDENTIFIERS
 #include "MbedTlsPort.h"
 
+#include <mbedtls/private/bignum.h>
+#include <mbedtls/platform.h>
 #include <mbedtls/platform_util.h>
 
 #include <string.h>
+
+extern "C" int mbedtls_rsa_parse_pubkey(mbedtls_rsa_context *rsa,
+                                         const unsigned char *key,
+                                         size_t keylen);
 
 namespace Crypto::MbedTlsPort {
 
@@ -63,6 +70,9 @@ constexpr uint16_t EcdsaSignWorkspaceOffset =
 constexpr uint16_t EcdsaSignWorkspaceLength = MaxEccLength * 8u + 44u;
 constexpr uint16_t EcdsaSignWorkspaceEnd =
     EcdsaSignWorkspaceOffset + EcdsaSignWorkspaceLength;
+constexpr uint16_t RsaModulusOffset = 0u;
+constexpr uint16_t RsaExpModAlignment = 4u;
+constexpr uint16_t RsaExponentMaxLength = 8u;
 
 const uint8_t P256Prime[P256Length] = {
     0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x00u, 0x00u, 0x00u, 0x01u,
@@ -1161,12 +1171,22 @@ MbedTlsCryptoProvider::MbedTlsCryptoProvider()
       _ecdsaReductionSetup(), _ecdsaPublicKeyValidation(), _ecdsaVerify(),
       _ecdsaResult(),
       _ecdsaCallback(nullptr), _ecdsaCallbackContext(nullptr),
-      _ecdsaStep(EcdsaVerifyStep::Idle), _ecdsaBusy(false)
+      _ecdsaStep(EcdsaVerifyStep::Idle), _ecdsaBusy(false), _rsaOperation(),
+      _rsaContext(), _rsaHash(nullptr), _rsaSignature(nullptr),
+      _rsaEncoded(nullptr),
+      _rsaCallback(nullptr), _rsaCallbackContext(nullptr),
+      _rsaModulusLength(0), _rsaHashLength(0),
+      _rsaAlgorithm(Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha256),
+      _rsaContextInitialized(false), _rsaBusy(false)
 #endif
 {
   entropyInit(_directRandom);
   aesGcm128Init(_gcmOperation);
   aesCcm128Init(_ccmOperation);
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+  mbedtls_rsa_init(&_rsaContext);
+  _rsaContextInitialized = true;
+#endif
 }
 
 MbedTlsCryptoProvider::~MbedTlsCryptoProvider() { reset(); }
@@ -1200,11 +1220,12 @@ void MbedTlsCryptoProvider::reset() {
   _ccmCallbackContext = nullptr;
   _ccmBusy = false;
 #ifdef CRYPTO_HARDWARE_AVAILABLE
-  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy)
+  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || _rsaBusy)
     Crypto::clearPukccCallback();
   clearEcdhWorkspace();
   clearEcdsaSignWorkspace();
   clearEcdsaWorkspace();
+  clearRsaWorkspace();
   _ecdhOperation = {};
   _ecdhSharedSecret = nullptr;
   _ecdhPublicKey = nullptr;
@@ -1229,6 +1250,13 @@ void MbedTlsCryptoProvider::reset() {
   _ecdsaCallbackContext = nullptr;
   _ecdsaStep = EcdsaVerifyStep::Idle;
   _ecdsaBusy = false;
+  _rsaOperation = {};
+  _rsaCallback = nullptr;
+  _rsaCallbackContext = nullptr;
+  _rsaModulusLength = 0;
+  _rsaHashLength = 0;
+  _rsaAlgorithm = Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha256;
+  _rsaBusy = false;
 #endif
 }
 
@@ -1408,6 +1436,13 @@ bool MbedTlsCryptoProvider::signatureVerifyAsync(
   (void)context;
   return false;
 #else
+  if (algorithm == Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha256 ||
+      algorithm == Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha384) {
+    return startRsaPssVerifyAsync(algorithm, publicKey, publicKeyLengthValue,
+                                  hash, hashLength, signature,
+                                  signatureLengthValue, callback, context);
+  }
+
   const EccCurveParams *curve = curveForSignature(algorithm);
   if (curve == nullptr || publicKeyLengthValue != publicKeyLength(*curve) ||
       hashLength != curve->length ||
@@ -2430,6 +2465,221 @@ void MbedTlsCryptoProvider::finishEcdsa(bool success) {
 void MbedTlsCryptoProvider::clearEcdsaWorkspace() {
   clearCryptoRamRange(EcdsaModulusOffset,
                       EcdsaWorkspaceEnd - EcdsaModulusOffset);
+}
+
+bool MbedTlsCryptoProvider::startRsaPssVerifyAsync(
+    Crypto::TlsSignatureAlgorithm algorithm, const uint8_t *publicKey,
+    size_t publicKeyLength, const uint8_t *hash, size_t hashLength,
+    const uint8_t *signature, size_t signatureLength,
+    Crypto::TlsSignatureCallback callback, void *context) {
+  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || _rsaBusy ||
+      publicKey == nullptr || publicKeyLength == 0 || hash == nullptr ||
+      signature == nullptr || callback == nullptr) {
+    return false;
+  }
+
+  mbedtls_md_type_t mdAlgorithm = MBEDTLS_MD_NONE;
+  if (algorithm == Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha256 &&
+      hashLength == 32u) {
+    mdAlgorithm = MBEDTLS_MD_SHA256;
+  } else if (algorithm == Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha384 &&
+             hashLength == 48u) {
+    mdAlgorithm = MBEDTLS_MD_SHA384;
+  } else {
+    return false;
+  }
+
+  clearRsaWorkspace();
+  mbedtls_rsa_init(&_rsaContext);
+  _rsaContextInitialized = true;
+
+  if (mbedtls_rsa_parse_pubkey(&_rsaContext, publicKey, publicKeyLength) != 0 ||
+      mbedtls_rsa_set_padding(&_rsaContext, MBEDTLS_RSA_PKCS_V21,
+                              mdAlgorithm) != 0) {
+    clearRsaWorkspace();
+    return false;
+  }
+
+  const size_t modulusLength = mbedtls_rsa_get_len(&_rsaContext);
+  const size_t exponentLength =
+      mbedtls_mpi_size(&_rsaContext.MBEDTLS_PRIVATE(E));
+  if (modulusLength == 0 || modulusLength > UINT16_MAX ||
+      (modulusLength & 0x3u) != 0 || exponentLength == 0 ||
+      exponentLength > 4u || signatureLength != modulusLength) {
+    clearRsaWorkspace();
+    return false;
+  }
+
+  const uint16_t n = static_cast<uint16_t>(modulusLength);
+  const uint16_t modulusOffset = RsaModulusOffset;
+  const uint16_t constantOffset =
+      static_cast<uint16_t>(modulusOffset + n + 8u);
+  const uint16_t messageOffset =
+      static_cast<uint16_t>(constantOffset + n + 16u);
+  const uint16_t precompOffset =
+      static_cast<uint16_t>(messageOffset + n * 2u + 8u);
+  const uint16_t exponentOffset = static_cast<uint16_t>(
+      precompOffset + static_cast<uint16_t>(3u * (n + 4u) + 12u));
+  const uint16_t workspaceEnd =
+      static_cast<uint16_t>(exponentOffset + RsaExponentMaxLength);
+
+  if (!pukcc::validCryptoRamRange(RsaModulusOffset, workspaceEnd)) {
+    clearRsaWorkspace();
+    return false;
+  }
+
+  uint8_t exponentBuffer[4] = {};
+  uint8_t *modulusBuffer =
+      static_cast<uint8_t *>(mbedtls_calloc(1, modulusLength));
+  _rsaHash = static_cast<uint8_t *>(mbedtls_calloc(1, hashLength));
+  _rsaSignature = static_cast<uint8_t *>(mbedtls_calloc(1, modulusLength));
+  _rsaEncoded = static_cast<uint8_t *>(mbedtls_calloc(1, modulusLength));
+  if (modulusBuffer == nullptr || _rsaHash == nullptr ||
+      _rsaSignature == nullptr || _rsaEncoded == nullptr ||
+      mbedtls_mpi_write_binary(&_rsaContext.MBEDTLS_PRIVATE(N), modulusBuffer,
+                               modulusLength) != 0 ||
+      mbedtls_mpi_write_binary(&_rsaContext.MBEDTLS_PRIVATE(E), exponentBuffer,
+                               exponentLength) != 0) {
+    if (modulusBuffer != nullptr) {
+      mbedtls_platform_zeroize(modulusBuffer, modulusLength);
+      mbedtls_free(modulusBuffer);
+    }
+    clearRsaWorkspace();
+    return false;
+  }
+
+  memcpy(_rsaHash, hash, hashLength);
+  memcpy(_rsaSignature, signature, modulusLength);
+  clearCryptoRamRange(RsaModulusOffset, workspaceEnd);
+  if (!Crypto::PukccEcc::copyBigEndianToCryptoRam(
+          modulusOffset, static_cast<uint16_t>(n + 4u), modulusBuffer, n)) {
+    mbedtls_platform_zeroize(modulusBuffer, modulusLength);
+    mbedtls_free(modulusBuffer);
+    clearRsaWorkspace();
+    return false;
+  }
+  mbedtls_platform_zeroize(modulusBuffer, modulusLength);
+  mbedtls_free(modulusBuffer);
+
+  volatile uint8_t *exponentDestination = pukcc::cryptoRam(exponentOffset);
+  for (uint16_t index = 0; index < RsaExponentMaxLength; ++index)
+    exponentDestination[index] = 0;
+  for (size_t index = 0; index < exponentLength; ++index) {
+    exponentDestination[RsaExpModAlignment + index] =
+        exponentBuffer[exponentLength - 1u - index];
+  }
+  mbedtls_platform_zeroize(exponentBuffer, sizeof(exponentBuffer));
+
+  _rsaOperation = {};
+  _rsaOperation.reductionSetup.modulus =
+      pukcc::cryptoRamNearPointer(modulusOffset);
+  _rsaOperation.reductionSetup.reductionConstant =
+      pukcc::cryptoRamNearPointer(constantOffset);
+  _rsaOperation.reductionSetup.modulusLength = n;
+  _rsaOperation.reductionSetup.scratchR =
+      pukcc::cryptoRamNearPointer(messageOffset);
+  _rsaOperation.reductionSetup.scratchX =
+      pukcc::cryptoRamNearPointer(precompOffset);
+  _rsaOperation.exponentiation.message =
+      pukcc::cryptoRamNearPointer(messageOffset);
+  _rsaOperation.exponentiation.modulus =
+      pukcc::cryptoRamNearPointer(modulusOffset);
+  _rsaOperation.exponentiation.reductionConstant =
+      pukcc::cryptoRamNearPointer(constantOffset);
+  _rsaOperation.exponentiation.precomp =
+      pukcc::cryptoRamNearPointer(precompOffset);
+  _rsaOperation.exponentiation.exponent =
+      const_cast<const uint8_t *>(pukcc::cryptoRam(exponentOffset));
+  _rsaOperation.exponentiation.modulusLength = n;
+  _rsaOperation.exponentiation.exponentLength = RsaExponentMaxLength;
+  _rsaOperation.exponentiation.blinding = 0;
+  _rsaOperation.message = _rsaSignature;
+  _rsaOperation.messageLength = n;
+
+  _rsaCallback = callback;
+  _rsaCallbackContext = context;
+  _rsaModulusLength = n;
+  _rsaHashLength = static_cast<uint8_t>(hashLength);
+  _rsaAlgorithm = algorithm;
+  _rsaBusy = true;
+
+  if (!Crypto::PukccRsa::startPublicExpModAsync(
+          _rsaOperation, MbedTlsCryptoProvider::handleRsaComplete, this)) {
+    finishRsa(false);
+    return false;
+  }
+
+  return true;
+}
+
+void MbedTlsCryptoProvider::handleRsaComplete(
+    bool success, pukcc::ServiceResult &result,
+    Crypto::PukccRsa::PublicExpModOperation &operation, void *user) {
+  (void)result;
+  (void)operation;
+  auto *provider = static_cast<MbedTlsCryptoProvider *>(user);
+  if (provider == nullptr || !provider->_rsaBusy)
+    return;
+
+  if (success) {
+    const uint16_t messageOffset =
+        provider->_rsaOperation.exponentiation.message - pukcc::CryptoRamNearBase;
+    success = copyCryptoRamToBigEndian(messageOffset, provider->_rsaEncoded,
+                                       provider->_rsaModulusLength);
+  }
+
+  if (success) {
+    const mbedtls_md_type_t mdAlgorithm =
+        provider->_rsaAlgorithm ==
+                Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha384
+            ? MBEDTLS_MD_SHA384
+            : MBEDTLS_MD_SHA256;
+    success = mbedtls_rsa_rsassa_pss_verify_ext_from_encoded(
+                  &provider->_rsaContext, mdAlgorithm, provider->_rsaHashLength,
+                  provider->_rsaHash, mdAlgorithm, MBEDTLS_RSA_SALT_LEN_ANY,
+                  provider->_rsaEncoded) == 0;
+  }
+
+  provider->finishRsa(success);
+}
+
+void MbedTlsCryptoProvider::finishRsa(bool success) {
+  Crypto::TlsSignatureCallback callback = _rsaCallback;
+  void *callbackContext = _rsaCallbackContext;
+  _rsaOperation = {};
+  _rsaCallback = nullptr;
+  _rsaCallbackContext = nullptr;
+  _rsaBusy = false;
+  Crypto::clearPukccCallback();
+  clearRsaWorkspace();
+  _rsaModulusLength = 0;
+  _rsaHashLength = 0;
+
+  if (callback != nullptr)
+    callback(success, callbackContext);
+}
+
+void MbedTlsCryptoProvider::clearRsaWorkspace() {
+  clearCryptoRamRange(RsaModulusOffset, pukcc::CryptoRamUsableSize);
+  if (_rsaHash != nullptr) {
+    mbedtls_platform_zeroize(_rsaHash, _rsaHashLength);
+    mbedtls_free(_rsaHash);
+    _rsaHash = nullptr;
+  }
+  if (_rsaSignature != nullptr) {
+    mbedtls_platform_zeroize(_rsaSignature, _rsaModulusLength);
+    mbedtls_free(_rsaSignature);
+    _rsaSignature = nullptr;
+  }
+  if (_rsaEncoded != nullptr) {
+    mbedtls_platform_zeroize(_rsaEncoded, _rsaModulusLength);
+    mbedtls_free(_rsaEncoded);
+    _rsaEncoded = nullptr;
+  }
+  if (_rsaContextInitialized) {
+    mbedtls_rsa_free(&_rsaContext);
+    _rsaContextInitialized = false;
+  }
 }
 #endif
 

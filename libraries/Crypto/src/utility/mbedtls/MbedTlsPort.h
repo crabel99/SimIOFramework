@@ -8,6 +8,8 @@
 #include <utility/tls/TlsClientSession.h>
 #ifdef CRYPTO_HARDWARE_AVAILABLE
 #include <utility/pukcc/PukccEcc.h>
+#include <utility/pukcc/PukccRsa.h>
+#include <mbedtls/private/rsa.h>
 #endif
 #include <mbedtls/build_info.h>
 
@@ -421,6 +423,13 @@ private:
                              const uint8_t *signature,
                              Crypto::TlsSignatureCallback callback,
                              void *context);
+  bool startRsaPssVerifyAsync(Crypto::TlsSignatureAlgorithm algorithm,
+                              const uint8_t *publicKey,
+                              size_t publicKeyLength, const uint8_t *hash,
+                              size_t hashLength, const uint8_t *signature,
+                              size_t signatureLength,
+                              Crypto::TlsSignatureCallback callback,
+                              void *context);
   bool submitEcdhPublicKeyStep();
   static void handleEcdhPublicKeyService(pukcc::EventMask events,
                                          uint8_t service, uint16_t status,
@@ -441,6 +450,12 @@ private:
   bool submitEcdsaSignStep();
   void finishEcdsaSign(bool success);
   void clearEcdsaSignWorkspace();
+  static void handleRsaComplete(bool success, pukcc::ServiceResult &result,
+                                Crypto::PukccRsa::PublicExpModOperation
+                                    &operation,
+                                void *user);
+  void finishRsa(bool success);
+  void clearRsaWorkspace();
 #endif
   static void handleGcmComplete(bool success, AesGcm128Context &operation,
                                 void *user);
@@ -488,6 +503,18 @@ private:
   void *_ecdsaCallbackContext;
   EcdsaVerifyStep _ecdsaStep;
   bool _ecdsaBusy;
+  Crypto::PukccRsa::PublicExpModOperation _rsaOperation;
+  mbedtls_rsa_context _rsaContext;
+  uint8_t *_rsaHash;
+  uint8_t *_rsaSignature;
+  uint8_t *_rsaEncoded;
+  Crypto::TlsSignatureCallback _rsaCallback;
+  void *_rsaCallbackContext;
+  uint16_t _rsaModulusLength;
+  uint8_t _rsaHashLength;
+  Crypto::TlsSignatureAlgorithm _rsaAlgorithm;
+  bool _rsaContextInitialized;
+  bool _rsaBusy;
 #endif
 };
 

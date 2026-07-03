@@ -277,6 +277,10 @@ bool NetworkTimeTrustedClient::begin(const NetworkTimeTrustedSourcePolicy &polic
   _authenticatedUnixTime = 0;
   _responseSignatureVerified = false;
   _responseSignatureComplete = false;
+  _tlsLastError = 0;
+  _tlsLastMbedTlsResult = 0;
+  _tlsHandshakeState = 0;
+  _tlsVerificationResult = 0;
   memset(_responseSignatureHash, 0, sizeof(_responseSignatureHash));
   memset(_responseSignature, 0, sizeof(_responseSignature));
   return true;
@@ -354,6 +358,10 @@ void NetworkTimeTrustedClient::stop() {
   _authenticatedUnixTime = 0;
   _responseSignatureVerified = false;
   _responseSignatureComplete = false;
+  _tlsLastError = 0;
+  _tlsLastMbedTlsResult = 0;
+  _tlsHandshakeState = 0;
+  _tlsVerificationResult = 0;
   memset(_responseSignatureHash, 0, sizeof(_responseSignatureHash));
   memset(_responseSignature, 0, sizeof(_responseSignature));
 }
@@ -405,6 +413,10 @@ bool NetworkTimeTrustedClient::parseHttpUnixTimeResponse(const uint8_t *response
 }
 
 NetworkTimeTrustedClientStatus NetworkTimeTrustedClient::fail(NetworkTimeTrustedClientError error) {
+  _tlsLastError = _client.tlsLastError();
+  _tlsLastMbedTlsResult = _client.tlsLastMbedTlsResult();
+  _tlsHandshakeState = _client.tlsHandshakeState();
+  _tlsVerificationResult = _client.tlsVerificationResult();
   _client.stop();
   _status = NetworkTimeTrustedClientStatus::Failed;
   _lastError = error;

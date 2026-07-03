@@ -63,6 +63,10 @@ public:
   bool active() const;
   NetworkTimeTrustedClientStatus status() const { return _status; }
   NetworkTimeTrustedClientError lastError() const { return _lastError; }
+  int tlsLastError() const { return _tlsLastError; }
+  int tlsLastMbedTlsResult() const { return _tlsLastMbedTlsResult; }
+  int tlsHandshakeState() const { return _tlsHandshakeState; }
+  uint32_t tlsVerificationResult() const { return _tlsVerificationResult; }
   uint64_t receivedUnixTime() const { return _receivedUnixTime; }
   uint16_t pollLimit() const { return _pollLimit; }
 
@@ -105,4 +109,8 @@ private:
           [NetworkTimeTrustedSourcePolicy::EcdsaP256SignatureLength] = {};
   bool _responseSignatureVerified = false;
   bool _responseSignatureComplete = false;
+  int _tlsLastError = 0;
+  int _tlsLastMbedTlsResult = 0;
+  int _tlsHandshakeState = 0;
+  uint32_t _tlsVerificationResult = 0;
 };

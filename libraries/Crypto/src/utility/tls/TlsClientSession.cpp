@@ -949,7 +949,8 @@ TlsAsyncStatus TlsClientSession::handleMbedTlsResult(int result) {
     _status = TlsAsyncStatus::WantWrite;
     return _status;
   }
-#if defined(MBEDTLS_ECP_RESTARTABLE)
+#if defined(MBEDTLS_ECP_RESTARTABLE) || defined(MBEDTLS_ASYNC_HARDWARE_ECDH) || \
+    defined(MBEDTLS_ASYNC_HARDWARE_ECDSA) || defined(MBEDTLS_ASYNC_HARDWARE_RSA)
   if (result == MBEDTLS_ERR_SSL_CRYPTO_IN_PROGRESS) {
     _status = TlsAsyncStatus::Busy;
     return _status;
