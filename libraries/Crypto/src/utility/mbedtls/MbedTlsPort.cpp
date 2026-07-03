@@ -385,6 +385,239 @@ bool advanceAesGcm(AesGcm128Context &context) {
                          aesGcmEcbCallback, context.workInput);
 }
 
+bool validCcmTagLength(size_t tagLength) {
+  return tagLength == 8u || tagLength == 16u;
+}
+
+bool validCcmNonceLength(size_t nonceLength) {
+  return nonceLength >= 7u && nonceLength <= 13u;
+}
+
+bool ccmLengthFits(size_t length, uint8_t q) {
+  if (q >= sizeof(size_t))
+    return true;
+  return length < (static_cast<size_t>(1u) << (q * 8u));
+}
+
+void storeCcmEncodedLength(uint8_t *destination, uint8_t lengthBytes,
+                           size_t length) {
+  for (uint8_t index = 0; index < lengthBytes; ++index) {
+    const uint8_t shift = static_cast<uint8_t>((lengthBytes - 1u - index) * 8u);
+    destination[index] = static_cast<uint8_t>(length >> shift);
+  }
+}
+
+void buildCcmB0(AesCcm128Context &context, const uint8_t *nonce) {
+  const uint8_t q = static_cast<uint8_t>(15u - context.nonceLength);
+  context.workBlock[0] =
+      static_cast<uint8_t>((context.aadLength != 0 ? 0x40u : 0u) |
+                           (((context.tagLength - 2u) / 2u) << 3u) |
+                           (q - 1u));
+  memcpy(&context.workBlock[1], nonce, context.nonceLength);
+  storeCcmEncodedLength(&context.workBlock[1u + context.nonceLength], q,
+                        context.length);
+}
+
+void buildCcmCtr(AesCcm128Context &context, uint32_t counter) {
+  const uint8_t q = static_cast<uint8_t>(15u - context.nonceLength);
+  context.ctr[0] = static_cast<uint8_t>(q - 1u);
+  storeCcmEncodedLength(&context.ctr[1u + context.nonceLength], q, counter);
+}
+
+void xorCcmMacInput(AesCcm128Context &context) {
+  for (uint8_t index = 0; index < sizeof(context.workBlock); ++index)
+    context.workBlock[index] ^= context.mac[index];
+  loadWordsFromBytes(context.workInput, context.workBlock);
+}
+
+bool prepareCcmAadBlock(AesCcm128Context &context) {
+  secureZeroArray(context.workBlock);
+  size_t blockOffset = 0;
+
+  if (!context.aadLengthStarted) {
+    if (context.aadLength >= 0xFF00u)
+      return false;
+    context.workBlock[0] = static_cast<uint8_t>(context.aadLength >> 8u);
+    context.workBlock[1] = static_cast<uint8_t>(context.aadLength);
+    blockOffset = 2u;
+    context.aadLengthStarted = true;
+  }
+
+  while (blockOffset < sizeof(context.workBlock) &&
+         context.aadOffset < context.aadLength) {
+    context.workBlock[blockOffset++] = context.aad[context.aadOffset++];
+  }
+
+  xorCcmMacInput(context);
+  return true;
+}
+
+void prepareCcmPayloadMacBlock(AesCcm128Context &context, const uint8_t *data,
+                               size_t chunk) {
+  secureZeroArray(context.workBlock);
+  if (data != nullptr && chunk != 0)
+    memcpy(context.workBlock, data, chunk);
+  xorCcmMacInput(context);
+}
+
+bool submitAesCcmEcb(AesCcm128Context &context, AesCcm128Context::Step step,
+                     const uint8_t input[16],
+                     void (*callback)(aes::EventMask, AesEcb128Context &,
+                                      void *)) {
+  context.step = step;
+  loadWordsFromBytes(context.workInput, input);
+  if (!aesEcbSetEncryptKey(context.aes, context.key, context.keyWords) ||
+      !aesEcb128SetCallback(context.aes, callback, &context)) {
+    return false;
+  }
+  return aesEcb128CryptAsync(context.aes, context.workInput,
+                             context.workOutput);
+}
+
+bool submitAesCcmMac(AesCcm128Context &context);
+bool advanceAesCcm(AesCcm128Context &context);
+
+void aesCcmEcbCallback(aes::EventMask events, AesEcb128Context &aesContext,
+                       void *user) {
+  (void)aesContext;
+  auto *context = static_cast<AesCcm128Context *>(user);
+  if (context == nullptr || !context->busy)
+    return;
+  if ((events & aes::EventComplete) == 0u) {
+    context->busy = false;
+    if (context->callback != nullptr)
+      context->callback(false, *context, context->callbackContext);
+    return;
+  }
+
+  uint8_t block[16] = {};
+  storeBytesFromWords(block, context->workOutput);
+
+  if (context->step == AesCcm128Context::Step::MacBlock ||
+      context->step == AesCcm128Context::Step::PayloadMac) {
+    memcpy(context->mac, block, sizeof(context->mac));
+    secureZeroArray(block);
+    if (!advanceAesCcm(*context)) {
+      context->busy = false;
+      if (context->callback != nullptr)
+        context->callback(false, *context, context->callbackContext);
+    }
+    return;
+  }
+
+  if (context->step == AesCcm128Context::Step::PayloadCtr) {
+    const size_t remaining = context->length - context->payloadOffset;
+    const size_t chunk = remaining > sizeof(block) ? sizeof(block) : remaining;
+    for (size_t index = 0; index < chunk; ++index) {
+      const uint8_t in = context->input[context->payloadOffset + index];
+      context->output[context->payloadOffset + index] = in ^ block[index];
+    }
+
+    if (context->encrypt) {
+      prepareCcmPayloadMacBlock(
+          *context, context->input + context->payloadOffset, chunk);
+      context->step = AesCcm128Context::Step::PayloadMac;
+      if (!submitAesCcmMac(*context)) {
+        secureZeroArray(block);
+        context->busy = false;
+        if (context->callback != nullptr)
+          context->callback(false, *context, context->callbackContext);
+        return;
+      }
+    } else {
+      prepareCcmPayloadMacBlock(
+          *context, context->output + context->payloadOffset, chunk);
+      context->step = AesCcm128Context::Step::PayloadMac;
+      if (!submitAesCcmMac(*context)) {
+        secureZero(context->output, context->length);
+        secureZeroArray(block);
+        context->busy = false;
+        if (context->callback != nullptr)
+          context->callback(false, *context, context->callbackContext);
+        return;
+      }
+    }
+    secureZeroArray(block);
+    return;
+  }
+
+  if (context->step == AesCcm128Context::Step::TagMask) {
+    uint8_t computedTag[16] = {};
+    for (size_t index = 0; index < context->tagLength; ++index)
+      computedTag[index] = context->mac[index] ^ block[index];
+
+    bool success = true;
+    if (context->encrypt) {
+      memcpy(context->tagOut, computedTag, context->tagLength);
+    } else {
+      uint8_t diff = 0;
+      for (size_t index = 0; index < context->tagLength; ++index)
+        diff |= computedTag[index] ^ context->tagIn[index];
+      success = diff == 0;
+      if (!success && context->output != nullptr)
+        secureZero(context->output, context->length);
+    }
+
+    secureZeroArray(computedTag);
+    secureZeroArray(block);
+    context->busy = false;
+    context->step = success ? AesCcm128Context::Step::Complete
+                            : AesCcm128Context::Step::Error;
+    if (context->callback != nullptr)
+      context->callback(success, *context, context->callbackContext);
+    return;
+  }
+
+  secureZeroArray(block);
+  context->busy = false;
+  if (context->callback != nullptr)
+    context->callback(false, *context, context->callbackContext);
+}
+
+bool submitAesCcmMac(AesCcm128Context &context) {
+  if (!aesEcbSetEncryptKey(context.aes, context.key, context.keyWords) ||
+      !aesEcb128SetCallback(context.aes, aesCcmEcbCallback, &context)) {
+    return false;
+  }
+  return aesEcb128CryptAsync(context.aes, context.workInput,
+                             context.workOutput);
+}
+
+bool advanceAesCcm(AesCcm128Context &context) {
+  if (context.aadOffset < context.aadLength) {
+    if (!prepareCcmAadBlock(context))
+      return false;
+    context.step = AesCcm128Context::Step::MacBlock;
+    return submitAesCcmMac(context);
+  }
+
+  if (context.payloadOffset < context.length) {
+    const size_t completed = context.payloadOffset;
+    if (context.step == AesCcm128Context::Step::PayloadMac)
+      context.payloadOffset +=
+          ((context.length - context.payloadOffset) > 16u)
+              ? 16u
+              : (context.length - context.payloadOffset);
+    if (context.payloadOffset >= context.length && completed != context.payloadOffset) {
+      buildCcmCtr(context, 0u);
+      return submitAesCcmEcb(context, AesCcm128Context::Step::TagMask,
+                             context.ctr, aesCcmEcbCallback);
+    }
+    if (completed == context.payloadOffset) {
+      buildCcmCtr(context, ++context.counter);
+      return submitAesCcmEcb(context, AesCcm128Context::Step::PayloadCtr,
+                             context.ctr, aesCcmEcbCallback);
+    }
+    buildCcmCtr(context, ++context.counter);
+    return submitAesCcmEcb(context, AesCcm128Context::Step::PayloadCtr,
+                           context.ctr, aesCcmEcbCallback);
+  }
+
+  buildCcmCtr(context, 0u);
+  return submitAesCcmEcb(context, AesCcm128Context::Step::TagMask,
+                         context.ctr, aesCcmEcbCallback);
+}
+
 void clearEntropyRequest(EntropyContext &context) {
   context.buffer = nullptr;
   context.requestedLength = 0;
@@ -638,6 +871,134 @@ bool aesGcm128DecryptAsync(AesGcm128Context &context, const uint8_t nonce[12],
                               plaintext, length, nullptr, tag);
 }
 
+void aesCcm128Init(AesCcm128Context &context) {
+  aesEcb128Init(context.aes);
+  clearAesKey(context.key);
+  context.keyWords = 0;
+  secureZeroArray(context.mac);
+  secureZeroArray(context.ctr);
+  secureZeroArray(context.workBlock);
+  secureZeroArray(context.workInput);
+  secureZeroArray(context.workOutput);
+  context.aad = nullptr;
+  context.aadLength = 0;
+  context.aadOffset = 0;
+  context.aadLengthStarted = false;
+  context.input = nullptr;
+  context.output = nullptr;
+  context.length = 0;
+  context.payloadOffset = 0;
+  context.tagOut = nullptr;
+  context.tagIn = nullptr;
+  context.tagLength = 0;
+  context.nonceLength = 0;
+  context.counter = 0;
+  context.encrypt = true;
+  context.keyConfigured = false;
+  context.busy = false;
+  context.step = AesCcm128Context::Step::Idle;
+  context.callback = nullptr;
+  context.callbackContext = nullptr;
+}
+
+void aesCcm128Free(AesCcm128Context &context) {
+  if (context.busy)
+    Crypto::clearAesCallback();
+  aesCcm128Init(context);
+}
+
+bool aesCcm128SetKey(AesCcm128Context &context, const uint8_t key[16]) {
+  if (context.busy || key == nullptr)
+    return false;
+
+  clearAesKey(context.key);
+  context.keyWords = 4;
+  loadWordsFromBytes(context.key, key, context.keyWords);
+  context.keyConfigured = true;
+  return true;
+}
+
+bool aesCcm128SetCallback(AesCcm128Context &context, AesCcm128Callback callback,
+                          void *callbackContext) {
+  if (context.busy)
+    return false;
+
+  context.callback = callback;
+  context.callbackContext = callbackContext;
+  return callback != nullptr;
+}
+
+bool startAesCcmOperation(AesCcm128Context &context, bool encrypt,
+                          const uint8_t *nonce, size_t nonceLength,
+                          const uint8_t *aad, size_t aadLength,
+                          const uint8_t *input, uint8_t *output,
+                          size_t length, uint8_t *tagOut, const uint8_t *tagIn,
+                          size_t tagLength) {
+  if (context.busy || !context.keyConfigured || context.callback == nullptr ||
+      !validCcmNonceLength(nonceLength) || !validCcmTagLength(tagLength) ||
+      nonce == nullptr || (aad == nullptr && aadLength != 0) ||
+      (input == nullptr && length != 0) || (output == nullptr && length != 0) ||
+      (encrypt && tagOut == nullptr) || (!encrypt && tagIn == nullptr)) {
+    return false;
+  }
+
+  const uint8_t q = static_cast<uint8_t>(15u - nonceLength);
+  if (!ccmLengthFits(length, q))
+    return false;
+
+  secureZeroArray(context.mac);
+  secureZeroArray(context.ctr);
+  secureZeroArray(context.workBlock);
+  secureZeroArray(context.workInput);
+  secureZeroArray(context.workOutput);
+  context.aad = aad;
+  context.aadLength = aadLength;
+  context.aadOffset = 0;
+  context.aadLengthStarted = false;
+  context.input = input;
+  context.output = output;
+  context.length = length;
+  context.payloadOffset = 0;
+  context.tagOut = tagOut;
+  context.tagIn = tagIn;
+  context.tagLength = tagLength;
+  context.nonceLength = static_cast<uint8_t>(nonceLength);
+  context.counter = 0;
+  context.encrypt = encrypt;
+  context.busy = true;
+  context.step = AesCcm128Context::Step::MacBlock;
+  memcpy(&context.ctr[1], nonce, nonceLength);
+  buildCcmB0(context, nonce);
+  xorCcmMacInput(context);
+
+  if (!submitAesCcmMac(context)) {
+    context.busy = false;
+    return false;
+  }
+
+  return true;
+}
+
+bool aesCcm128EncryptAsync(AesCcm128Context &context, const uint8_t *nonce,
+                           size_t nonceLength, const uint8_t *aad,
+                           size_t aadLength, const uint8_t *plaintext,
+                           uint8_t *ciphertext, size_t length, uint8_t *tag,
+                           size_t tagLength) {
+  return startAesCcmOperation(context, true, nonce, nonceLength, aad, aadLength,
+                              plaintext, ciphertext, length, tag, nullptr,
+                              tagLength);
+}
+
+bool aesCcm128DecryptAsync(AesCcm128Context &context, const uint8_t *nonce,
+                           size_t nonceLength, const uint8_t *aad,
+                           size_t aadLength, const uint8_t *ciphertext,
+                           uint8_t *plaintext, size_t length,
+                           const uint8_t *tag, size_t tagLength) {
+  return startAesCcmOperation(context, false, nonce, nonceLength, aad,
+                              aadLength, ciphertext, plaintext, length,
+                              nullptr, tag, tagLength);
+}
+
 void entropyInit(EntropyContext &context) {
   clearEntropyRequest(context);
   context.callback = nullptr;
@@ -687,7 +1048,9 @@ MbedTlsCryptoProvider::MbedTlsCryptoProvider()
     : _directRandom(), _directRandomCallback(nullptr),
       _directRandomCallbackContext(nullptr), _directRandomBusy(false),
       _callback(nullptr), _callbackContext(nullptr), _gcmOperation(),
-      _gcmCallback(nullptr), _gcmCallbackContext(nullptr), _gcmBusy(false)
+      _gcmCallback(nullptr), _gcmCallbackContext(nullptr), _gcmBusy(false),
+      _ccmOperation(), _ccmCallback(nullptr), _ccmCallbackContext(nullptr),
+      _ccmBusy(false)
 #ifdef CRYPTO_HARDWARE_AVAILABLE
       ,
       _ecdhOperation(), _ecdhSharedSecret(nullptr), _ecdhPublicKey(nullptr),
@@ -704,6 +1067,7 @@ MbedTlsCryptoProvider::MbedTlsCryptoProvider()
 {
   entropyInit(_directRandom);
   aesGcm128Init(_gcmOperation);
+  aesCcm128Init(_ccmOperation);
 }
 
 MbedTlsCryptoProvider::~MbedTlsCryptoProvider() { reset(); }
@@ -730,6 +1094,12 @@ void MbedTlsCryptoProvider::reset() {
   _gcmCallback = nullptr;
   _gcmCallbackContext = nullptr;
   _gcmBusy = false;
+  if (_ccmBusy)
+    Crypto::clearAesCallback();
+  aesCcm128Free(_ccmOperation);
+  _ccmCallback = nullptr;
+  _ccmCallbackContext = nullptr;
+  _ccmBusy = false;
 #ifdef CRYPTO_HARDWARE_AVAILABLE
   if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy)
     Crypto::clearPukccCallback();
@@ -1349,6 +1719,68 @@ bool MbedTlsCryptoProvider::aesGcm256DecryptAsync(
   return true;
 }
 
+bool MbedTlsCryptoProvider::aesCcm128EncryptAsync(
+    const uint8_t key[16], const uint8_t *nonce, size_t nonceLength,
+    const uint8_t *aad, size_t aadLength, const uint8_t *plaintext,
+    uint8_t *ciphertext, size_t length, uint8_t *tag, size_t tagLength,
+    Crypto::TlsAesGcm128Callback callback, void *context) {
+  if (_ccmBusy || key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (plaintext == nullptr && length != 0) ||
+      (ciphertext == nullptr && length != 0)) {
+    return false;
+  }
+
+  if (!Crypto::MbedTlsPort::aesCcm128SetKey(_ccmOperation, key) ||
+      !Crypto::MbedTlsPort::aesCcm128SetCallback(
+          _ccmOperation, MbedTlsCryptoProvider::handleCcmComplete, this)) {
+    return false;
+  }
+
+  _ccmCallback = callback;
+  _ccmCallbackContext = context;
+  _ccmBusy = true;
+  if (!Crypto::MbedTlsPort::aesCcm128EncryptAsync(
+          _ccmOperation, nonce, nonceLength, aad, aadLength, plaintext,
+          ciphertext, length, tag, tagLength)) {
+    finishCcm(false);
+    return false;
+  }
+
+  return true;
+}
+
+bool MbedTlsCryptoProvider::aesCcm128DecryptAsync(
+    const uint8_t key[16], const uint8_t *nonce, size_t nonceLength,
+    const uint8_t *aad, size_t aadLength, const uint8_t *ciphertext,
+    uint8_t *plaintext, size_t length, const uint8_t *tag, size_t tagLength,
+    Crypto::TlsAesGcm128Callback callback, void *context) {
+  if (_ccmBusy || key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (ciphertext == nullptr && length != 0) ||
+      (plaintext == nullptr && length != 0)) {
+    return false;
+  }
+
+  if (!Crypto::MbedTlsPort::aesCcm128SetKey(_ccmOperation, key) ||
+      !Crypto::MbedTlsPort::aesCcm128SetCallback(
+          _ccmOperation, MbedTlsCryptoProvider::handleCcmComplete, this)) {
+    return false;
+  }
+
+  _ccmCallback = callback;
+  _ccmCallbackContext = context;
+  _ccmBusy = true;
+  if (!Crypto::MbedTlsPort::aesCcm128DecryptAsync(
+          _ccmOperation, nonce, nonceLength, aad, aadLength, ciphertext,
+          plaintext, length, tag, tagLength)) {
+    finishCcm(false);
+    return false;
+  }
+
+  return true;
+}
+
 void MbedTlsCryptoProvider::handleDirectRandomReady(bool success,
                                                     EntropyContext &context,
                                                     void *user) {
@@ -1396,6 +1828,29 @@ void MbedTlsCryptoProvider::finishGcm(bool success) {
   _gcmCallbackContext = nullptr;
   _gcmBusy = false;
   Crypto::MbedTlsPort::aesGcm128Free(_gcmOperation);
+
+  if (callback != nullptr)
+    callback(success, callbackContext);
+}
+
+void MbedTlsCryptoProvider::handleCcmComplete(bool success,
+                                              AesCcm128Context &operation,
+                                              void *user) {
+  (void)operation;
+  auto *provider = static_cast<MbedTlsCryptoProvider *>(user);
+  if (provider == nullptr)
+    return;
+
+  provider->finishCcm(success);
+}
+
+void MbedTlsCryptoProvider::finishCcm(bool success) {
+  Crypto::TlsAesGcm128Callback callback = _ccmCallback;
+  void *callbackContext = _ccmCallbackContext;
+  _ccmCallback = nullptr;
+  _ccmCallbackContext = nullptr;
+  _ccmBusy = false;
+  Crypto::MbedTlsPort::aesCcm128Free(_ccmOperation);
 
   if (callback != nullptr)
     callback(success, callbackContext);

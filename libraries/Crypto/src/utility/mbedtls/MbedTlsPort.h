@@ -130,6 +130,76 @@ bool aesGcm128DecryptAsync(AesGcm128Context &context, const uint8_t nonce[12],
                            const uint8_t *ciphertext, uint8_t *plaintext,
                            size_t length, const uint8_t tag[16]);
 
+struct AesCcm128Context;
+
+using AesCcm128Callback = void (*)(bool success, AesCcm128Context &context,
+                                   void *user);
+
+/**
+ * @brief Async AES-CCM one-shot operation context.
+ *
+ * The context implements CCM from async hardware AES-ECB operations: CBC-MAC
+ * authenticates B0, AAD, and plaintext; CTR blocks encrypt/decrypt payload and
+ * mask the authentication tag. The supported production surface is deliberately
+ * narrow: AES-128 keys, nonce lengths 7..13 bytes, and 8- or 16-byte tags for
+ * TLS CCM/CCM-8 profiles. Unsupported shapes fail closed.
+ */
+struct AesCcm128Context {
+  enum class Step : uint8_t {
+    Idle,
+    MacBlock,
+    PayloadCtr,
+    PayloadMac,
+    TagMask,
+    Complete,
+    Error,
+  };
+
+  AesEcb128Context aes = {};
+  uint32_t key[8] = {};
+  uint8_t keyWords = 0;
+  uint8_t mac[16] = {};
+  uint8_t ctr[16] = {};
+  uint8_t workBlock[16] = {};
+  uint32_t workInput[4] = {};
+  uint32_t workOutput[4] = {};
+  const uint8_t *aad = nullptr;
+  size_t aadLength = 0;
+  size_t aadOffset = 0;
+  bool aadLengthStarted = false;
+  const uint8_t *input = nullptr;
+  uint8_t *output = nullptr;
+  size_t length = 0;
+  size_t payloadOffset = 0;
+  uint8_t *tagOut = nullptr;
+  const uint8_t *tagIn = nullptr;
+  size_t tagLength = 0;
+  uint8_t nonceLength = 0;
+  uint32_t counter = 0;
+  bool encrypt = true;
+  bool keyConfigured = false;
+  bool busy = false;
+  Step step = Step::Idle;
+  AesCcm128Callback callback = nullptr;
+  void *callbackContext = nullptr;
+};
+
+void aesCcm128Init(AesCcm128Context &context);
+void aesCcm128Free(AesCcm128Context &context);
+bool aesCcm128SetKey(AesCcm128Context &context, const uint8_t key[16]);
+bool aesCcm128SetCallback(AesCcm128Context &context, AesCcm128Callback callback,
+                          void *callbackContext = nullptr);
+bool aesCcm128EncryptAsync(AesCcm128Context &context, const uint8_t *nonce,
+                           size_t nonceLength, const uint8_t *aad,
+                           size_t aadLength, const uint8_t *plaintext,
+                           uint8_t *ciphertext, size_t length, uint8_t *tag,
+                           size_t tagLength);
+bool aesCcm128DecryptAsync(AesCcm128Context &context, const uint8_t *nonce,
+                           size_t nonceLength, const uint8_t *aad,
+                           size_t aadLength, const uint8_t *ciphertext,
+                           uint8_t *plaintext, size_t length,
+                           const uint8_t *tag, size_t tagLength);
+
 struct EntropyContext;
 
 using EntropyCallback =
@@ -240,6 +310,20 @@ public:
                              size_t length, const uint8_t tag[16],
                              Crypto::TlsAesGcm128Callback callback,
                              void *context) override;
+  bool aesCcm128EncryptAsync(const uint8_t key[16], const uint8_t *nonce,
+                             size_t nonceLength, const uint8_t *aad,
+                             size_t aadLength, const uint8_t *plaintext,
+                             uint8_t *ciphertext, size_t length, uint8_t *tag,
+                             size_t tagLength,
+                             Crypto::TlsAesGcm128Callback callback,
+                             void *context) override;
+  bool aesCcm128DecryptAsync(const uint8_t key[16], const uint8_t *nonce,
+                             size_t nonceLength, const uint8_t *aad,
+                             size_t aadLength, const uint8_t *ciphertext,
+                             uint8_t *plaintext, size_t length,
+                             const uint8_t *tag, size_t tagLength,
+                             Crypto::TlsAesGcm128Callback callback,
+                             void *context) override;
 
 private:
 #ifdef CRYPTO_HARDWARE_AVAILABLE
@@ -288,6 +372,9 @@ private:
   static void handleGcmComplete(bool success, AesGcm128Context &operation,
                                 void *user);
   void finishGcm(bool success);
+  static void handleCcmComplete(bool success, AesCcm128Context &operation,
+                                void *user);
+  void finishCcm(bool success);
 
   EntropyContext _directRandom;
   Crypto::TlsRandomCallback _directRandomCallback;
@@ -299,6 +386,10 @@ private:
   Crypto::TlsAesGcm128Callback _gcmCallback;
   void *_gcmCallbackContext;
   bool _gcmBusy;
+  AesCcm128Context _ccmOperation;
+  Crypto::TlsAesGcm128Callback _ccmCallback;
+  void *_ccmCallbackContext;
+  bool _ccmBusy;
 #ifdef CRYPTO_HARDWARE_AVAILABLE
   Crypto::PukccEcc::EcdhSharedSecretOperation _ecdhOperation;
   uint8_t *_ecdhSharedSecret;
