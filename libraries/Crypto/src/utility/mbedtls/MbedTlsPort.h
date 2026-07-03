@@ -203,6 +203,15 @@ bool aesCcm128DecryptAsync(AesCcm128Context &context, const uint8_t *nonce,
                            const uint8_t *tag, size_t tagLength);
 
 struct EntropyContext;
+struct EccCurveParams {
+  uint16_t length;
+  const uint8_t *prime;
+  const uint8_t *a;
+  const uint8_t *b;
+  const uint8_t *order;
+  const uint8_t *gx;
+  const uint8_t *gy;
+};
 
 using EntropyCallback =
     void (*)(bool success, EntropyContext &context, void *user);
@@ -288,6 +297,32 @@ public:
                             const uint8_t signature[64],
                             Crypto::TlsEcdsaP256VerifyCallback callback,
                             void *context) override;
+  bool keyExchangePublicKeyAsync(Crypto::TlsKeyExchangeAlgorithm algorithm,
+                                 const uint8_t *privateScalar,
+                                 size_t privateScalarLength,
+                                 uint8_t *publicKey, size_t publicKeyLength,
+                                 Crypto::TlsKeyExchangeCallback callback,
+                                 void *context) override;
+  bool keyExchangeSharedSecretAsync(
+      Crypto::TlsKeyExchangeAlgorithm algorithm, const uint8_t *privateScalar,
+      size_t privateScalarLength, const uint8_t *peerPublicKey,
+      size_t peerPublicKeyLength, uint8_t *sharedSecret,
+      size_t sharedSecretLength, Crypto::TlsKeyExchangeCallback callback,
+      void *context) override;
+  bool signatureSignAsync(Crypto::TlsSignatureAlgorithm algorithm,
+                          const uint8_t *privateKey, size_t privateKeyLength,
+                          const uint8_t *nonceScalar,
+                          size_t nonceScalarLength, const uint8_t *hash,
+                          size_t hashLength, uint8_t *signature,
+                          size_t signatureLength,
+                          Crypto::TlsSignatureCallback callback,
+                          void *context) override;
+  bool signatureVerifyAsync(Crypto::TlsSignatureAlgorithm algorithm,
+                            const uint8_t *publicKey, size_t publicKeyLength,
+                            const uint8_t *hash, size_t hashLength,
+                            const uint8_t *signature, size_t signatureLength,
+                            Crypto::TlsSignatureCallback callback,
+                            void *context) override;
   bool aesGcm128EncryptAsync(const uint8_t key[16], const uint8_t nonce[12],
                              const uint8_t *aad, size_t aadLength,
                              const uint8_t *plaintext, uint8_t *ciphertext,
@@ -364,6 +399,28 @@ private:
                                       void *user);
   void finishDirectRandom(bool success);
 #ifdef CRYPTO_HARDWARE_AVAILABLE
+  bool startEcdhSharedSecretAsync(const EccCurveParams &curve,
+                                  const uint8_t *privateScalar,
+                                  const uint8_t *peerPublicKey,
+                                  uint8_t *sharedSecret,
+                                  Crypto::TlsKeyExchangeCallback callback,
+                                  void *context);
+  bool startEcdhPublicKeyAsync(const EccCurveParams &curve,
+                               const uint8_t *privateScalar,
+                               uint8_t *publicKey,
+                               Crypto::TlsKeyExchangeCallback callback,
+                               void *context);
+  bool startEcdsaSignAsync(const EccCurveParams &curve,
+                           const uint8_t *privateKey,
+                           const uint8_t *nonceScalar, const uint8_t *hash,
+                           uint8_t *signature,
+                           Crypto::TlsSignatureCallback callback,
+                           void *context);
+  bool startEcdsaVerifyAsync(const EccCurveParams &curve,
+                             const uint8_t *publicKey, const uint8_t *hash,
+                             const uint8_t *signature,
+                             Crypto::TlsSignatureCallback callback,
+                             void *context);
   bool submitEcdhPublicKeyStep();
   static void handleEcdhPublicKeyService(pukcc::EventMask events,
                                          uint8_t service, uint16_t status,
@@ -410,22 +467,24 @@ private:
   Crypto::PukccEcc::EcdhSharedSecretOperation _ecdhOperation;
   uint8_t *_ecdhSharedSecret;
   uint8_t *_ecdhPublicKey;
-  Crypto::TlsEcdhP256Callback _ecdhCallback;
+  Crypto::TlsKeyExchangeCallback _ecdhCallback;
   void *_ecdhCallbackContext;
+  uint16_t _ecdhCoordinateLength;
   bool _ecdhBusy;
   Crypto::PukccEcc::ReductionSetupOperation _ecdsaSignReductionSetup;
   Crypto::PukccEcc::EcdsaGenerateOperation _ecdsaSign;
   pukcc::ServiceResult _ecdsaSignResult;
   uint8_t *_ecdsaSignature;
-  Crypto::TlsEcdsaP256SignCallback _ecdsaSignCallback;
+  Crypto::TlsSignatureCallback _ecdsaSignCallback;
   void *_ecdsaSignCallbackContext;
+  uint16_t _ecdsaSignCoordinateLength;
   EcdsaSignStep _ecdsaSignStep;
   bool _ecdsaSignBusy;
   Crypto::PukccEcc::ReductionSetupOperation _ecdsaReductionSetup;
   Crypto::PukccEcc::PointIsOnCurveOperation _ecdsaPublicKeyValidation;
   Crypto::PukccEcc::EcdsaVerifyOperation _ecdsaVerify;
   pukcc::ServiceResult _ecdsaResult;
-  Crypto::TlsEcdsaP256VerifyCallback _ecdsaCallback;
+  Crypto::TlsSignatureCallback _ecdsaCallback;
   void *_ecdsaCallbackContext;
   EcdsaVerifyStep _ecdsaStep;
   bool _ecdsaBusy;
