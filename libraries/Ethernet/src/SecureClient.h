@@ -205,10 +205,14 @@ public:
    * Writes copy caller data into an internal TLS TX staging buffer before
    * starting Mbed TLS progress, so caller memory is never retained across
    * `WantRead`/`WantWrite`; callers must use `pollTls()` to continue deferred
-   * TLS work. `write()` returns the number of bytes accepted into that staging
-   * buffer, and a second write returns 0 while the staged TLS write is still
-   * pending. `connected()` is TLS-aware: it reports connected only after the
-   * handshake is complete and the underlying provider socket remains connected.
+   * TLS work. For Arduino stream compatibility each stream call is allowed to
+   * start at most one TLS read/write operation and advance it by at most one
+   * bounded `pollTls()` step; it must not loop waiting for plaintext,
+   * transport space, peer close-notify, or hardware crypto completion.
+   * `write()` returns the number of bytes accepted into that staging buffer,
+   * and a second write returns 0 while the staged TLS write is still pending.
+   * `connected()` is TLS-aware: it reports connected only after the handshake
+   * is complete and the underlying provider socket remains connected.
    */
   size_t write(uint8_t value) override;
   size_t write(const uint8_t *buffer, size_t size) override;

@@ -18,14 +18,17 @@ bool NetworkService::begin() {
   _started = _lwipPort.begin(*_packetAllocator);
   if (!_started)
     return false;
-  if (!NetworkTime.begin(_lwipPort)) {
+  if (!NetworkTime.begin()) {
     _lwipPort.end();
     _started = false;
     return false;
   }
+  _lwipPort.setNetworkStateCallback(handleNetworkState, this);
+  updateNetworkTimeProvider(_lwipPort.networkState());
   if (!rtc::attachPeriodicInterrupt(rtc::PeriodicInterval::Per4,
                                     handleRtcTimeout, this)) {
     NetworkTime.detachProvider(_lwipPort);
+    _lwipPort.clearNetworkStateCallback();
     _lwipPort.end();
     _started = false;
     return false;
@@ -35,6 +38,7 @@ bool NetworkService::begin() {
 
 void NetworkService::end() {
   rtc::detachPeriodicInterrupt(rtc::PeriodicInterval::Per4);
+  _lwipPort.clearNetworkStateCallback();
   NetworkTime.detachProvider(_lwipPort);
   _lwipPort.end();
   _started = false;
@@ -55,6 +59,22 @@ void NetworkService::handleRtcTimeout(rtc::EventMask events, uint64_t,
     return;
 
   static_cast<NetworkService *>(context)->_lwipPort.checkTimeouts();
+}
+
+void NetworkService::handleNetworkState(
+    const EthernetLwipPort::NetworkStateSnapshot &state, void *context) {
+  if (context == nullptr)
+    return;
+
+  static_cast<NetworkService *>(context)->updateNetworkTimeProvider(state);
+}
+
+void NetworkService::updateNetworkTimeProvider(
+    const EthernetLwipPort::NetworkStateSnapshot &state) {
+  if (state.started && state.carrierUp && state.addressAssigned)
+    NetworkTime.begin(_lwipPort);
+  else
+    NetworkTime.detachProvider(_lwipPort);
 }
 
 bool NetworkService::carrierUp() const { return _lwipPort.carrierUp(); }

@@ -44,6 +44,19 @@ public:
 
   using TcpState = EthernetSocketState;
 
+  /**
+   * @brief Internal UDP endpoint lifecycle state for diagnostics/tests.
+   *
+   * This intentionally stays on the concrete lwIP backend. The public
+   * `EthernetUDP` API remains begin/beginPacket/endPacket/parsePacket/read.
+   */
+  enum class UdpEndpointState : uint8_t {
+    Stopped,
+    Bound,
+    PacketOpen,
+    PacketAvailable,
+  };
+
   LwipTransportBackend();
   ~LwipTransportBackend() override;
 
@@ -128,6 +141,7 @@ public:
   uint8_t begin(uint16_t port) override;
   uint8_t beginMulticast(IPAddress ip, uint16_t port) override;
   void stop() override;
+  UdpEndpointState udpState() const;
   int beginPacket(IPAddress ip, uint16_t port) override;
   int beginPacket(const char *host, uint16_t port) override;
   int endPacket() override;

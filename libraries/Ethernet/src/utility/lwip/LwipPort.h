@@ -62,6 +62,25 @@ public:
 class EthernetLwipPort : public TransportProvider {
 public:
   /**
+   * @brief Internal network state snapshot below the Arduino API.
+   *
+   * This gives service/test code one compact view of carrier, DHCP, and IPv4
+   * assignment state without exposing lwIP internals through EthernetClient,
+   * EthernetServer, EthernetUDP, or SecureClient.
+   */
+  struct NetworkStateSnapshot {
+    bool started = false;
+    bool carrierUp = false;
+    bool dhcpActive = false;
+    bool dhcpAddressSupplied = false;
+    bool addressAssigned = false;
+    IPAddress localIp;
+    IPAddress gateway;
+    IPAddress subnet;
+    IPAddress dnsServer;
+  };
+
+  /**
    * @brief lwIP-style packet input callback.
    *
    * `EthernetLwipErrOk` accepts packet ownership. Any other result rejects the
@@ -78,6 +97,12 @@ public:
                                       EthernetFrameLinkSpeed speed,
                                       EthernetFrameDuplex duplex,
                                       void *context);
+
+  /**
+   * @brief Internal notification for carrier/DHCP/address state changes.
+   */
+  using NetworkStateCallback = void (*)(const NetworkStateSnapshot &state,
+                                        void *context);
 
   explicit EthernetLwipPort(EthernetNetif &netif);
   ~EthernetLwipPort();
@@ -110,6 +135,14 @@ public:
   void setLinkChangeCallback(LinkChangeCallback callback,
                              void *context = nullptr);
   void clearLinkChangeCallback();
+  void setNetworkStateCallback(NetworkStateCallback callback,
+                               void *context = nullptr);
+  void clearNetworkStateCallback();
+
+  /**
+   * @brief Return the current internal carrier/DHCP/address snapshot.
+   */
+  NetworkStateSnapshot networkState() const;
 
   /**
    * @brief Store and, when started, apply DHCP/static lwIP addressing.
@@ -211,6 +244,9 @@ private:
   void *_inputContext = nullptr;
   LinkChangeCallback _linkChangeCallback = nullptr;
   void *_linkChangeContext = nullptr;
+  NetworkStateCallback _networkStateCallback = nullptr;
+  void *_networkStateContext = nullptr;
+  NetworkStateSnapshot _lastNetworkState;
   NetworkConfig _networkConfig;
   bool _started = false;
   LwipTcpSocketBackend *_tcpBackend = nullptr;
@@ -228,6 +264,7 @@ private:
   void endLwipNetif();
   bool applyNetworkConfigToLwip();
   bool inputPacketToLwip(EthernetPacket *packet);
+  void notifyNetworkStateIfChanged();
   EthernetLwipErr outputPbuf(struct pbuf *p);
   static err_t lwipNetifInit(struct netif *netif);
   static err_t lwipLinkOutput(struct netif *netif, struct pbuf *p);

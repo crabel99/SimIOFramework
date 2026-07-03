@@ -168,6 +168,10 @@ public:
 private:
   static void handleRtcTimeout(rtc::EventMask events, uint64_t unixTime,
                                void *context);
+  static void handleNetworkState(
+      const EthernetLwipPort::NetworkStateSnapshot &state, void *context);
+  void updateNetworkTimeProvider(
+      const EthernetLwipPort::NetworkStateSnapshot &state);
 
   EthernetPacketAllocator *_packetAllocator;
   EthernetNetif _netif;

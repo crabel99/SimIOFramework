@@ -692,6 +692,16 @@ void LwipTransportBackend::stop() {
   _udp->multicastAddress = 0;
 }
 
+LwipTransportBackend::UdpEndpointState LwipTransportBackend::udpState() const {
+  if (_udp == nullptr || !_udp->started)
+    return UdpEndpointState::Stopped;
+  if (_udp->packetOpen)
+    return UdpEndpointState::PacketOpen;
+  if (_udp->rxIndex < _udp->rxLength)
+    return UdpEndpointState::PacketAvailable;
+  return UdpEndpointState::Bound;
+}
+
 int LwipTransportBackend::beginPacket(IPAddress ip, uint16_t port) {
   if (_udp == nullptr || !_udp->started)
     return 0;

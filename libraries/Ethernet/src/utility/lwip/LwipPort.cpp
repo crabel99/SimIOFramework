@@ -54,6 +54,17 @@ bool tcpBackendCarrierUp(void *context) {
   return context != nullptr &&
          static_cast<EthernetLwipPort *>(context)->carrierUp();
 }
+
+bool networkStatesEqual(
+    const EthernetLwipPort::NetworkStateSnapshot &left,
+    const EthernetLwipPort::NetworkStateSnapshot &right) {
+  return left.started == right.started && left.carrierUp == right.carrierUp &&
+         left.dhcpActive == right.dhcpActive &&
+         left.dhcpAddressSupplied == right.dhcpAddressSupplied &&
+         left.addressAssigned == right.addressAssigned &&
+         left.localIp == right.localIp && left.gateway == right.gateway &&
+         left.subnet == right.subnet && left.dnsServer == right.dnsServer;
+}
 } // namespace
 
 EthernetLwipPort::EthernetLwipPort(EthernetNetif &netif) : _netif(&netif) {}
@@ -87,6 +98,7 @@ bool EthernetLwipPort::begin(EthernetPacketAllocator &allocator) {
     endLwipNetif();
   }
 
+  notifyNetworkStateIfChanged();
   return _started;
 }
 
@@ -114,6 +126,7 @@ void EthernetLwipPort::end() {
   _netif->end();
   endLwipNetif();
   _started = false;
+  notifyNetworkStateIfChanged();
 }
 
 bool EthernetLwipPort::service() {
@@ -128,6 +141,7 @@ void EthernetLwipPort::checkTimeouts() {
     return;
 
   sys_check_timeouts();
+  notifyNetworkStateIfChanged();
 }
 
 void EthernetLwipPort::setInputCallback(InputCallback callback, void *context) {
@@ -151,11 +165,39 @@ void EthernetLwipPort::clearLinkChangeCallback() {
   _linkChangeContext = nullptr;
 }
 
+void EthernetLwipPort::setNetworkStateCallback(NetworkStateCallback callback,
+                                               void *context) {
+  _networkStateCallback = callback;
+  _networkStateContext = context;
+}
+
+void EthernetLwipPort::clearNetworkStateCallback() {
+  _networkStateCallback = nullptr;
+  _networkStateContext = nullptr;
+}
+
 bool EthernetLwipPort::configureNetwork(const NetworkConfig &config) {
   _networkConfig = config;
-  if (_started)
-    return applyNetworkConfigToLwip();
+  if (_started) {
+    const bool result = applyNetworkConfigToLwip();
+    notifyNetworkStateIfChanged();
+    return result;
+  }
   return true;
+}
+
+EthernetLwipPort::NetworkStateSnapshot EthernetLwipPort::networkState() const {
+  NetworkStateSnapshot state;
+  state.started = _started;
+  state.carrierUp = carrierUp();
+  state.dhcpActive = dhcpActive();
+  state.dhcpAddressSupplied = dhcpAddressSupplied();
+  state.addressAssigned = addressAssigned();
+  state.localIp = localIP();
+  state.gateway = gatewayIP();
+  state.subnet = subnetMask();
+  state.dnsServer = dnsServerIP();
+  return state;
 }
 
 bool EthernetLwipPort::dhcpActive() const {
@@ -464,10 +506,14 @@ EthernetLwipPort::mapOutputResult(EthernetNetifOutputResult result) {
 }
 
 bool EthernetLwipPort::handleInput(EthernetPacket *packet) {
+  bool accepted = false;
   if (_inputCallback == nullptr)
-    return inputPacketToLwip(packet);
+    accepted = inputPacketToLwip(packet);
+  else
+    accepted = _inputCallback(packet, _inputContext) == EthernetLwipErrOk;
 
-  return _inputCallback(packet, _inputContext) == EthernetLwipErrOk;
+  notifyNetworkStateIfChanged();
+  return accepted;
 }
 
 void EthernetLwipPort::handleLinkChange(bool carrierUp,
@@ -483,6 +529,7 @@ void EthernetLwipPort::handleLinkChange(bool carrierUp,
     else
       netif_set_link_down(&globalLwipNetif);
   }
+  notifyNetworkStateIfChanged();
 }
 
 bool EthernetLwipPort::beginLwipNetif() {
@@ -585,6 +632,16 @@ bool EthernetLwipPort::inputPacketToLwip(EthernetPacket *packet) {
     pbuf_free(p);
 
   return true;
+}
+
+void EthernetLwipPort::notifyNetworkStateIfChanged() {
+  const NetworkStateSnapshot state = networkState();
+  if (networkStatesEqual(state, _lastNetworkState))
+    return;
+
+  _lastNetworkState = state;
+  if (_networkStateCallback != nullptr)
+    _networkStateCallback(state, _networkStateContext);
 }
 
 EthernetLwipErr EthernetLwipPort::outputPbuf(struct pbuf *p) {

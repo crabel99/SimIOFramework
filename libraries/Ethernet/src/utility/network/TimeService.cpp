@@ -11,16 +11,19 @@ NetworkTimeService &NetworkTimeService::instance() {
 NetworkTimeService &NetworkTime = NetworkTimeService::instance();
 
 bool NetworkTimeService::begin() {
-  if (!rtc::configureClock() || !rtc::attachAlarmHandler(0, handleRtcEvent,
-                                                         this)) {
-    _status = NetworkTimeServiceStatus::RtcUnavailable;
-    _warnings |= NetworkTimeWarningRtcSetFailed;
-    return false;
+  if (!_begun) {
+    if (!rtc::configureClock() || !rtc::attachAlarmHandler(0, handleRtcEvent,
+                                                           this)) {
+      _status = NetworkTimeServiceStatus::RtcUnavailable;
+      _warnings |= NetworkTimeWarningRtcSetFailed;
+      return false;
+    }
+
+    _begun = true;
+    if (_status == NetworkTimeServiceStatus::Stopped)
+      _status = NetworkTimeServiceStatus::Ready;
   }
 
-  _begun = true;
-  if (_status == NetworkTimeServiceStatus::Stopped)
-    _status = NetworkTimeServiceStatus::Ready;
   if (_provider != nullptr)
     startSourceUpdate();
   return true;
