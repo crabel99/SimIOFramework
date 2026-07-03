@@ -907,15 +907,21 @@ void aesCcm128Free(AesCcm128Context &context) {
   aesCcm128Init(context);
 }
 
-bool aesCcm128SetKey(AesCcm128Context &context, const uint8_t key[16]) {
-  if (context.busy || key == nullptr)
+bool aesCcmSetKey(AesCcm128Context &context, const uint8_t *key,
+                  size_t keyLength) {
+  if (context.busy || key == nullptr ||
+      (keyLength != 16 && keyLength != 24 && keyLength != 32))
     return false;
 
   clearAesKey(context.key);
-  context.keyWords = 4;
+  context.keyWords = static_cast<uint8_t>(keyLength / 4u);
   loadWordsFromBytes(context.key, key, context.keyWords);
   context.keyConfigured = true;
   return true;
+}
+
+bool aesCcm128SetKey(AesCcm128Context &context, const uint8_t key[16]) {
+  return aesCcmSetKey(context, key, 16);
 }
 
 bool aesCcm128SetCallback(AesCcm128Context &context, AesCcm128Callback callback,
@@ -1763,6 +1769,68 @@ bool MbedTlsCryptoProvider::aesCcm128DecryptAsync(
   }
 
   if (!Crypto::MbedTlsPort::aesCcm128SetKey(_ccmOperation, key) ||
+      !Crypto::MbedTlsPort::aesCcm128SetCallback(
+          _ccmOperation, MbedTlsCryptoProvider::handleCcmComplete, this)) {
+    return false;
+  }
+
+  _ccmCallback = callback;
+  _ccmCallbackContext = context;
+  _ccmBusy = true;
+  if (!Crypto::MbedTlsPort::aesCcm128DecryptAsync(
+          _ccmOperation, nonce, nonceLength, aad, aadLength, ciphertext,
+          plaintext, length, tag, tagLength)) {
+    finishCcm(false);
+    return false;
+  }
+
+  return true;
+}
+
+bool MbedTlsCryptoProvider::aesCcm256EncryptAsync(
+    const uint8_t key[32], const uint8_t *nonce, size_t nonceLength,
+    const uint8_t *aad, size_t aadLength, const uint8_t *plaintext,
+    uint8_t *ciphertext, size_t length, uint8_t *tag, size_t tagLength,
+    Crypto::TlsAesGcm128Callback callback, void *context) {
+  if (_ccmBusy || key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (plaintext == nullptr && length != 0) ||
+      (ciphertext == nullptr && length != 0)) {
+    return false;
+  }
+
+  if (!Crypto::MbedTlsPort::aesCcmSetKey(_ccmOperation, key, 32) ||
+      !Crypto::MbedTlsPort::aesCcm128SetCallback(
+          _ccmOperation, MbedTlsCryptoProvider::handleCcmComplete, this)) {
+    return false;
+  }
+
+  _ccmCallback = callback;
+  _ccmCallbackContext = context;
+  _ccmBusy = true;
+  if (!Crypto::MbedTlsPort::aesCcm128EncryptAsync(
+          _ccmOperation, nonce, nonceLength, aad, aadLength, plaintext,
+          ciphertext, length, tag, tagLength)) {
+    finishCcm(false);
+    return false;
+  }
+
+  return true;
+}
+
+bool MbedTlsCryptoProvider::aesCcm256DecryptAsync(
+    const uint8_t key[32], const uint8_t *nonce, size_t nonceLength,
+    const uint8_t *aad, size_t aadLength, const uint8_t *ciphertext,
+    uint8_t *plaintext, size_t length, const uint8_t *tag, size_t tagLength,
+    Crypto::TlsAesGcm128Callback callback, void *context) {
+  if (_ccmBusy || key == nullptr || nonce == nullptr || tag == nullptr ||
+      callback == nullptr || (aad == nullptr && aadLength != 0) ||
+      (ciphertext == nullptr && length != 0) ||
+      (plaintext == nullptr && length != 0)) {
+    return false;
+  }
+
+  if (!Crypto::MbedTlsPort::aesCcmSetKey(_ccmOperation, key, 32) ||
       !Crypto::MbedTlsPort::aesCcm128SetCallback(
           _ccmOperation, MbedTlsCryptoProvider::handleCcmComplete, this)) {
     return false;

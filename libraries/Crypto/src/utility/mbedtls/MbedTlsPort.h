@@ -186,6 +186,8 @@ struct AesCcm128Context {
 
 void aesCcm128Init(AesCcm128Context &context);
 void aesCcm128Free(AesCcm128Context &context);
+bool aesCcmSetKey(AesCcm128Context &context, const uint8_t *key,
+                  size_t keyLength);
 bool aesCcm128SetKey(AesCcm128Context &context, const uint8_t key[16]);
 bool aesCcm128SetCallback(AesCcm128Context &context, AesCcm128Callback callback,
                           void *callbackContext = nullptr);
@@ -318,6 +320,20 @@ public:
                              Crypto::TlsAesGcm128Callback callback,
                              void *context) override;
   bool aesCcm128DecryptAsync(const uint8_t key[16], const uint8_t *nonce,
+                             size_t nonceLength, const uint8_t *aad,
+                             size_t aadLength, const uint8_t *ciphertext,
+                             uint8_t *plaintext, size_t length,
+                             const uint8_t *tag, size_t tagLength,
+                             Crypto::TlsAesGcm128Callback callback,
+                             void *context) override;
+  bool aesCcm256EncryptAsync(const uint8_t key[32], const uint8_t *nonce,
+                             size_t nonceLength, const uint8_t *aad,
+                             size_t aadLength, const uint8_t *plaintext,
+                             uint8_t *ciphertext, size_t length, uint8_t *tag,
+                             size_t tagLength,
+                             Crypto::TlsAesGcm128Callback callback,
+                             void *context) override;
+  bool aesCcm256DecryptAsync(const uint8_t key[32], const uint8_t *nonce,
                              size_t nonceLength, const uint8_t *aad,
                              size_t aadLength, const uint8_t *ciphertext,
                              uint8_t *plaintext, size_t length,
