@@ -143,8 +143,8 @@ using AesCcm128Callback = void (*)(bool success, AesCcm128Context &context,
  * The context implements CCM from async hardware AES-ECB operations: CBC-MAC
  * authenticates B0, AAD, and plaintext; CTR blocks encrypt/decrypt payload and
  * mask the authentication tag. The supported production surface is deliberately
- * narrow: AES-128 keys, nonce lengths 7..13 bytes, and 8- or 16-byte tags for
- * TLS CCM/CCM-8 profiles. Unsupported shapes fail closed.
+ * narrow: AES-128/AES-256 keys, nonce lengths 7..13 bytes, and 8- or 16-byte
+ * tags for TLS CCM/CCM-8 profiles. Unsupported shapes fail closed.
  */
 struct AesCcm128Context {
   enum class Step : uint8_t {
@@ -206,7 +206,9 @@ bool aesCcm128DecryptAsync(AesCcm128Context &context, const uint8_t *nonce,
 
 struct EntropyContext;
 struct EccCurveParams {
-  uint16_t length;
+  uint16_t coordinateLength;
+  uint16_t pukccLength;
+  uint16_t hashLength;
   const uint8_t *prime;
   const uint8_t *a;
   const uint8_t *b;
@@ -260,11 +262,11 @@ bool generateExternalRandom(uint8_t *buffer, size_t length);
  * TLS protocol state remains owned by `TlsClientSession`; this provider only
  * owns RNG/crypto readiness.
  *
- * The provider routes supported P-256 ECDH, ECDSA signing, and ECDSA
- * verification operations through async PUKCC hardware and fails closed on
- * invalid peer points before scalar multiplication or signature verification.
- * AES-128-GCM record protection is routed through the async AES/GHASH hardware
- * state machine.
+ * The provider routes supported P-256/P-384/P-521 ECDH and ECDSA operations
+ * plus RSA-PSS/RSA-PKCS1 signature operations through async PUKCC hardware.
+ * Invalid peer points fail closed before scalar multiplication or signature
+ * verification. AES-GCM and AES-CCM record protection are routed through the
+ * async AES/GHASH hardware state machines.
  */
 class MbedTlsCryptoProvider : public Crypto::TlsCryptoProvider {
 public:
@@ -423,13 +425,19 @@ private:
                              const uint8_t *signature,
                              Crypto::TlsSignatureCallback callback,
                              void *context);
-  bool startRsaPssVerifyAsync(Crypto::TlsSignatureAlgorithm algorithm,
-                              const uint8_t *publicKey,
-                              size_t publicKeyLength, const uint8_t *hash,
-                              size_t hashLength, const uint8_t *signature,
-                              size_t signatureLength,
-                              Crypto::TlsSignatureCallback callback,
-                              void *context);
+  bool startRsaVerifyAsync(Crypto::TlsSignatureAlgorithm algorithm,
+                           const uint8_t *publicKey, size_t publicKeyLength,
+                           const uint8_t *hash, size_t hashLength,
+                           const uint8_t *signature, size_t signatureLength,
+                           Crypto::TlsSignatureCallback callback,
+                           void *context);
+  bool startRsaSignAsync(Crypto::TlsSignatureAlgorithm algorithm,
+                         const uint8_t *privateKey, size_t privateKeyLength,
+                         const uint8_t *salt, size_t saltLength,
+                         const uint8_t *hash, size_t hashLength,
+                         uint8_t *signature, size_t signatureLength,
+                         Crypto::TlsSignatureCallback callback,
+                         void *context);
   bool submitEcdhPublicKeyStep();
   static void handleEcdhPublicKeyService(pukcc::EventMask events,
                                          uint8_t service, uint16_t status,
@@ -508,12 +516,14 @@ private:
   uint8_t *_rsaHash;
   uint8_t *_rsaSignature;
   uint8_t *_rsaEncoded;
+  uint8_t *_rsaOutputSignature;
   Crypto::TlsSignatureCallback _rsaCallback;
   void *_rsaCallbackContext;
   uint16_t _rsaModulusLength;
   uint8_t _rsaHashLength;
   Crypto::TlsSignatureAlgorithm _rsaAlgorithm;
   bool _rsaContextInitialized;
+  bool _rsaSignOperation;
   bool _rsaBusy;
 #endif
 };

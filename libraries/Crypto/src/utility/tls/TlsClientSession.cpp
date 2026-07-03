@@ -40,15 +40,49 @@ constexpr uint8_t Tls12Minor = 0x03;
 constexpr int StrictTls12CipherSuites[] = {
     MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, 0};
 
+constexpr int StrictTls12RsaCipherSuites[] = {
+    MBEDTLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, 0};
+
+constexpr int StrictTls12Aes256GcmCipherSuites[] = {
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384, 0};
+
+constexpr int StrictTls12RsaAes256GcmCipherSuites[] = {
+    MBEDTLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, 0};
+
+constexpr int StrictTls12Aes128CcmCipherSuites[] = {
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_CCM, 0};
+
+constexpr int StrictTls12Aes128Ccm8CipherSuites[] = {
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8, 0};
+
+constexpr int StrictTls12Aes256CcmCipherSuites[] = {
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_CCM, 0};
+
+constexpr int StrictTls12Aes256Ccm8CipherSuites[] = {
+    MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_256_CCM_8, 0};
+
 constexpr int StrictTls13Aes128GcmCipherSuites[] = {
     MBEDTLS_TLS1_3_AES_128_GCM_SHA256, 0};
 
 constexpr int StrictTls13Aes256GcmCipherSuites[] = {
     MBEDTLS_TLS1_3_AES_256_GCM_SHA384, 0};
 
+constexpr int StrictTls13Aes128CcmCipherSuites[] = {
+    MBEDTLS_TLS1_3_AES_128_CCM_SHA256, 0};
+
+constexpr int StrictTls13Aes128Ccm8CipherSuites[] = {
+    MBEDTLS_TLS1_3_AES_128_CCM_8_SHA256, 0};
+
 constexpr uint16_t StrictTlsSignatureAlgorithms[] = {
     MBEDTLS_TLS1_3_SIG_ECDSA_SECP256R1_SHA256,
     MBEDTLS_TLS1_3_SIG_ECDSA_SECP384R1_SHA384,
+    MBEDTLS_TLS1_3_SIG_ECDSA_SECP521R1_SHA512,
+    MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA256,
+    MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA384,
+    MBEDTLS_TLS1_3_SIG_RSA_PSS_RSAE_SHA512,
+    MBEDTLS_TLS1_3_SIG_RSA_PKCS1_SHA256,
+    MBEDTLS_TLS1_3_SIG_RSA_PKCS1_SHA384,
+    MBEDTLS_TLS1_3_SIG_RSA_PKCS1_SHA512,
     MBEDTLS_TLS1_3_SIG_NONE};
 
 bool policySupported(const TlsClientPolicy &policy) {
@@ -58,14 +92,25 @@ bool policySupported(const TlsClientPolicy &policy) {
   const bool tls12Strict =
       policy.minVersion == TlsProtocolVersion::Tls12 &&
       policy.maxVersion == TlsProtocolVersion::Tls12 &&
-      policy.cipherSuite == TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256;
+      (policy.cipherSuite == TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256 ||
+       policy.cipherSuite == TlsCipherSuite::EcdheRsaWithAes128GcmSha256 ||
+       policy.cipherSuite == TlsCipherSuite::EcdheEcdsaWithAes256GcmSha384 ||
+       policy.cipherSuite == TlsCipherSuite::EcdheRsaWithAes256GcmSha384 ||
+       policy.cipherSuite == TlsCipherSuite::EcdheEcdsaWithAes128CcmSha256 ||
+       policy.cipherSuite == TlsCipherSuite::EcdheEcdsaWithAes128Ccm8Sha256 ||
+       policy.cipherSuite == TlsCipherSuite::EcdheEcdsaWithAes256CcmSha256 ||
+       policy.cipherSuite == TlsCipherSuite::EcdheEcdsaWithAes256Ccm8Sha256);
   const bool tls13Strict =
       policy.minVersion == TlsProtocolVersion::Tls13 &&
       policy.maxVersion == TlsProtocolVersion::Tls13 &&
       (policy.cipherSuite ==
            TlsCipherSuite::Tls13EcdheEcdsaWithAes128GcmSha256 ||
        policy.cipherSuite ==
-           TlsCipherSuite::Tls13EcdheEcdsaWithAes256GcmSha384);
+           TlsCipherSuite::Tls13EcdheEcdsaWithAes256GcmSha384 ||
+       policy.cipherSuite ==
+           TlsCipherSuite::Tls13EcdheEcdsaWithAes128CcmSha256 ||
+       policy.cipherSuite ==
+           TlsCipherSuite::Tls13EcdheEcdsaWithAes128Ccm8Sha256);
 
   return verificationSupported && (tls12Strict || tls13Strict);
 }
@@ -85,10 +130,28 @@ const int *ciphersuitesForPolicy(const TlsClientPolicy &policy) {
   switch (policy.cipherSuite) {
   case TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256:
     return StrictTls12CipherSuites;
+  case TlsCipherSuite::EcdheRsaWithAes128GcmSha256:
+    return StrictTls12RsaCipherSuites;
+  case TlsCipherSuite::EcdheEcdsaWithAes256GcmSha384:
+    return StrictTls12Aes256GcmCipherSuites;
+  case TlsCipherSuite::EcdheRsaWithAes256GcmSha384:
+    return StrictTls12RsaAes256GcmCipherSuites;
+  case TlsCipherSuite::EcdheEcdsaWithAes128CcmSha256:
+    return StrictTls12Aes128CcmCipherSuites;
+  case TlsCipherSuite::EcdheEcdsaWithAes128Ccm8Sha256:
+    return StrictTls12Aes128Ccm8CipherSuites;
+  case TlsCipherSuite::EcdheEcdsaWithAes256CcmSha256:
+    return StrictTls12Aes256CcmCipherSuites;
+  case TlsCipherSuite::EcdheEcdsaWithAes256Ccm8Sha256:
+    return StrictTls12Aes256Ccm8CipherSuites;
   case TlsCipherSuite::Tls13EcdheEcdsaWithAes128GcmSha256:
     return StrictTls13Aes128GcmCipherSuites;
   case TlsCipherSuite::Tls13EcdheEcdsaWithAes256GcmSha384:
     return StrictTls13Aes256GcmCipherSuites;
+  case TlsCipherSuite::Tls13EcdheEcdsaWithAes128CcmSha256:
+    return StrictTls13Aes128CcmCipherSuites;
+  case TlsCipherSuite::Tls13EcdheEcdsaWithAes128Ccm8Sha256:
+    return StrictTls13Aes128Ccm8CipherSuites;
   default:
     return StrictTls12CipherSuites;
   }

@@ -42,6 +42,7 @@
       "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/block_cipher.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/cipher.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/cipher_wrap.c>",
+      "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/ccm.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdsa.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp.c>",
       "+<utility/third_party/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp_curves.c>",

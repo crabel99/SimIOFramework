@@ -71,7 +71,8 @@ bool submitPublicExpModStep(PublicExpModOperation &operation) {
         return false;
       }
     }
-    return startExpModAsync(operation.exponentiation, operation.result);
+    return startExpModAsync(operation.exponentiation, operation.mode,
+                            operation.windowSize, operation.result);
   case PublicExpModStep::Idle:
   case PublicExpModStep::Complete:
   case PublicExpModStep::Error:
@@ -118,18 +119,25 @@ void handlePublicExpModService(pukcc::EventMask events, uint8_t service,
 static_assert(sizeof(ExpModOperation) == 36,
               "ExpMod parameter block must match the PUKCC ROM ABI");
 
-bool startExpModAsync(ExpModOperation &operation, pukcc::ServiceResult &result) {
+bool startExpModAsync(ExpModOperation &operation, ExpModMode mode,
+                      ExpModWindowSize windowSize,
+                      pukcc::ServiceResult &result) {
   if (!validExpModLayout(operation)) {
     reject(result, pukcc::ExpModServiceId, pukcc::StatusParameterNotInPukccRam);
     return false;
   }
 
   operation.header = {};
-  operation.header.option =
-      ExpModWindowSize1Option | ExpModFastRsaOption |
-      ExpModExponentInPukccRamOption;
+  operation.header.option = static_cast<uint16_t>(mode) |
+                            static_cast<uint16_t>(windowSize) |
+                            ExpModExponentInPukccRamOption;
   return Crypto::pukccServiceAsync(pukcc::ExpModServiceId, operation.header,
                                   result);
+}
+
+bool startExpModAsync(ExpModOperation &operation, pukcc::ServiceResult &result) {
+  return startExpModAsync(operation, ExpModMode::Fast, ExpModWindowSize::Bits1,
+                          result);
 }
 
 bool startPublicExpModAsync(PublicExpModOperation &operation,

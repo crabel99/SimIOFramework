@@ -38,9 +38,9 @@ using TlsAeadCallback = void (*)(bool success, void *context);
 /**
  * @brief TLS key exchange groups that may be serviced by async providers.
  *
- * P-256 is currently implemented through PUKCC. Other groups are represented
- * so TLS 1.3 KeyShare support can be added without using implicit PSA/software
- * fallback paths.
+ * P-256/P-384/P-521 are implemented through async PUKCC-backed providers.
+ * X25519 is represented so TLS 1.3 KeyShare requests fail closed instead of
+ * using implicit PSA/software fallback paths.
  */
 enum class TlsKeyExchangeAlgorithm : uint8_t {
   EcdhP256 = 1,
@@ -52,8 +52,9 @@ enum class TlsKeyExchangeAlgorithm : uint8_t {
 /**
  * @brief TLS signature algorithms that may be serviced by async providers.
  *
- * ECDSA P-256 with SHA-256 is currently implemented through PUKCC. Unsupported
- * algorithms fail closed until a provider implements the exact signature shape.
+ * ECDSA P-256/P-384/P-521 and RSA-PSS/RSA-PKCS1 signatures are implemented
+ * through async hardware providers. Unsupported algorithms fail closed until a
+ * provider implements the exact signature shape.
  */
 enum class TlsSignatureAlgorithm : uint8_t {
   EcdsaP256Sha256 = 1,
@@ -62,6 +63,10 @@ enum class TlsSignatureAlgorithm : uint8_t {
   Ed25519 = 4,
   RsaPssRsaeSha256 = 5,
   RsaPssRsaeSha384 = 6,
+  RsaPssRsaeSha512 = 7,
+  RsaPkcs1Sha256 = 8,
+  RsaPkcs1Sha384 = 9,
+  RsaPkcs1Sha512 = 10,
 };
 
 /**
@@ -185,12 +190,10 @@ public:
   /**
    * @brief Start async TLS key exchange public-key derivation.
    *
-   * `privateScalar` and `publicKey` use the wire shape for `algorithm`. P-256
-   * expects a 32-byte big-endian scalar and writes a 65-byte uncompressed
-   * point.
-   *
-   * @todo Add async provider implementations for P-384, X25519, and P-521 when
-   * those groups are enabled for TLS 1.3 KeyShare or expanded TLS profiles.
+   * `privateScalar` and `publicKey` use the wire shape for `algorithm`.
+   * Hardware providers override this for P-256, P-384, and P-521. X25519 is
+   * represented so unsupported requests fail closed instead of falling back to
+   * PSA/software.
    */
   virtual bool keyExchangePublicKeyAsync(
       TlsKeyExchangeAlgorithm algorithm, const uint8_t *privateScalar,
@@ -212,11 +215,8 @@ public:
   /**
    * @brief Start async TLS key exchange shared-secret computation.
    *
-   * P-256 expects a 32-byte big-endian scalar, a 65-byte uncompressed peer
-   * point, and writes the 32-byte X-coordinate shared secret.
-   *
-   * @todo Add async provider implementations for P-384, X25519, and P-521 when
-   * those groups are enabled. Unsupported groups fail closed.
+   * Hardware providers override this for P-256, P-384, and P-521 wire shapes.
+   * Unsupported groups fail closed.
    */
   virtual bool keyExchangeSharedSecretAsync(
       TlsKeyExchangeAlgorithm algorithm, const uint8_t *privateScalar,
@@ -289,11 +289,9 @@ public:
   /**
    * @brief Start async TLS signature generation for a supported algorithm.
    *
-   * ECDSA P-256/SHA-256 is currently implemented and requires a caller-owned
-   * nonce scalar already filled from async hardware random.
-   *
-   * @todo Add provider implementations for P-384/P-521 ECDSA, Ed25519, and
-   * RSA-PSS only when those signature schemes become supported TLS policy.
+   * Hardware providers override this for ECDSA P-256/P-384/P-521 and RSA
+   * PSS/PKCS1. ECDSA requires a caller-owned nonce scalar already filled from
+   * async hardware random. Unsupported signatures fail closed.
    */
   virtual bool
   signatureSignAsync(TlsSignatureAlgorithm algorithm, const uint8_t *privateKey,
@@ -321,8 +319,9 @@ public:
   /**
    * @brief Start async TLS signature verification for a supported algorithm.
    *
-   * ECDSA P-256/SHA-256 is currently implemented. Unsupported signature
-   * algorithms fail closed instead of falling back to PSA/software.
+   * Hardware providers override this for ECDSA P-256/P-384/P-521 and RSA
+   * PSS/PKCS1. Unsupported signature algorithms fail closed instead of falling
+   * back to PSA/software.
    */
   virtual bool signatureVerifyAsync(TlsSignatureAlgorithm algorithm,
                                     const uint8_t *publicKey,
@@ -763,8 +762,17 @@ enum class TlsProtocolVersion : uint8_t {
 
 enum class TlsCipherSuite : uint8_t {
   EcdheEcdsaWithAes128GcmSha256,
+  EcdheRsaWithAes128GcmSha256,
+  EcdheEcdsaWithAes256GcmSha384,
+  EcdheRsaWithAes256GcmSha384,
+  EcdheEcdsaWithAes128CcmSha256,
+  EcdheEcdsaWithAes128Ccm8Sha256,
+  EcdheEcdsaWithAes256CcmSha256,
+  EcdheEcdsaWithAes256Ccm8Sha256,
   Tls13EcdheEcdsaWithAes128GcmSha256,
   Tls13EcdheEcdsaWithAes256GcmSha384,
+  Tls13EcdheEcdsaWithAes128CcmSha256,
+  Tls13EcdheEcdsaWithAes128Ccm8Sha256,
 };
 
 /**

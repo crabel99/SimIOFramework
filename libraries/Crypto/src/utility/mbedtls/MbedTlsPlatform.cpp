@@ -83,6 +83,47 @@ static void samd_mbedtls_zeroize(void *buffer, size_t length) {
     *bytes++ = 0u;
 }
 
+static Crypto::TlsSignatureAlgorithm samd_mbedtls_rsa_pss_algorithm(
+    int hashBits) {
+  switch (hashBits) {
+  case 256:
+    return Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha256;
+  case 384:
+    return Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha384;
+  case 512:
+    return Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha512;
+  default:
+    return static_cast<Crypto::TlsSignatureAlgorithm>(0);
+  }
+}
+
+static Crypto::TlsSignatureAlgorithm samd_mbedtls_rsa_pkcs1_algorithm(
+    int hashBits) {
+  switch (hashBits) {
+  case 256:
+    return Crypto::TlsSignatureAlgorithm::RsaPkcs1Sha256;
+  case 384:
+    return Crypto::TlsSignatureAlgorithm::RsaPkcs1Sha384;
+  case 512:
+    return Crypto::TlsSignatureAlgorithm::RsaPkcs1Sha512;
+  default:
+    return static_cast<Crypto::TlsSignatureAlgorithm>(0);
+  }
+}
+
+static size_t samd_mbedtls_rsa_hash_length(int hashBits) {
+  switch (hashBits) {
+  case 256:
+    return 32u;
+  case 384:
+    return 48u;
+  case 512:
+    return 64u;
+  default:
+    return 0u;
+  }
+}
+
 int samd_mbedtls_random_start(uint8_t *buffer, size_t length,
                                samd_mbedtls_async_callback_t callback,
                                void *context) {
@@ -585,14 +626,106 @@ int samd_mbedtls_ecdsa_p384_sign_start(const uint8_t privateKey[48],
   return 1;
 }
 
-int samd_mbedtls_rsa_pss_verify_start(
-    int sha384, const uint8_t *publicKey, size_t publicKeyLength,
-    const uint8_t *hash, size_t hashLength, const uint8_t *signature,
-    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+int samd_mbedtls_ecdh_p521_start(const uint8_t privateScalar[66],
+                                  const uint8_t peerPublicKey[133],
+                                  uint8_t sharedSecret[66],
+                                  samd_mbedtls_async_callback_t callback,
+                                  void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      privateScalar == nullptr || peerPublicKey == nullptr ||
+      sharedSecret == nullptr || callback == nullptr) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    samd_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->keyExchangeSharedSecretAsync(
+          Crypto::TlsKeyExchangeAlgorithm::EcdhP521, privateScalar, 66,
+          peerPublicKey, 133, sharedSecret, 66,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            samd_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
+int samd_mbedtls_ecdh_p521_public_key_start(
+    const uint8_t privateScalar[66], uint8_t publicKey[133],
+    samd_mbedtls_async_callback_t callback, void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      privateScalar == nullptr || publicKey == nullptr || callback == nullptr) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    samd_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->keyExchangePublicKeyAsync(
+          Crypto::TlsKeyExchangeAlgorithm::EcdhP521, privateScalar, 66,
+          publicKey, 133,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            samd_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
+int samd_mbedtls_ecdsa_p521_verify_start(
+    const uint8_t publicKey[133], const uint8_t hash[64],
+    const uint8_t signature[132], samd_mbedtls_async_callback_t callback,
     void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
-      publicKey == nullptr || publicKeyLength == 0 || hash == nullptr ||
-      signature == nullptr || signatureLength == 0 || callback == nullptr) {
+      publicKey == nullptr || hash == nullptr || signature == nullptr ||
+      callback == nullptr) {
     return 0;
   }
 
@@ -610,10 +743,373 @@ int samd_mbedtls_rsa_pss_verify_start(
 
   const bool submitted =
       Crypto::MbedTlsPort::externalRandomProvider->signatureVerifyAsync(
-          sha384 != 0 ? Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha384
-                      : Crypto::TlsSignatureAlgorithm::RsaPssRsaeSha256,
-          publicKey, publicKeyLength, hash, hashLength, signature,
+          Crypto::TlsSignatureAlgorithm::EcdsaP521Sha512, publicKey, 133, hash,
+          64, signature, 132,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            samd_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
+int samd_mbedtls_ecdsa_p521_sign_start(const uint8_t privateKey[66],
+                                        const uint8_t hash[64],
+                                        uint8_t signature[132],
+                                        samd_mbedtls_async_callback_t callback,
+                                        void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      privateKey == nullptr || hash == nullptr || signature == nullptr ||
+      callback == nullptr) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    uint8_t nonceScalar[66];
+    const uint8_t *privateKey;
+    const uint8_t *hash;
+    uint8_t *signature;
+    samd_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext = {};
+  callbackContext.privateKey = privateKey;
+  callbackContext.hash = hash;
+  callbackContext.signature = signature;
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submittedRandom =
+      Crypto::MbedTlsPort::externalRandomProvider->randomBytesAsync(
+          callbackContext.nonceScalar, sizeof(callbackContext.nonceScalar),
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            if (!success ||
+                Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+                !Crypto::MbedTlsPort::externalRandomProvider
+                     ->signatureSignAsync(
+                         Crypto::TlsSignatureAlgorithm::EcdsaP521Sha512,
+                         callbackContext->privateKey, 66,
+                         callbackContext->nonceScalar, 66,
+                         callbackContext->hash, 64, callbackContext->signature,
+                         132,
+                         [](bool signSuccess, void *signUser) {
+                           auto *callbackContext =
+                               static_cast<CallbackContext *>(signUser);
+                           samd_mbedtls_async_callback_t completed =
+                               callbackContext->callback;
+                           void *completedContext = callbackContext->context;
+                           samd_mbedtls_zeroize(
+                               callbackContext->nonceScalar,
+                               sizeof(callbackContext->nonceScalar));
+                           callbackContext->privateKey = nullptr;
+                           callbackContext->hash = nullptr;
+                           callbackContext->signature = nullptr;
+                           callbackContext->callback = nullptr;
+                           callbackContext->context = nullptr;
+                           if (completed != nullptr)
+                             completed(signSuccess ? 1 : 0, completedContext);
+                         },
+                         callbackContext)) {
+              samd_mbedtls_async_callback_t completed =
+                  callbackContext->callback;
+              void *completedContext = callbackContext->context;
+              samd_mbedtls_zeroize(callbackContext->nonceScalar,
+                                    sizeof(callbackContext->nonceScalar));
+              callbackContext->privateKey = nullptr;
+              callbackContext->hash = nullptr;
+              callbackContext->signature = nullptr;
+              callbackContext->callback = nullptr;
+              callbackContext->context = nullptr;
+              if (completed != nullptr)
+                completed(0, completedContext);
+            }
+          },
+          &callbackContext);
+
+  if (!submittedRandom) {
+    samd_mbedtls_zeroize(callbackContext.nonceScalar,
+                          sizeof(callbackContext.nonceScalar));
+    callbackContext = {};
+    return 0;
+  }
+
+  return 1;
+}
+
+int samd_mbedtls_rsa_pss_verify_start(
+    int hashBits, const uint8_t *publicKey, size_t publicKeyLength,
+    const uint8_t *hash, size_t hashLength, const uint8_t *signature,
+    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+    void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      publicKey == nullptr || publicKeyLength == 0 || hash == nullptr ||
+      signature == nullptr || signatureLength == 0 || callback == nullptr) {
+    return 0;
+  }
+  const Crypto::TlsSignatureAlgorithm algorithm =
+      samd_mbedtls_rsa_pss_algorithm(hashBits);
+  if (static_cast<uint8_t>(algorithm) == 0 ||
+      hashLength != samd_mbedtls_rsa_hash_length(hashBits)) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    samd_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->signatureVerifyAsync(
+          algorithm, publicKey, publicKeyLength, hash, hashLength, signature,
           signatureLength,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            samd_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
+int samd_mbedtls_rsa_pkcs1_verify_start(
+    int hashBits, const uint8_t *publicKey, size_t publicKeyLength,
+    const uint8_t *hash, size_t hashLength, const uint8_t *signature,
+    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+    void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      publicKey == nullptr || publicKeyLength == 0 || hash == nullptr ||
+      signature == nullptr || signatureLength == 0 || callback == nullptr) {
+    return 0;
+  }
+
+  const Crypto::TlsSignatureAlgorithm algorithm =
+      samd_mbedtls_rsa_pkcs1_algorithm(hashBits);
+  if (static_cast<uint8_t>(algorithm) == 0 ||
+      hashLength != samd_mbedtls_rsa_hash_length(hashBits)) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    samd_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->signatureVerifyAsync(
+          algorithm, publicKey, publicKeyLength, hash, hashLength, signature,
+          signatureLength,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            samd_mbedtls_async_callback_t completed =
+                callbackContext->callback;
+            void *completedContext = callbackContext->context;
+            callbackContext->callback = nullptr;
+            callbackContext->context = nullptr;
+            if (completed != nullptr)
+              completed(success ? 1 : 0, completedContext);
+          },
+          &callbackContext);
+
+  if (!submitted) {
+    callbackContext.callback = nullptr;
+    callbackContext.context = nullptr;
+    return 0;
+  }
+
+  return 1;
+}
+
+int samd_mbedtls_rsa_pss_sign_start(
+    int hashBits, const uint8_t *privateKey, size_t privateKeyLength,
+    const uint8_t *hash, size_t hashLength, uint8_t *signature,
+    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+    void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      privateKey == nullptr || privateKeyLength == 0 || hash == nullptr ||
+      signature == nullptr || signatureLength == 0 || callback == nullptr) {
+    return 0;
+  }
+
+  const Crypto::TlsSignatureAlgorithm algorithm =
+      samd_mbedtls_rsa_pss_algorithm(hashBits);
+  const size_t saltLength = samd_mbedtls_rsa_hash_length(hashBits);
+  if (static_cast<uint8_t>(algorithm) == 0 || hashLength != saltLength ||
+      saltLength > 64u) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    uint8_t salt[64];
+    Crypto::TlsSignatureAlgorithm algorithm;
+    const uint8_t *privateKey;
+    size_t privateKeyLength;
+    const uint8_t *hash;
+    size_t hashLength;
+    uint8_t *signature;
+    size_t signatureLength;
+    samd_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext = {};
+  callbackContext.algorithm = algorithm;
+  callbackContext.privateKey = privateKey;
+  callbackContext.privateKeyLength = privateKeyLength;
+  callbackContext.hash = hash;
+  callbackContext.hashLength = hashLength;
+  callbackContext.signature = signature;
+  callbackContext.signatureLength = signatureLength;
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submittedRandom =
+      Crypto::MbedTlsPort::externalRandomProvider->randomBytesAsync(
+          callbackContext.salt, saltLength,
+          [](bool success, void *user) {
+            auto *callbackContext = static_cast<CallbackContext *>(user);
+            if (!success ||
+                Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+                !Crypto::MbedTlsPort::externalRandomProvider
+                     ->signatureSignAsync(
+                         callbackContext->algorithm,
+                         callbackContext->privateKey,
+                         callbackContext->privateKeyLength,
+                         callbackContext->salt, callbackContext->hashLength,
+                         callbackContext->hash, callbackContext->hashLength,
+                         callbackContext->signature,
+                         callbackContext->signatureLength,
+                         [](bool signSuccess, void *signUser) {
+                           auto *callbackContext =
+                               static_cast<CallbackContext *>(signUser);
+                           samd_mbedtls_async_callback_t completed =
+                               callbackContext->callback;
+                           void *completedContext = callbackContext->context;
+                           samd_mbedtls_zeroize(callbackContext->salt,
+                                                sizeof(callbackContext->salt));
+                           callbackContext->privateKey = nullptr;
+                           callbackContext->privateKeyLength = 0;
+                           callbackContext->hash = nullptr;
+                           callbackContext->hashLength = 0;
+                           callbackContext->signature = nullptr;
+                           callbackContext->signatureLength = 0;
+                           callbackContext->callback = nullptr;
+                           callbackContext->context = nullptr;
+                           if (completed != nullptr)
+                             completed(signSuccess ? 1 : 0, completedContext);
+                         },
+                         callbackContext)) {
+              samd_mbedtls_async_callback_t completed =
+                  callbackContext->callback;
+              void *completedContext = callbackContext->context;
+              samd_mbedtls_zeroize(callbackContext->salt,
+                                    sizeof(callbackContext->salt));
+              callbackContext->privateKey = nullptr;
+              callbackContext->privateKeyLength = 0;
+              callbackContext->hash = nullptr;
+              callbackContext->hashLength = 0;
+              callbackContext->signature = nullptr;
+              callbackContext->signatureLength = 0;
+              callbackContext->callback = nullptr;
+              callbackContext->context = nullptr;
+              if (completed != nullptr)
+                completed(0, completedContext);
+            }
+          },
+          &callbackContext);
+
+  if (!submittedRandom) {
+    samd_mbedtls_zeroize(callbackContext.salt,
+                          sizeof(callbackContext.salt));
+    callbackContext = {};
+    return 0;
+  }
+
+  return 1;
+}
+
+int samd_mbedtls_rsa_pkcs1_sign_start(
+    int hashBits, const uint8_t *privateKey, size_t privateKeyLength,
+    const uint8_t *hash, size_t hashLength, uint8_t *signature,
+    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+    void *context) {
+  if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
+      privateKey == nullptr || privateKeyLength == 0 || hash == nullptr ||
+      signature == nullptr || signatureLength == 0 || callback == nullptr) {
+    return 0;
+  }
+
+  const Crypto::TlsSignatureAlgorithm algorithm =
+      samd_mbedtls_rsa_pkcs1_algorithm(hashBits);
+  if (static_cast<uint8_t>(algorithm) == 0 ||
+      hashLength != samd_mbedtls_rsa_hash_length(hashBits)) {
+    return 0;
+  }
+
+  struct CallbackContext {
+    samd_mbedtls_async_callback_t callback;
+    void *context;
+  };
+
+  static CallbackContext callbackContext;
+  if (callbackContext.callback != nullptr)
+    return 0;
+
+  callbackContext.callback = callback;
+  callbackContext.context = context;
+
+  const bool submitted =
+      Crypto::MbedTlsPort::externalRandomProvider->signatureSignAsync(
+          algorithm, privateKey, privateKeyLength, nullptr, 0, hash, hashLength,
+          signature, signatureLength,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
             samd_mbedtls_async_callback_t completed =
