@@ -40,18 +40,51 @@ constexpr uint8_t Tls12Minor = 0x03;
 constexpr int StrictTls12CipherSuites[] = {
     MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, 0};
 
+constexpr int StrictTls13CipherSuites[] = {MBEDTLS_TLS1_3_AES_128_GCM_SHA256,
+                                           0};
+
 constexpr uint16_t StrictTlsSignatureAlgorithms[] = {
     MBEDTLS_TLS1_3_SIG_ECDSA_SECP256R1_SHA256,
     MBEDTLS_TLS1_3_SIG_ECDSA_SECP384R1_SHA384,
     MBEDTLS_TLS1_3_SIG_NONE};
 
 bool policySupported(const TlsClientPolicy &policy) {
-  return (policy.verification == TlsVerificationPolicy::Required ||
-          policy.verification == TlsVerificationPolicy::InsecureNoVerify) &&
-         policy.minVersion == TlsProtocolVersion::Tls12 &&
-         policy.maxVersion == TlsProtocolVersion::Tls12 &&
-         policy.cipherSuite ==
-             TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256;
+  const bool verificationSupported =
+      policy.verification == TlsVerificationPolicy::Required ||
+      policy.verification == TlsVerificationPolicy::InsecureNoVerify;
+  const bool tls12Strict =
+      policy.minVersion == TlsProtocolVersion::Tls12 &&
+      policy.maxVersion == TlsProtocolVersion::Tls12 &&
+      policy.cipherSuite == TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256;
+  const bool tls13Strict =
+      policy.minVersion == TlsProtocolVersion::Tls13 &&
+      policy.maxVersion == TlsProtocolVersion::Tls13 &&
+      policy.cipherSuite ==
+          TlsCipherSuite::Tls13EcdheEcdsaWithAes128GcmSha256;
+
+  return verificationSupported && (tls12Strict || tls13Strict);
+}
+
+mbedtls_ssl_protocol_version toMbedTlsVersion(TlsProtocolVersion version) {
+  switch (version) {
+  case TlsProtocolVersion::Tls12:
+    return MBEDTLS_SSL_VERSION_TLS1_2;
+  case TlsProtocolVersion::Tls13:
+    return MBEDTLS_SSL_VERSION_TLS1_3;
+  default:
+    return MBEDTLS_SSL_VERSION_TLS1_2;
+  }
+}
+
+const int *ciphersuitesForPolicy(const TlsClientPolicy &policy) {
+  switch (policy.cipherSuite) {
+  case TlsCipherSuite::EcdheEcdsaWithAes128GcmSha256:
+    return StrictTls12CipherSuites;
+  case TlsCipherSuite::Tls13EcdheEcdsaWithAes128GcmSha256:
+    return StrictTls13CipherSuites;
+  default:
+    return StrictTls12CipherSuites;
+  }
 }
 
 bool alpnListSupported(const char *const *protocols) {
@@ -723,9 +756,16 @@ bool TlsClientSession::prepareMbedTlsSession() {
   if (verifyRequired)
     mbedtls_ssl_conf_verify(&_sslConfig,
                             TlsClientSession::handleCertificateVerify, this);
-  mbedtls_ssl_conf_min_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
-  mbedtls_ssl_conf_max_tls_version(&_sslConfig, MBEDTLS_SSL_VERSION_TLS1_2);
-  mbedtls_ssl_conf_ciphersuites(&_sslConfig, StrictTls12CipherSuites);
+  mbedtls_ssl_conf_min_tls_version(&_sslConfig,
+                                   toMbedTlsVersion(_policy.minVersion));
+  mbedtls_ssl_conf_max_tls_version(&_sslConfig,
+                                   toMbedTlsVersion(_policy.maxVersion));
+  mbedtls_ssl_conf_ciphersuites(&_sslConfig, ciphersuitesForPolicy(_policy));
+#if defined(MBEDTLS_SSL_PROTO_TLS1_3)
+  if (_policy.maxVersion == TlsProtocolVersion::Tls13)
+    mbedtls_ssl_conf_tls13_key_exchange_modes(
+        &_sslConfig, MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL);
+#endif
   mbedtls_ssl_conf_sig_algs(&_sslConfig, StrictTlsSignatureAlgorithms);
 #if defined(MBEDTLS_SSL_SESSION_TICKETS)
   mbedtls_ssl_conf_session_tickets(&_sslConfig,

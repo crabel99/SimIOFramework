@@ -79,6 +79,9 @@
       "+<utility/third_party/mbedtls/library/ssl_msg.c>",
       "+<utility/third_party/mbedtls/library/ssl_tls.c>",
       "+<utility/third_party/mbedtls/library/ssl_tls12_client.c>",
+      "+<utility/third_party/mbedtls/library/ssl_tls13_client.c>",
+      "+<utility/third_party/mbedtls/library/ssl_tls13_generic.c>",
+      "+<utility/third_party/mbedtls/library/ssl_tls13_keys.c>",
       "+<utility/third_party/mbedtls/library/x509.c>",
       "+<utility/third_party/mbedtls/library/x509_crt.c>",
       "+<utility/third_party/mbedtls/library/x509_oid.c>"

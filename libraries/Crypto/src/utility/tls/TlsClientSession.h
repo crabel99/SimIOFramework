@@ -531,10 +531,12 @@ enum class TlsVerificationPolicy : uint8_t {
 
 enum class TlsProtocolVersion : uint8_t {
   Tls12,
+  Tls13,
 };
 
 enum class TlsCipherSuite : uint8_t {
   EcdheEcdsaWithAes128GcmSha256,
+  Tls13EcdheEcdsaWithAes128GcmSha256,
 };
 
 /**
@@ -644,9 +646,9 @@ public:
    * @brief Configure the strict TLS policy used for future handshakes.
    *
    * This call fails while an operation is active. The current implementation
-   * supports only TLS 1.2 with required certificate verification and
-   * ECDHE-ECDSA-AES128-GCM-SHA256. Unsupported enum values fail closed so
-   * adding broader policy later requires explicit implementation and tests.
+ * supports TLS 1.2 ECDHE-ECDSA-AES128-GCM-SHA256 and TLS 1.3
+ * ECDHE-ECDSA-AES128-GCM-SHA256. Unsupported enum values fail closed so
+ * adding broader policy later requires explicit implementation and tests.
    */
   bool configurePolicy(const TlsClientPolicy &policy);
   const TlsClientPolicy &policy() const { return _policy; }

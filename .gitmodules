@@ -6,4 +6,4 @@
 	url = https://github.com/adafruit/Adafruit_ZeroDMA
 [submodule "libraries/Crypto/src/utility/third_party/mbedtls"]
 	path = libraries/Crypto/src/utility/third_party/mbedtls
-	url = https://github.com/Mbed-TLS/mbedtls.git
+	url = https://github.com/crabel99/mbedtls.git

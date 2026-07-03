@@ -42,6 +42,9 @@ extern time_t mbedtls_platform_time(time_t *time);
 #define MBEDTLS_SSL_TLS_C
 #define MBEDTLS_SSL_ALPN
 #define MBEDTLS_SSL_PROTO_TLS1_2
+#define MBEDTLS_SSL_PROTO_TLS1_3
+#define MBEDTLS_SSL_KEEP_PEER_CERTIFICATE
+#define MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_EPHEMERAL_ENABLED
 #define MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
 #define MBEDTLS_ECP_RESTARTABLE
 #define MBEDTLS_X509_CRT_PARSE_C
@@ -49,7 +52,8 @@ extern time_t mbedtls_platform_time(time_t *time);
 #define MBEDTLS_SSL_IN_CONTENT_LEN 1024
 #define MBEDTLS_SSL_OUT_CONTENT_LEN 1024
 #define MBEDTLS_SSL_CIPHERSUITES                                             \
-  MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+  MBEDTLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,                           \
+      MBEDTLS_TLS1_3_AES_128_GCM_SHA256
 
 /* RSA support is intentionally not part of the Arduino TLS profile. TF-PSA may
  * still compile RSA internals as dependency glue, but this profile does not enable RSA
@@ -82,6 +86,9 @@ extern time_t mbedtls_platform_time(time_t *time);
 #define PSA_WANT_ALG_ECDSA 1
 #define PSA_WANT_ALG_GCM 1
 #define PSA_WANT_ALG_HMAC 1
+#define PSA_WANT_ALG_HKDF 1
+#define PSA_WANT_ALG_HKDF_EXTRACT 1
+#define PSA_WANT_ALG_HKDF_EXPAND 1
 #define PSA_WANT_ALG_SHA_256 1
 #define PSA_WANT_ALG_SHA_384 1
 #define PSA_WANT_ALG_TLS12_PRF 1
