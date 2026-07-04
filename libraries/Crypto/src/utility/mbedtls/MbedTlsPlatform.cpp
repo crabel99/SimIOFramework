@@ -65,7 +65,7 @@ bool generateExternalRandom(uint8_t *buffer, size_t length) {
 } // namespace Crypto::MbedTlsPort
 
 extern "C" {
-typedef void (*samd_mbedtls_async_callback_t)(int success, void *context);
+typedef void (*mbedtls_async_hardware_callback_t)(int success, void *context);
 
 time_t mbedtls_platform_time(time_t *time) {
   const mbedtls_time_t now = Crypto::MbedTlsPort::currentTrustedTime();
@@ -74,7 +74,7 @@ time_t mbedtls_platform_time(time_t *time) {
   return static_cast<time_t>(now);
 }
 
-static void samd_mbedtls_zeroize(void *buffer, size_t length) {
+static void mbedtls_async_hardware_zeroize(void *buffer, size_t length) {
   if (buffer == nullptr)
     return;
 
@@ -83,7 +83,7 @@ static void samd_mbedtls_zeroize(void *buffer, size_t length) {
     *bytes++ = 0u;
 }
 
-static Crypto::TlsSignatureAlgorithm samd_mbedtls_rsa_pss_algorithm(
+static Crypto::TlsSignatureAlgorithm mbedtls_async_hardware_rsa_pss_algorithm(
     int hashBits) {
   switch (hashBits) {
   case 256:
@@ -97,7 +97,7 @@ static Crypto::TlsSignatureAlgorithm samd_mbedtls_rsa_pss_algorithm(
   }
 }
 
-static Crypto::TlsSignatureAlgorithm samd_mbedtls_rsa_pkcs1_algorithm(
+static Crypto::TlsSignatureAlgorithm mbedtls_async_hardware_rsa_pkcs1_algorithm(
     int hashBits) {
   switch (hashBits) {
   case 256:
@@ -111,7 +111,7 @@ static Crypto::TlsSignatureAlgorithm samd_mbedtls_rsa_pkcs1_algorithm(
   }
 }
 
-static size_t samd_mbedtls_rsa_hash_length(int hashBits) {
+static size_t mbedtls_async_hardware_rsa_hash_length(int hashBits) {
   switch (hashBits) {
   case 256:
     return 32u;
@@ -124,8 +124,8 @@ static size_t samd_mbedtls_rsa_hash_length(int hashBits) {
   }
 }
 
-int samd_mbedtls_random_start(uint8_t *buffer, size_t length,
-                               samd_mbedtls_async_callback_t callback,
+int mbedtls_async_hardware_random_start(uint8_t *buffer, size_t length,
+                               mbedtls_async_hardware_callback_t callback,
                                void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       buffer == nullptr || length == 0 || callback == nullptr) {
@@ -133,7 +133,7 @@ int samd_mbedtls_random_start(uint8_t *buffer, size_t length,
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -149,7 +149,7 @@ int samd_mbedtls_random_start(uint8_t *buffer, size_t length,
           buffer, length,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -168,10 +168,10 @@ int samd_mbedtls_random_start(uint8_t *buffer, size_t length,
   return 1;
 }
 
-int samd_mbedtls_ecdh_p256_start(const uint8_t privateScalar[32],
+int mbedtls_async_hardware_ecdh_p256_start(const uint8_t privateScalar[32],
                                   const uint8_t peerPublicKey[65],
                                   uint8_t sharedSecret[32],
-                                  samd_mbedtls_async_callback_t callback,
+                                  mbedtls_async_hardware_callback_t callback,
                                   void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateScalar == nullptr || peerPublicKey == nullptr ||
@@ -180,7 +180,7 @@ int samd_mbedtls_ecdh_p256_start(const uint8_t privateScalar[32],
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -197,7 +197,7 @@ int samd_mbedtls_ecdh_p256_start(const uint8_t privateScalar[32],
           peerPublicKey, 65, sharedSecret, 32,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -216,16 +216,16 @@ int samd_mbedtls_ecdh_p256_start(const uint8_t privateScalar[32],
   return 1;
 }
 
-int samd_mbedtls_ecdh_p256_public_key_start(
+int mbedtls_async_hardware_ecdh_p256_public_key_start(
     const uint8_t privateScalar[32], uint8_t publicKey[65],
-    samd_mbedtls_async_callback_t callback, void *context) {
+    mbedtls_async_hardware_callback_t callback, void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateScalar == nullptr || publicKey == nullptr || callback == nullptr) {
     return 0;
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -242,7 +242,7 @@ int samd_mbedtls_ecdh_p256_public_key_start(
           publicKey, 65,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -261,9 +261,9 @@ int samd_mbedtls_ecdh_p256_public_key_start(
   return 1;
 }
 
-int samd_mbedtls_ecdsa_p256_verify_start(
+int mbedtls_async_hardware_ecdsa_p256_verify_start(
     const uint8_t publicKey[65], const uint8_t hash[32],
-    const uint8_t signature[64], samd_mbedtls_async_callback_t callback,
+    const uint8_t signature[64], mbedtls_async_hardware_callback_t callback,
     void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       publicKey == nullptr || hash == nullptr || signature == nullptr ||
@@ -272,7 +272,7 @@ int samd_mbedtls_ecdsa_p256_verify_start(
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -289,7 +289,7 @@ int samd_mbedtls_ecdsa_p256_verify_start(
           32, signature, 64,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -308,10 +308,10 @@ int samd_mbedtls_ecdsa_p256_verify_start(
   return 1;
 }
 
-int samd_mbedtls_ecdsa_p256_sign_start(const uint8_t privateKey[32],
+int mbedtls_async_hardware_ecdsa_p256_sign_start(const uint8_t privateKey[32],
                                         const uint8_t hash[32],
                                         uint8_t signature[64],
-                                        samd_mbedtls_async_callback_t callback,
+                                        mbedtls_async_hardware_callback_t callback,
                                         void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateKey == nullptr || hash == nullptr || signature == nullptr ||
@@ -324,7 +324,7 @@ int samd_mbedtls_ecdsa_p256_sign_start(const uint8_t privateKey[32],
     const uint8_t *privateKey;
     const uint8_t *hash;
     uint8_t *signature;
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -356,10 +356,10 @@ int samd_mbedtls_ecdsa_p256_sign_start(const uint8_t privateKey[32],
                          [](bool signSuccess, void *signUser) {
                            auto *callbackContext =
                                static_cast<CallbackContext *>(signUser);
-                           samd_mbedtls_async_callback_t completed =
+                           mbedtls_async_hardware_callback_t completed =
                                callbackContext->callback;
                            void *completedContext = callbackContext->context;
-                           samd_mbedtls_zeroize(
+                           mbedtls_async_hardware_zeroize(
                                callbackContext->nonceScalar,
                                sizeof(callbackContext->nonceScalar));
                            callbackContext->privateKey = nullptr;
@@ -371,10 +371,10 @@ int samd_mbedtls_ecdsa_p256_sign_start(const uint8_t privateKey[32],
                              completed(signSuccess ? 1 : 0, completedContext);
                          },
                          callbackContext)) {
-              samd_mbedtls_async_callback_t completed =
+              mbedtls_async_hardware_callback_t completed =
                   callbackContext->callback;
               void *completedContext = callbackContext->context;
-              samd_mbedtls_zeroize(callbackContext->nonceScalar,
+              mbedtls_async_hardware_zeroize(callbackContext->nonceScalar,
                                     sizeof(callbackContext->nonceScalar));
               callbackContext->privateKey = nullptr;
               callbackContext->hash = nullptr;
@@ -388,7 +388,7 @@ int samd_mbedtls_ecdsa_p256_sign_start(const uint8_t privateKey[32],
           &callbackContext);
 
   if (!submittedRandom) {
-    samd_mbedtls_zeroize(callbackContext.nonceScalar,
+    mbedtls_async_hardware_zeroize(callbackContext.nonceScalar,
                           sizeof(callbackContext.nonceScalar));
     callbackContext = {};
     return 0;
@@ -397,10 +397,10 @@ int samd_mbedtls_ecdsa_p256_sign_start(const uint8_t privateKey[32],
   return 1;
 }
 
-int samd_mbedtls_ecdh_p384_start(const uint8_t privateScalar[48],
+int mbedtls_async_hardware_ecdh_p384_start(const uint8_t privateScalar[48],
                                   const uint8_t peerPublicKey[97],
                                   uint8_t sharedSecret[48],
-                                  samd_mbedtls_async_callback_t callback,
+                                  mbedtls_async_hardware_callback_t callback,
                                   void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateScalar == nullptr || peerPublicKey == nullptr ||
@@ -409,7 +409,7 @@ int samd_mbedtls_ecdh_p384_start(const uint8_t privateScalar[48],
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -426,7 +426,7 @@ int samd_mbedtls_ecdh_p384_start(const uint8_t privateScalar[48],
           peerPublicKey, 97, sharedSecret, 48,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -445,16 +445,16 @@ int samd_mbedtls_ecdh_p384_start(const uint8_t privateScalar[48],
   return 1;
 }
 
-int samd_mbedtls_ecdh_p384_public_key_start(
+int mbedtls_async_hardware_ecdh_p384_public_key_start(
     const uint8_t privateScalar[48], uint8_t publicKey[97],
-    samd_mbedtls_async_callback_t callback, void *context) {
+    mbedtls_async_hardware_callback_t callback, void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateScalar == nullptr || publicKey == nullptr || callback == nullptr) {
     return 0;
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -471,7 +471,7 @@ int samd_mbedtls_ecdh_p384_public_key_start(
           publicKey, 97,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -490,9 +490,9 @@ int samd_mbedtls_ecdh_p384_public_key_start(
   return 1;
 }
 
-int samd_mbedtls_ecdsa_p384_verify_start(
+int mbedtls_async_hardware_ecdsa_p384_verify_start(
     const uint8_t publicKey[97], const uint8_t hash[48],
-    const uint8_t signature[96], samd_mbedtls_async_callback_t callback,
+    const uint8_t signature[96], mbedtls_async_hardware_callback_t callback,
     void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       publicKey == nullptr || hash == nullptr || signature == nullptr ||
@@ -501,7 +501,7 @@ int samd_mbedtls_ecdsa_p384_verify_start(
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -518,7 +518,7 @@ int samd_mbedtls_ecdsa_p384_verify_start(
           48, signature, 96,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -537,10 +537,10 @@ int samd_mbedtls_ecdsa_p384_verify_start(
   return 1;
 }
 
-int samd_mbedtls_ecdsa_p384_sign_start(const uint8_t privateKey[48],
+int mbedtls_async_hardware_ecdsa_p384_sign_start(const uint8_t privateKey[48],
                                         const uint8_t hash[48],
                                         uint8_t signature[96],
-                                        samd_mbedtls_async_callback_t callback,
+                                        mbedtls_async_hardware_callback_t callback,
                                         void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateKey == nullptr || hash == nullptr || signature == nullptr ||
@@ -553,7 +553,7 @@ int samd_mbedtls_ecdsa_p384_sign_start(const uint8_t privateKey[48],
     const uint8_t *privateKey;
     const uint8_t *hash;
     uint8_t *signature;
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -585,10 +585,10 @@ int samd_mbedtls_ecdsa_p384_sign_start(const uint8_t privateKey[48],
                          [](bool signSuccess, void *signUser) {
                            auto *callbackContext =
                                static_cast<CallbackContext *>(signUser);
-                           samd_mbedtls_async_callback_t completed =
+                           mbedtls_async_hardware_callback_t completed =
                                callbackContext->callback;
                            void *completedContext = callbackContext->context;
-                           samd_mbedtls_zeroize(
+                           mbedtls_async_hardware_zeroize(
                                callbackContext->nonceScalar,
                                sizeof(callbackContext->nonceScalar));
                            callbackContext->privateKey = nullptr;
@@ -600,10 +600,10 @@ int samd_mbedtls_ecdsa_p384_sign_start(const uint8_t privateKey[48],
                              completed(signSuccess ? 1 : 0, completedContext);
                          },
                          callbackContext)) {
-              samd_mbedtls_async_callback_t completed =
+              mbedtls_async_hardware_callback_t completed =
                   callbackContext->callback;
               void *completedContext = callbackContext->context;
-              samd_mbedtls_zeroize(callbackContext->nonceScalar,
+              mbedtls_async_hardware_zeroize(callbackContext->nonceScalar,
                                     sizeof(callbackContext->nonceScalar));
               callbackContext->privateKey = nullptr;
               callbackContext->hash = nullptr;
@@ -617,7 +617,7 @@ int samd_mbedtls_ecdsa_p384_sign_start(const uint8_t privateKey[48],
           &callbackContext);
 
   if (!submittedRandom) {
-    samd_mbedtls_zeroize(callbackContext.nonceScalar,
+    mbedtls_async_hardware_zeroize(callbackContext.nonceScalar,
                           sizeof(callbackContext.nonceScalar));
     callbackContext = {};
     return 0;
@@ -626,10 +626,10 @@ int samd_mbedtls_ecdsa_p384_sign_start(const uint8_t privateKey[48],
   return 1;
 }
 
-int samd_mbedtls_ecdh_p521_start(const uint8_t privateScalar[66],
+int mbedtls_async_hardware_ecdh_p521_start(const uint8_t privateScalar[66],
                                   const uint8_t peerPublicKey[133],
                                   uint8_t sharedSecret[66],
-                                  samd_mbedtls_async_callback_t callback,
+                                  mbedtls_async_hardware_callback_t callback,
                                   void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateScalar == nullptr || peerPublicKey == nullptr ||
@@ -638,7 +638,7 @@ int samd_mbedtls_ecdh_p521_start(const uint8_t privateScalar[66],
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -655,7 +655,7 @@ int samd_mbedtls_ecdh_p521_start(const uint8_t privateScalar[66],
           peerPublicKey, 133, sharedSecret, 66,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -674,16 +674,16 @@ int samd_mbedtls_ecdh_p521_start(const uint8_t privateScalar[66],
   return 1;
 }
 
-int samd_mbedtls_ecdh_p521_public_key_start(
+int mbedtls_async_hardware_ecdh_p521_public_key_start(
     const uint8_t privateScalar[66], uint8_t publicKey[133],
-    samd_mbedtls_async_callback_t callback, void *context) {
+    mbedtls_async_hardware_callback_t callback, void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateScalar == nullptr || publicKey == nullptr || callback == nullptr) {
     return 0;
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -700,7 +700,7 @@ int samd_mbedtls_ecdh_p521_public_key_start(
           publicKey, 133,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -719,9 +719,9 @@ int samd_mbedtls_ecdh_p521_public_key_start(
   return 1;
 }
 
-int samd_mbedtls_ecdsa_p521_verify_start(
+int mbedtls_async_hardware_ecdsa_p521_verify_start(
     const uint8_t publicKey[133], const uint8_t hash[64],
-    const uint8_t signature[132], samd_mbedtls_async_callback_t callback,
+    const uint8_t signature[132], mbedtls_async_hardware_callback_t callback,
     void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       publicKey == nullptr || hash == nullptr || signature == nullptr ||
@@ -730,7 +730,7 @@ int samd_mbedtls_ecdsa_p521_verify_start(
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -747,7 +747,7 @@ int samd_mbedtls_ecdsa_p521_verify_start(
           64, signature, 132,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -766,10 +766,10 @@ int samd_mbedtls_ecdsa_p521_verify_start(
   return 1;
 }
 
-int samd_mbedtls_ecdsa_p521_sign_start(const uint8_t privateKey[66],
+int mbedtls_async_hardware_ecdsa_p521_sign_start(const uint8_t privateKey[66],
                                         const uint8_t hash[64],
                                         uint8_t signature[132],
-                                        samd_mbedtls_async_callback_t callback,
+                                        mbedtls_async_hardware_callback_t callback,
                                         void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateKey == nullptr || hash == nullptr || signature == nullptr ||
@@ -782,7 +782,7 @@ int samd_mbedtls_ecdsa_p521_sign_start(const uint8_t privateKey[66],
     const uint8_t *privateKey;
     const uint8_t *hash;
     uint8_t *signature;
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -814,10 +814,10 @@ int samd_mbedtls_ecdsa_p521_sign_start(const uint8_t privateKey[66],
                          [](bool signSuccess, void *signUser) {
                            auto *callbackContext =
                                static_cast<CallbackContext *>(signUser);
-                           samd_mbedtls_async_callback_t completed =
+                           mbedtls_async_hardware_callback_t completed =
                                callbackContext->callback;
                            void *completedContext = callbackContext->context;
-                           samd_mbedtls_zeroize(
+                           mbedtls_async_hardware_zeroize(
                                callbackContext->nonceScalar,
                                sizeof(callbackContext->nonceScalar));
                            callbackContext->privateKey = nullptr;
@@ -829,10 +829,10 @@ int samd_mbedtls_ecdsa_p521_sign_start(const uint8_t privateKey[66],
                              completed(signSuccess ? 1 : 0, completedContext);
                          },
                          callbackContext)) {
-              samd_mbedtls_async_callback_t completed =
+              mbedtls_async_hardware_callback_t completed =
                   callbackContext->callback;
               void *completedContext = callbackContext->context;
-              samd_mbedtls_zeroize(callbackContext->nonceScalar,
+              mbedtls_async_hardware_zeroize(callbackContext->nonceScalar,
                                     sizeof(callbackContext->nonceScalar));
               callbackContext->privateKey = nullptr;
               callbackContext->hash = nullptr;
@@ -846,7 +846,7 @@ int samd_mbedtls_ecdsa_p521_sign_start(const uint8_t privateKey[66],
           &callbackContext);
 
   if (!submittedRandom) {
-    samd_mbedtls_zeroize(callbackContext.nonceScalar,
+    mbedtls_async_hardware_zeroize(callbackContext.nonceScalar,
                           sizeof(callbackContext.nonceScalar));
     callbackContext = {};
     return 0;
@@ -855,10 +855,10 @@ int samd_mbedtls_ecdsa_p521_sign_start(const uint8_t privateKey[66],
   return 1;
 }
 
-int samd_mbedtls_rsa_pss_verify_start(
+int mbedtls_async_hardware_rsa_pss_verify_start(
     int hashBits, const uint8_t *publicKey, size_t publicKeyLength,
     const uint8_t *hash, size_t hashLength, const uint8_t *signature,
-    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+    size_t signatureLength, mbedtls_async_hardware_callback_t callback,
     void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       publicKey == nullptr || publicKeyLength == 0 || hash == nullptr ||
@@ -866,14 +866,14 @@ int samd_mbedtls_rsa_pss_verify_start(
     return 0;
   }
   const Crypto::TlsSignatureAlgorithm algorithm =
-      samd_mbedtls_rsa_pss_algorithm(hashBits);
+      mbedtls_async_hardware_rsa_pss_algorithm(hashBits);
   if (static_cast<uint8_t>(algorithm) == 0 ||
-      hashLength != samd_mbedtls_rsa_hash_length(hashBits)) {
+      hashLength != mbedtls_async_hardware_rsa_hash_length(hashBits)) {
     return 0;
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -890,7 +890,7 @@ int samd_mbedtls_rsa_pss_verify_start(
           signatureLength,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -909,10 +909,10 @@ int samd_mbedtls_rsa_pss_verify_start(
   return 1;
 }
 
-int samd_mbedtls_rsa_pkcs1_verify_start(
+int mbedtls_async_hardware_rsa_pkcs1_verify_start(
     int hashBits, const uint8_t *publicKey, size_t publicKeyLength,
     const uint8_t *hash, size_t hashLength, const uint8_t *signature,
-    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+    size_t signatureLength, mbedtls_async_hardware_callback_t callback,
     void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       publicKey == nullptr || publicKeyLength == 0 || hash == nullptr ||
@@ -921,14 +921,14 @@ int samd_mbedtls_rsa_pkcs1_verify_start(
   }
 
   const Crypto::TlsSignatureAlgorithm algorithm =
-      samd_mbedtls_rsa_pkcs1_algorithm(hashBits);
+      mbedtls_async_hardware_rsa_pkcs1_algorithm(hashBits);
   if (static_cast<uint8_t>(algorithm) == 0 ||
-      hashLength != samd_mbedtls_rsa_hash_length(hashBits)) {
+      hashLength != mbedtls_async_hardware_rsa_hash_length(hashBits)) {
     return 0;
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -945,7 +945,7 @@ int samd_mbedtls_rsa_pkcs1_verify_start(
           signatureLength,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -964,10 +964,10 @@ int samd_mbedtls_rsa_pkcs1_verify_start(
   return 1;
 }
 
-int samd_mbedtls_rsa_pss_sign_start(
+int mbedtls_async_hardware_rsa_pss_sign_start(
     int hashBits, const uint8_t *privateKey, size_t privateKeyLength,
     const uint8_t *hash, size_t hashLength, uint8_t *signature,
-    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+    size_t signatureLength, mbedtls_async_hardware_callback_t callback,
     void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateKey == nullptr || privateKeyLength == 0 || hash == nullptr ||
@@ -976,8 +976,8 @@ int samd_mbedtls_rsa_pss_sign_start(
   }
 
   const Crypto::TlsSignatureAlgorithm algorithm =
-      samd_mbedtls_rsa_pss_algorithm(hashBits);
-  const size_t saltLength = samd_mbedtls_rsa_hash_length(hashBits);
+      mbedtls_async_hardware_rsa_pss_algorithm(hashBits);
+  const size_t saltLength = mbedtls_async_hardware_rsa_hash_length(hashBits);
   if (static_cast<uint8_t>(algorithm) == 0 || hashLength != saltLength ||
       saltLength > 64u) {
     return 0;
@@ -992,7 +992,7 @@ int samd_mbedtls_rsa_pss_sign_start(
     size_t hashLength;
     uint8_t *signature;
     size_t signatureLength;
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -1030,10 +1030,10 @@ int samd_mbedtls_rsa_pss_sign_start(
                          [](bool signSuccess, void *signUser) {
                            auto *callbackContext =
                                static_cast<CallbackContext *>(signUser);
-                           samd_mbedtls_async_callback_t completed =
+                           mbedtls_async_hardware_callback_t completed =
                                callbackContext->callback;
                            void *completedContext = callbackContext->context;
-                           samd_mbedtls_zeroize(callbackContext->salt,
+                           mbedtls_async_hardware_zeroize(callbackContext->salt,
                                                 sizeof(callbackContext->salt));
                            callbackContext->privateKey = nullptr;
                            callbackContext->privateKeyLength = 0;
@@ -1047,10 +1047,10 @@ int samd_mbedtls_rsa_pss_sign_start(
                              completed(signSuccess ? 1 : 0, completedContext);
                          },
                          callbackContext)) {
-              samd_mbedtls_async_callback_t completed =
+              mbedtls_async_hardware_callback_t completed =
                   callbackContext->callback;
               void *completedContext = callbackContext->context;
-              samd_mbedtls_zeroize(callbackContext->salt,
+              mbedtls_async_hardware_zeroize(callbackContext->salt,
                                     sizeof(callbackContext->salt));
               callbackContext->privateKey = nullptr;
               callbackContext->privateKeyLength = 0;
@@ -1067,7 +1067,7 @@ int samd_mbedtls_rsa_pss_sign_start(
           &callbackContext);
 
   if (!submittedRandom) {
-    samd_mbedtls_zeroize(callbackContext.salt,
+    mbedtls_async_hardware_zeroize(callbackContext.salt,
                           sizeof(callbackContext.salt));
     callbackContext = {};
     return 0;
@@ -1076,10 +1076,10 @@ int samd_mbedtls_rsa_pss_sign_start(
   return 1;
 }
 
-int samd_mbedtls_rsa_pkcs1_sign_start(
+int mbedtls_async_hardware_rsa_pkcs1_sign_start(
     int hashBits, const uint8_t *privateKey, size_t privateKeyLength,
     const uint8_t *hash, size_t hashLength, uint8_t *signature,
-    size_t signatureLength, samd_mbedtls_async_callback_t callback,
+    size_t signatureLength, mbedtls_async_hardware_callback_t callback,
     void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       privateKey == nullptr || privateKeyLength == 0 || hash == nullptr ||
@@ -1088,14 +1088,14 @@ int samd_mbedtls_rsa_pkcs1_sign_start(
   }
 
   const Crypto::TlsSignatureAlgorithm algorithm =
-      samd_mbedtls_rsa_pkcs1_algorithm(hashBits);
+      mbedtls_async_hardware_rsa_pkcs1_algorithm(hashBits);
   if (static_cast<uint8_t>(algorithm) == 0 ||
-      hashLength != samd_mbedtls_rsa_hash_length(hashBits)) {
+      hashLength != mbedtls_async_hardware_rsa_hash_length(hashBits)) {
     return 0;
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -1112,7 +1112,7 @@ int samd_mbedtls_rsa_pkcs1_sign_start(
           signature, signatureLength,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -1131,10 +1131,10 @@ int samd_mbedtls_rsa_pkcs1_sign_start(
   return 1;
 }
 
-int samd_mbedtls_aes_gcm128_encrypt_start(
+int mbedtls_async_hardware_aes_gcm128_encrypt_start(
     const uint8_t key[16], const uint8_t nonce[12], const uint8_t *aad,
     size_t aadLength, const uint8_t *plaintext, uint8_t *ciphertext,
-    size_t length, uint8_t tag[16], samd_mbedtls_async_callback_t callback,
+    size_t length, uint8_t tag[16], mbedtls_async_hardware_callback_t callback,
     void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       key == nullptr || nonce == nullptr || tag == nullptr ||
@@ -1145,7 +1145,7 @@ int samd_mbedtls_aes_gcm128_encrypt_start(
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -1161,7 +1161,7 @@ int samd_mbedtls_aes_gcm128_encrypt_start(
           key, nonce, aad, aadLength, plaintext, ciphertext, length, tag,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -1180,12 +1180,12 @@ int samd_mbedtls_aes_gcm128_encrypt_start(
   return 1;
 }
 
-int samd_mbedtls_aead_encrypt_start(
+int mbedtls_async_hardware_aead_encrypt_start(
     int algorithm, const uint8_t *key, size_t keyLength,
     const uint8_t *nonce, size_t nonceLength, const uint8_t *aad,
     size_t aadLength, const uint8_t *plaintext, uint8_t *ciphertext,
     size_t length, uint8_t *tag, size_t tagLength,
-    samd_mbedtls_async_callback_t callback, void *context) {
+    mbedtls_async_hardware_callback_t callback, void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       key == nullptr || keyLength == 0 || nonce == nullptr ||
       nonceLength == 0 || tag == nullptr || tagLength == 0 ||
@@ -1196,7 +1196,7 @@ int samd_mbedtls_aead_encrypt_start(
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -1214,7 +1214,7 @@ int samd_mbedtls_aead_encrypt_start(
           tag, tagLength,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -1233,11 +1233,11 @@ int samd_mbedtls_aead_encrypt_start(
   return 1;
 }
 
-int samd_mbedtls_aes_gcm128_decrypt_start(
+int mbedtls_async_hardware_aes_gcm128_decrypt_start(
     const uint8_t key[16], const uint8_t nonce[12], const uint8_t *aad,
     size_t aadLength, const uint8_t *ciphertext, uint8_t *plaintext,
     size_t length, const uint8_t tag[16],
-    samd_mbedtls_async_callback_t callback, void *context) {
+    mbedtls_async_hardware_callback_t callback, void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       key == nullptr || nonce == nullptr || tag == nullptr ||
       callback == nullptr || (aad == nullptr && aadLength != 0) ||
@@ -1247,7 +1247,7 @@ int samd_mbedtls_aes_gcm128_decrypt_start(
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -1263,7 +1263,7 @@ int samd_mbedtls_aes_gcm128_decrypt_start(
           key, nonce, aad, aadLength, ciphertext, plaintext, length, tag,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
@@ -1282,12 +1282,12 @@ int samd_mbedtls_aes_gcm128_decrypt_start(
   return 1;
 }
 
-int samd_mbedtls_aead_decrypt_start(
+int mbedtls_async_hardware_aead_decrypt_start(
     int algorithm, const uint8_t *key, size_t keyLength,
     const uint8_t *nonce, size_t nonceLength, const uint8_t *aad,
     size_t aadLength, const uint8_t *ciphertext, uint8_t *plaintext,
     size_t length, const uint8_t *tag, size_t tagLength,
-    samd_mbedtls_async_callback_t callback, void *context) {
+    mbedtls_async_hardware_callback_t callback, void *context) {
   if (Crypto::MbedTlsPort::externalRandomProvider == nullptr ||
       key == nullptr || keyLength == 0 || nonce == nullptr ||
       nonceLength == 0 || tag == nullptr || tagLength == 0 ||
@@ -1298,7 +1298,7 @@ int samd_mbedtls_aead_decrypt_start(
   }
 
   struct CallbackContext {
-    samd_mbedtls_async_callback_t callback;
+    mbedtls_async_hardware_callback_t callback;
     void *context;
   };
 
@@ -1316,7 +1316,7 @@ int samd_mbedtls_aead_decrypt_start(
           tag, tagLength,
           [](bool success, void *user) {
             auto *callbackContext = static_cast<CallbackContext *>(user);
-            samd_mbedtls_async_callback_t completed =
+            mbedtls_async_hardware_callback_t completed =
                 callbackContext->callback;
             void *completedContext = callbackContext->context;
             callbackContext->callback = nullptr;
