@@ -327,6 +327,7 @@ class SERCOM
 		static void release(uint8_t sercomId);
 		static bool registerService(uint8_t sercomId, ServiceFn fn);
 		static void setPending(uint8_t sercomId);
+		static void serviceWireTimeoutsFromTick(void);
 		static void dispatchService(uint8_t sercomId, void *context);
 		static void dispatchPending(void);
 
@@ -432,6 +433,7 @@ class SERCOM
 			bool useDma = false;		             // per transaction DMA use flag for Host/Client modes
 			bool active = false;                     // active transaction in progress
 			uint8_t retryCount = 0;                  // retry count for recoverable bus errors
+			uint16_t timeoutElapsedMs = 0;            // bounded by the 1 kHz SysTick watchdog
 			SercomWireError returnValue = SercomWireError::SUCCESS;
 			SercomTxn* currentTxn = nullptr;
 			size_t txnIndex = 0;

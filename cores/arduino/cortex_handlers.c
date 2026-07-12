@@ -505,12 +505,14 @@ void Reset_Handler(void)
 
 /* Default Arduino systick handler */
 extern void SysTick_DefaultHandler(void);
+extern void SERCOM_WireTimeoutTick(void);
 
 void SysTick_Handler(void)
 {
   if (sysTickHook())
     return;
   SysTick_DefaultHandler();
+  SERCOM_WireTimeoutTick();
 }
 
 static void (*usb_isr)(void) = NULL;

@@ -720,6 +720,8 @@ void SERCOM::setMasterWIRE(void)
   sercom->I2CM.CTRLA.reg = _wire.ctrla                                  |
                            SERCOM_I2CM_CTRLA_MODE(I2C_MASTER_OPERATION) |
                            SERCOM_I2CM_CTRLA_SPEED(_wire.masterSpeed)   |
+                           SERCOM_I2CM_CTRLA_LOWTOUTEN                  |
+                           SERCOM_I2CM_CTRLA_MEXTTOEN                   |
                            (sclsm ? SERCOM_I2CM_CTRLA_SCLSM : 0 );
   sercom->I2CM.CTRLB.reg = _wire.ctrlb;
   sercom->I2CM.BAUD.reg = _wire.baud;
@@ -807,6 +809,7 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
     _wire.retryCount = 0;
 
   _wire.currentTxn = txn;
+  _wire.timeoutElapsedMs = 0u;
   _wire.txnIndex = 0;
   _wire.txnLength = txn->length;
 
@@ -937,7 +940,8 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
   // At the tested 48 MHz, this busy-wait is ~350 cycles corresponding to a 3.5 us delay
   // at 100 MHz. This wait must occur BEFORE the callback to ensure the bus is stable
   // before user code can enqueue the next transaction.
-  if (isMasterWIRE() && txn && (txn->config & I2C_CFG_STOP)) {
+  if (isMasterWIRE() && error == SercomWireError::SUCCESS && txn &&
+      (txn->config & I2C_CFG_STOP)) {
     while (sercom->I2CM.STATUS.bit.BUSSTATE > 0x1) ;
   }
 
@@ -969,8 +973,12 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
   _wire.retryCount = 0;
   _wire.active = false;
   _wire.currentTxn = nullptr;
+  _wire.timeoutElapsedMs = 0u;
 
   bool isMaster = isMasterWIRE();
+
+  if (isMaster && error != SercomWireError::SUCCESS)
+    setMasterWIRE();
 
   if (_txnQueue.peek(next) && isMaster)
     startTransmissionWIRE();
@@ -1426,6 +1434,28 @@ void SERCOM::dispatchService(uint8_t sercomId, void *context)
   SERCOM* inst = s_instances[sercomId];
   if (fn && inst)
     (inst->*fn)();
+}
+
+void SERCOM::serviceWireTimeoutsFromTick(void)
+{
+  constexpr uint16_t kWireTransactionTimeoutMs = 100u;
+  for (uint8_t id = 0u; id < kSercomCount; ++id) {
+    SERCOM *instance = s_instances[id];
+    if (instance == nullptr || !instance->_wire.active ||
+        instance->_wire.currentTxn == nullptr)
+      continue;
+    if (instance->_wire.timeoutElapsedMs < kWireTransactionTimeoutMs)
+      ++instance->_wire.timeoutElapsedMs;
+    if (instance->_wire.timeoutElapsedMs == kWireTransactionTimeoutMs) {
+      instance->_wire.returnValue = SercomWireError::MASTER_TIMEOUT;
+      setPending(id);
+    }
+  }
+}
+
+extern "C" void SERCOM_WireTimeoutTick(void)
+{
+  SERCOM::serviceWireTimeoutsFromTick();
 }
 
 void SERCOM::dispatchPending(void)
