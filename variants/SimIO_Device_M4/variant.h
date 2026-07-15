@@ -57,8 +57,8 @@ extern "C"
  *----------------------------------------------------------------------------*/
 
 // Number of pins defined in PinDescription array
-#define PINS_COUNT (37u)
-#define NUM_DIGITAL_PINS (20u)
+#define PINS_COUNT (40u)
+#define NUM_DIGITAL_PINS (40u)
 #define NUM_ANALOG_INPUTS (6u)
 #define NUM_ANALOG_OUTPUTS (1u)
 #define analogInputToDigitalPin(p) ((p < 6u) ? (p) + 14u : -1)
@@ -88,6 +88,20 @@ extern "C"
 #define PIN_LED2 PIN_LED_RXL
 #define PIN_LED3 PIN_LED_TXL
 #define LED_BUILTIN PIN_LED_13
+
+// SAM E54 Xplained Pro extension-header GPIO assignments.
+// EXT1 PWM+ is already represented by A1/PB08 in the inherited pin table.
+#define PIN_EXT1_GPIO1 (4u)      // EXT1 pin 5, PA06
+#define PIN_EXT1_PWM_PLUS (15u)  // EXT1 pin 7, PB08 / TC4 WO[0]
+#define PIN_EXT2_GPIO1 (37u)     // EXT2 pin 5, PB01
+#define PIN_EXT2_GPIO2 (38u)     // EXT2 pin 6, PB06
+#define PIN_EXT3_GPIO1 (39u)     // EXT3 pin 5, PC01
+
+static const uint8_t EXT1_GPIO1 = PIN_EXT1_GPIO1;
+static const uint8_t EXT1_PWM_PLUS = PIN_EXT1_PWM_PLUS;
+static const uint8_t EXT2_GPIO1 = PIN_EXT2_GPIO1;
+static const uint8_t EXT2_GPIO2 = PIN_EXT2_GPIO2;
+static const uint8_t EXT3_GPIO1 = PIN_EXT3_GPIO1;
 
 /*
  * Analog pins
