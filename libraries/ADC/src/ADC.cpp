@@ -117,7 +117,6 @@ void analogReadCorrection(int offset, uint16_t gain) {
 
 namespace {
 constexpr uint8_t kMaxAdjres = 4;
-constexpr uint8_t kAdcPendSvServiceId = PendSV::kMaxServices - 1;
 constexpr uint32_t kAdcNvicPriority = (1u << __NVIC_PRIO_BITS) - 1u;
 
 #ifdef ADC_HAS_D5X_E5X_REGISTERS
@@ -288,11 +287,11 @@ bool AdcEngine::begin() {
         registeredChannels_[i] = nullptr;
     }
 
-    if (!PendSV::instance().registerService(kAdcPendSvServiceId, adcPendSvService, nullptr))
+    if (!PendSV::instance().registerService(PendSVChannels::Adc, adcPendSvService, nullptr))
         return false;
 
     if (dma_.allocate() != DMA_STATUS_OK) {
-        PendSV::instance().clearService(kAdcPendSvServiceId);
+        PendSV::instance().clearService(PendSVChannels::Adc);
         return false;
     }
 
@@ -306,7 +305,7 @@ bool AdcEngine::begin() {
                            1, DMA_BEAT_SIZE_HWORD, false, false);
     if (dmaDescriptor_ == nullptr) {
         dma_.free();
-        PendSV::instance().clearService(kAdcPendSvServiceId);
+        PendSV::instance().clearService(PendSVChannels::Adc);
         return false;
     }
 
@@ -348,7 +347,7 @@ void AdcEngine::end() {
       ;
     waitAdcSync();
 
-    PendSV::instance().clearService(kAdcPendSvServiceId);
+    PendSV::instance().clearService(PendSVChannels::Adc);
 
     initialized_ = false;
     dmaActive_ = false;
@@ -481,7 +480,7 @@ void AdcEngine::onResrdyIsr() {
         adc->INTENCLR.bit.RESRDY = 1;
         pendingStartConversion_ = true;
         pendSvPending_ = true;
-        PendSV::instance().setPending(kAdcPendSvServiceId);
+        PendSV::instance().setPending(PendSVChannels::Adc);
       } else {
         adc->INTFLAG.reg = ADC_INTFLAG_RESRDY;
       }
@@ -757,7 +756,7 @@ void AdcEngine::dmaDoneCallback(Adafruit_ZeroDMA *dma) {
     engine.activeMonitorMode_ = false;
 
     engine.pendSvPending_ = true;
-    PendSV::instance().setPending(kAdcPendSvServiceId);
+    PendSV::instance().setPending(PendSVChannels::Adc);
 }
 
 bool ChannelADC::setAttachedSources(uint8_t muxPos, uint8_t muxNeg, AdcSampleNum sampleNum) {

@@ -119,10 +119,10 @@ void SysTick_DefaultHandler(void)
 
 #if defined(USE_TINYUSB)
 
-// run TinyUSB background task when yield()
+// Buffered CDC output is flushed from yield(). TinyUSB controller events run
+// from the event-triggered PendSV service installed by the SAMD port.
 void yield(void)
 {
-  TinyUSB_Device_Task();
   TinyUSB_Device_FlushCDC();
 }
 

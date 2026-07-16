@@ -1095,7 +1095,7 @@ void SERCOM::release(uint8_t sercomId)
   SercomState &state = s_states[sercomId];
   state.role = Role::None;
   state.service = nullptr;
-  PendSV::instance().clearService(sercomId);
+  PendSV::instance().clearService(PendSVChannels::sercom(sercomId));
 #ifdef SERCOM_STRICT_PADS
   clearPads(sercomId);
 #endif // SERCOM_STRICT_PADS
@@ -1107,7 +1107,8 @@ bool SERCOM::registerService(uint8_t sercomId, ServiceFn fn)
     return false;
 
   s_states[sercomId].service = fn;
-  if (!PendSV::instance().registerService(sercomId, &SERCOM::dispatchService, nullptr))
+  if (!PendSV::instance().registerService(PendSVChannels::sercom(sercomId),
+                                          &SERCOM::dispatchService, nullptr))
   {
     s_states[sercomId].service = nullptr;
     return false;
@@ -1431,12 +1432,14 @@ void SERCOM::setPending(uint8_t sercomId)
   if (sercomId >= kSercomCount)
     return;
 
-  PendSV::instance().setPending(sercomId);
+  PendSV::instance().setPending(PendSVChannels::sercom(sercomId));
 }
 
 void SERCOM::dispatchService(uint8_t sercomId, void *context)
 {
   (void)context;
+
+  sercomId = PendSVChannels::sercomIndex(sercomId);
 
   if (sercomId >= kSercomCount)
     return;

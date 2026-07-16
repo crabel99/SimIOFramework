@@ -3,12 +3,41 @@
 #include <Arduino.h>
 #include <limits.h>
 
+#if defined(USE_TINYUSB)
+extern "C" void TinyUSB_Device_Task(void);
+#endif
+
 namespace {
 PendSV pendSv;
+
+#if defined(USE_TINYUSB)
+void tinyUsbDeviceTaskService(uint8_t serviceId, void *context) {
+  (void)serviceId;
+  (void)context;
+  TinyUSB_Device_Task();
 }
+#endif
+}
+
+#if defined(USE_TINYUSB)
+extern "C" void tud_event_hook_cb(uint8_t rhport, uint32_t eventId, bool inIsr) {
+  (void)rhport;
+  (void)eventId;
+  (void)inIsr;
+  PendSV::instance().setPending(PendSVChannels::Usb);
+}
+#endif
 
 PendSV &PendSV::instance() {
   return pendSv;
+}
+
+bool PendSV::initializeCoreServices() {
+#if defined(USE_TINYUSB)
+  return instance().registerService(PendSVChannels::Usb, tinyUsbDeviceTaskService, nullptr);
+#else
+  return true;
+#endif
 }
 
 uint32_t PendSV::enterCritical() {
