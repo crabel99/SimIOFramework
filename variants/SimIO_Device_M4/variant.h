@@ -108,6 +108,7 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PIN_A15 (34u)
 
 #define PIN_DAC0 PIN_A0
+#define PIN_DAC1 (0u) // PA05 / EXT1 UART RX
 
   static const uint8_t A0 = PIN_A0;
   static const uint8_t A1 = PIN_A1;
@@ -127,6 +128,7 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
   static const uint8_t A15 = PIN_A15;
 
   static const uint8_t DAC0 = PIN_DAC0;
+  static const uint8_t DAC1 = PIN_DAC1;
 
 #define ADC_RESOLUTION 12
 
