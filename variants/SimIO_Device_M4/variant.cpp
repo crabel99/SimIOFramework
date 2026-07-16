@@ -115,19 +115,3 @@ SERCOM sercom4(SERCOM4);
 SERCOM sercom5(SERCOM5);
 SERCOM sercom6(SERCOM6);
 SERCOM sercom7(SERCOM7);
-
-Uart Serial1(&sercom0, PIN_SERIAL1_RX, PIN_SERIAL1_TX, PAD_SERIAL1_RX, PAD_SERIAL1_TX);
-Uart Serial2(&sercom5, PIN_SERIAL2_RX, PIN_SERIAL2_TX, PAD_SERIAL2_RX, PAD_SERIAL2_TX);
-Uart Serial3(&sercom1, PIN_SERIAL3_RX, PIN_SERIAL3_TX, PAD_SERIAL3_RX, PAD_SERIAL3_TX);
-Uart Serial4(&sercom2, PIN_SERIAL4_RX, PIN_SERIAL4_TX, PAD_SERIAL4_RX, PAD_SERIAL4_TX);
-
-#define UART_HANDLERS(n, serial)                                                                     \
-    void SERCOM##n##_0_Handler() { serial.IrqHandler(); }                                             \
-    void SERCOM##n##_1_Handler() { serial.IrqHandler(); }                                             \
-    void SERCOM##n##_2_Handler() { serial.IrqHandler(); }                                             \
-    void SERCOM##n##_3_Handler() { serial.IrqHandler(); }
-
-UART_HANDLERS(0, Serial1)
-UART_HANDLERS(5, Serial2)
-UART_HANDLERS(1, Serial3)
-UART_HANDLERS(2, Serial4)

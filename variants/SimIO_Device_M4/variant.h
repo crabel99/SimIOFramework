@@ -141,35 +141,11 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PIN_EXT3_SCL PIN_EXT2_SCL
 
 /*
- * Serial interfaces
- */
-
-// Numbered Arduino UARTs: EXT1, EXT2, EXT3, then the EDBG virtual COM port.
-#define PIN_SERIAL1_RX (0u)
-#define PIN_SERIAL1_TX (1u)
-#define PAD_SERIAL1_RX SERCOM_RX_PAD_1
-#define PAD_SERIAL1_TX UART_TX_PAD_0
-
-#define PIN_SERIAL2_RX (16u)
-#define PIN_SERIAL2_TX (17u)
-#define PAD_SERIAL2_RX SERCOM_RX_PAD_1
-#define PAD_SERIAL2_TX UART_TX_PAD_0
-
-#define PIN_SERIAL3_RX (32u)
-#define PIN_SERIAL3_TX (33u)
-#define PAD_SERIAL3_RX SERCOM_RX_PAD_1
-#define PAD_SERIAL3_TX UART_TX_PAD_0
-
-#define PIN_SERIAL4_RX (47u)
-#define PIN_SERIAL4_TX (48u)
-#define PAD_SERIAL4_RX SERCOM_RX_PAD_1
-#define PAD_SERIAL4_TX UART_TX_PAD_0
-
-/*
  * SPI Interfaces
  */
-#define SPI_INTERFACES_COUNT 2
+#define SPI_INTERFACES_COUNT 1
 
+// Primary external SPI bus on EXT1, retained for Arduino library compatibility.
 #define PIN_SPI_MISO (10u)
 #define PIN_SPI_MOSI (9u)
 #define PIN_SPI_SCK (11u)
@@ -187,25 +163,12 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
   static const uint8_t MISO = PIN_SPI_MISO;
   static const uint8_t SCK = PIN_SPI_SCK;
 
-#define PIN_SPI1_MISO (26u)
-#define PIN_SPI1_MOSI (25u)
-#define PIN_SPI1_SCK (27u)
-#define PIN_SPI1_SS (24u)
-#define PERIPH_SPI1 sercom6
-#define PAD_SPI1_TX SPI_PAD_0_SCK_1
-#define PAD_SPI1_RX SERCOM_RX_PAD_3
-#define SPI1_IT_HANDLER_0 SERCOM6_0_Handler
-#define SPI1_IT_HANDLER_1 SERCOM6_1_Handler
-#define SPI1_IT_HANDLER_2 SERCOM6_2_Handler
-#define SPI1_IT_HANDLER_3 SERCOM6_3_Handler
-
-  static const uint8_t SS1 = PIN_SPI1_SS;
-
 /*
  * Wire Interfaces
  */
 #define WIRE_INTERFACES_COUNT 2
 
+// External dI2C bus: PA22=SERCOM3/PAD[0] SDA, PA23=SERCOM3/PAD[1] SCL.
 #define PIN_WIRE_SDA PIN_EXT1_SDA
 #define PIN_WIRE_SCL PIN_EXT1_SCL
 #define PERIPH_WIRE sercom3
@@ -218,8 +181,9 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
   static const uint8_t SDA = PIN_WIRE_SDA;
   static const uint8_t SCL = PIN_WIRE_SCL;
 
-#define PIN_WIRE1_SDA PIN_EXT2_SDA
-#define PIN_WIRE1_SCL PIN_EXT2_SCL
+// Internal board I2C plumbing: PD08/PD09 on SERCOM7.
+#define PIN_WIRE1_SDA (30u)
+#define PIN_WIRE1_SCL (31u)
 #define PERIPH_WIRE1 sercom7
 #define WIRE1_IT_HANDLER SERCOM7_Handler
 #define WIRE1_IT_HANDLER_0 SERCOM7_0_Handler
@@ -241,16 +205,7 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 /*
  * I2S Interfaces
  */
-#define I2S_INTERFACES_COUNT 1
-
-#define I2S_DEVICE 0
-#define I2S_CLOCK_GENERATOR 3
-
-#define PIN_I2S_SDO (14u)
-#define PIN_I2S_SDI (15u)
-#define PIN_I2S_SCK PIN_SERIAL2_TX
-#define PIN_I2S_FS (33u)
-#define PIN_I2S_MCK PIN_SERIAL2_RX
+#define I2S_INTERFACES_COUNT 0
 // Onboard Micron N25Q256A QSPI flash routes.
 #define PIN_QSPI_SCK (53u)
 #define PIN_QSPI_CS (54u)
@@ -259,8 +214,9 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PIN_QSPI_IO2 (57u)
 #define PIN_QSPI_IO3 (58u)
 
-  // TODO: meaningful value for this
-  // #define VARIANT_QSPI_BAUD_DEFAULT 5000000
+#if !defined(VARIANT_QSPI_BAUD_DEFAULT)
+  #define VARIANT_QSPI_BAUD_DEFAULT 50000000
+#endif
 
 #ifdef __cplusplus
 }
@@ -277,6 +233,8 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
  *	=========================
  */
 extern SERCOM sercom0;
+// Keep all hardware wrappers available to dynamic SERCOM clients such as
+// NeoPixel ZeroDMA. Declaring a wrapper does not claim the peripheral.
 extern SERCOM sercom1;
 extern SERCOM sercom2;
 extern SERCOM sercom3;
@@ -284,11 +242,6 @@ extern SERCOM sercom4;
 extern SERCOM sercom5;
 extern SERCOM sercom6;
 extern SERCOM sercom7;
-
-extern Uart Serial1;
-extern Uart Serial2;
-extern Uart Serial3;
-extern Uart Serial4;
 
 #endif
 
@@ -309,8 +262,5 @@ extern Uart Serial4;
 //                            pins are NOT connected to anything by default.
 #define SERIAL_PORT_USBVIRTUAL Serial
 #define SERIAL_PORT_MONITOR Serial
-// Serial has no physical pins broken out, so it's not listed as HARDWARE port
-#define SERIAL_PORT_HARDWARE Serial1
-#define SERIAL_PORT_HARDWARE_OPEN Serial1
 
 #endif /* _VARIANT_SIMIO_DEVICE_M4_ */
