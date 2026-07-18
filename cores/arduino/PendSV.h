@@ -172,6 +172,7 @@ public:
   void clearService(uint8_t serviceId);
   void dispatchPending();
   void setPending(uint8_t serviceId);
+  void setPendingOnce(uint8_t serviceId);
 
 private:
   static uint32_t enterCritical();

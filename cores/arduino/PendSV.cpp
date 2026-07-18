@@ -14,9 +14,14 @@ PendSV pendSv;
 void tinyUsbDeviceTaskService(uint8_t serviceId, void *context) {
   (void)serviceId;
   (void)context;
+  // One invocation drains TinyUSB's queued controller events under OPT_OS_NONE.
   TinyUSB_Device_Task();
 }
 #endif
+}
+
+PendSV &PendSV::instance() {
+  return pendSv;
 }
 
 #if defined(USE_TINYUSB)
@@ -24,13 +29,11 @@ extern "C" void tud_event_hook_cb(uint8_t rhport, uint32_t eventId, bool inIsr) 
   (void)rhport;
   (void)eventId;
   (void)inIsr;
-  PendSV::instance().setPending(PendSVChannels::Usb);
+  // TinyUSB owns the event queue. PendSV is only its deferred wake signal, so
+  // multiple controller events before dispatch require only one service call.
+  PendSV::instance().setPendingOnce(PendSVChannels::Usb);
 }
 #endif
-
-PendSV &PendSV::instance() {
-  return pendSv;
-}
 
 bool PendSV::initializeCoreServices() {
 #if defined(USE_TINYUSB)
@@ -84,6 +87,19 @@ void PendSV::setPending(uint8_t serviceId) {
   uint16_t &pendingCount = pendingCount_[serviceId];
   if (pendingCount < UINT16_MAX)
     ++pendingCount;
+  pendingMask_ |= (1u << serviceId);
+  exitCritical(primask);
+
+  __DMB();
+  SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;
+}
+
+void PendSV::setPendingOnce(uint8_t serviceId) {
+  if (serviceId >= kMaxServices)
+    return;
+
+  const uint32_t primask = enterCritical();
+  pendingCount_[serviceId] = 1;
   pendingMask_ |= (1u << serviceId);
   exitCritical(primask);
 

@@ -159,7 +159,9 @@ void loop( void ) ;
   #include "USB/USBDesc.h"
   #include "USB/USBCore.h"
   #include "USB/USBAPI.h"
-  #include "USB/USB_host.h"
+  #if !defined(ARDUINO_SAME53_E54)
+    #include "USB/USB_host.h"
+  #endif
 #endif
 
 #endif // Arduino_h

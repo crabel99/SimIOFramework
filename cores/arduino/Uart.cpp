@@ -24,20 +24,21 @@
 #define NO_CTS_PIN 255
 #define RTS_RX_THRESHOLD 10
 
-// Derive SERCOM ISR symbols from PERIPH_SERIAL* tokens (e.g. sercom4 ->
-// SERCOM4_Handler) so variants only need to describe the UART routing.
+// Default SERCOM ISR symbols are derived from PERIPH_SERIAL* routing.
+// Variants may override SERIAL*_IT_HANDLER* macros when split vectors need
+// custom ownership.
 #define UART_SERCOM_INDEX_sercom0 0
 #define UART_SERCOM_INDEX_sercom1 1
 #define UART_SERCOM_INDEX_sercom2 2
 #define UART_SERCOM_INDEX_sercom3 3
 #define UART_SERCOM_INDEX_sercom4 4
 #define UART_SERCOM_INDEX_sercom5 5
-#if defined(SERCOM6)
+#if defined(SERCOM6) || defined(SERCOM6_REGS)
 #define UART_SERCOM_INDEX_sercom6 6
-#endif
-#if defined(SERCOM7)
+#endif // SERCOM6 || SERCOM6_REGS
+#if defined(SERCOM7) || defined(SERCOM7_REGS)
 #define UART_SERCOM_INDEX_sercom7 7
-#endif
+#endif // SERCOM7 || SERCOM7_REGS
 
 #define UART_SERCOM_INDEX(token) UART_SERCOM_INDEX_##token
 #define UART_SERCOM_HANDLER_FROM_INDEX(idx)                                    \
@@ -58,6 +59,9 @@
 #define UART_SERCOM_HANDLER3_FROM_INDEX(idx)                                   \
   UART_SERCOM_HANDLER3_FROM_INDEX_2(idx)
 #define UART_SERCOM_HANDLER3_FROM_INDEX_2(idx) SERCOM##idx##_3_Handler
+#define UART_SERCOM_HANDLER_OTHER_FROM_INDEX(idx)                              \
+  UART_SERCOM_HANDLER_OTHER_FROM_INDEX_2(idx)
+#define UART_SERCOM_HANDLER_OTHER_FROM_INDEX_2(idx) SERCOM##idx##_OTHER_Handler
 
 #define UART_SERCOM_HANDLER0_FROM_TOKEN(token)                                 \
   UART_SERCOM_HANDLER0_FROM_INDEX(UART_SERCOM_INDEX(token))
@@ -67,6 +71,42 @@
   UART_SERCOM_HANDLER2_FROM_INDEX(UART_SERCOM_INDEX(token))
 #define UART_SERCOM_HANDLER3_FROM_TOKEN(token)                                 \
   UART_SERCOM_HANDLER3_FROM_INDEX(UART_SERCOM_INDEX(token))
+#define UART_SERCOM_HANDLER_OTHER_FROM_TOKEN(token)                            \
+  UART_SERCOM_HANDLER_OTHER_FROM_INDEX(UART_SERCOM_INDEX(token))
+
+#define UART_DEFINE_SINGLE_HANDLER(handler, instance)                          \
+  void handler(void) { instance.IrqHandler(); }
+
+#define UART_DEFINE_SAMD51_E51_HANDLERS(handler0, handler1, handler2,          \
+                                        handler3, instance)                    \
+  void handler0(void) { instance.IrqHandler(); }                               \
+  void handler1(void) { instance.IrqHandler(); }                               \
+  void handler2(void) { instance.IrqHandler(); }                               \
+  void handler3(void) { instance.IrqHandler(); }
+
+#define UART_DEFINE_SAME53_E54_HANDLERS(handler0, handler1, handler2,          \
+                                        handlerOther, instance)                \
+  void handler0(void) { instance.IrqHandler(); }                               \
+  void handler1(void) { instance.IrqHandler(); }                               \
+  void handler2(void) { instance.IrqHandler(); }                               \
+  void handlerOther(void) { instance.IrqHandler(); }
+
+#ifdef ARDUINO_SAMD51_E51
+#define UART_DEFINE_SERCOM_HANDLERS(prefix, instance)                          \
+  UART_DEFINE_SAMD51_E51_HANDLERS(prefix##_IT_HANDLER_0,                       \
+                                  prefix##_IT_HANDLER_1,                       \
+                                  prefix##_IT_HANDLER_2,                       \
+                                  prefix##_IT_HANDLER_3, instance)
+#elif defined(ARDUINO_SAME53_E54)
+#define UART_DEFINE_SERCOM_HANDLERS(prefix, instance)                          \
+  UART_DEFINE_SAME53_E54_HANDLERS(prefix##_IT_HANDLER_0,                       \
+                                  prefix##_IT_HANDLER_1,                       \
+                                  prefix##_IT_HANDLER_2,                       \
+                                  prefix##_IT_HANDLER_OTHER, instance)
+#else
+#define UART_DEFINE_SERCOM_HANDLERS(prefix, instance)                          \
+  UART_DEFINE_SINGLE_HANDLER(prefix##_IT_HANDLER, instance)
+#endif // ARDUINO_SAMD51_E51 / ARDUINO_SAME53_E54
 
 Uart::Uart(SERCOM *_s, uint8_t _pinRX, uint8_t _pinTX, SercomRXPad _padRX, SercomUartTXPad _padTX) :
   Uart(_s, _pinRX, _pinTX, _padRX, _padTX, NO_RTS_PIN, NO_CTS_PIN)
@@ -105,8 +145,13 @@ void Uart::begin(unsigned long baudrate, uint16_t config)
     pinMode(uc_pinRTS, OUTPUT);
 
     EPortType rtsPort = g_APinDescription[uc_pinRTS].ulPort;
+#if defined(ARDUINO_SAME53_E54)
+    pul_outsetRTS = &PORT_REGS->GROUP[rtsPort].PORT_OUTSET;
+    pul_outclrRTS = &PORT_REGS->GROUP[rtsPort].PORT_OUTCLR;
+#else
     pul_outsetRTS = &PORT->Group[rtsPort].OUTSET.reg;
     pul_outclrRTS = &PORT->Group[rtsPort].OUTCLR.reg;
+#endif // ARDUINO_SAME53_E54
     ul_pinMaskRTS = (1ul << g_APinDescription[uc_pinRTS].ulPin);
 
     *pul_outclrRTS = ul_pinMaskRTS;
@@ -258,7 +303,7 @@ size_t Uart::write(const uint8_t* buffer, size_t size,
       while (!txnDone) ;
       return size;
     }
-#endif
+#endif // USE_ZERODMA
     // Fallback: byte-by-byte
     for (size_t i = 0; i < size; ++i)
       write(buffer[i]);
@@ -285,7 +330,7 @@ size_t Uart::write(const uint8_t* buffer, size_t size,
     for (size_t i = 0; i < size; ++i)
       write(buffer[i]);
     return size;
-#endif
+#endif // USE_ZERODMA
   }
 }
 
@@ -312,7 +357,7 @@ size_t Uart::read(uint8_t* buffer, size_t size, void (*onComplete)(void* user, i
   rxExternalActive = true;
 
   // Disable RXC interrupt; DMA takes over
-  sercom->getSercom()->USART.INTENCLR.reg = SERCOM_USART_INTENCLR_RXC;
+  sercom->disableReceiveCompleteInterruptUART();
 
   SercomTxn* txn = allocateTxn();
   txn->txPtr = nullptr;
@@ -325,7 +370,7 @@ size_t Uart::read(uint8_t* buffer, size_t size, void (*onComplete)(void* user, i
 
   if (!sercom->enqueueUART(txn)) {
     // Enqueue failed; restore RXC interrupt and clear pending state
-    sercom->getSercom()->USART.INTENSET.reg = SERCOM_USART_INTENSET_RXC;
+    sercom->enableReceiveCompleteInterruptUART();
     rxExternalActive = false;
     pendingRxCb = nullptr;
     pendingRxUser = nullptr;
@@ -337,7 +382,7 @@ size_t Uart::read(uint8_t* buffer, size_t size, void (*onComplete)(void* user, i
   (void)onComplete;
   (void)user;
   return 0;
-#endif
+#endif // USE_ZERODMA
 }
 
 SercomTxn* Uart::allocateTxn() {
@@ -356,7 +401,7 @@ void Uart::onTxnComplete(void* user, int status)
   self->txnDone = true;
   if (self->rxExternalActive) {
     self->rxExternalActive = false;
-    self->sercom->getSercom()->USART.INTENSET.reg = SERCOM_USART_INTENSET_RXC;
+    self->sercom->enableReceiveCompleteInterruptUART();
     if (self->pendingRxCb) {
       void (*cb)(void*, int) = self->pendingRxCb;
       void* cbUser = self->pendingRxUser;
@@ -419,54 +464,40 @@ SercomParityMode Uart::extractParity(uint16_t config)
 #if defined(PERIPH_SERIAL) && !defined(UART_VARIANT_OWNS_SERIAL)
 Uart Serial(&PERIPH_SERIAL, PIN_SERIAL_RX, PIN_SERIAL_TX, PAD_SERIAL_RX,
             PAD_SERIAL_TX);
-
 #ifndef SERIAL_IT_HANDLER
 #define SERIAL_IT_HANDLER UART_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SERIAL)
-#endif
-void SERIAL_IT_HANDLER()
-{
-  Serial.IrqHandler();
-}
-
-#ifdef FAMILY_SAMD5X
+#endif // !SERIAL_IT_HANDLER
 #ifndef SERIAL_IT_HANDLER_0
 #define SERIAL_IT_HANDLER_0 UART_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SERIAL)
 #define SERIAL_IT_HANDLER_1 UART_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SERIAL)
 #define SERIAL_IT_HANDLER_2 UART_SERCOM_HANDLER2_FROM_TOKEN(PERIPH_SERIAL)
+#ifdef ARDUINO_SAMD51_E51
 #define SERIAL_IT_HANDLER_3 UART_SERCOM_HANDLER3_FROM_TOKEN(PERIPH_SERIAL)
-#endif
-void SERIAL_IT_HANDLER_0() { Serial.IrqHandler(); }
-void SERIAL_IT_HANDLER_1() { Serial.IrqHandler(); }
-void SERIAL_IT_HANDLER_2() { Serial.IrqHandler(); }
-void SERIAL_IT_HANDLER_3() { Serial.IrqHandler(); }
-#endif
-#endif
+#elif defined(ARDUINO_SAME53_E54)
+#define SERIAL_IT_HANDLER_OTHER UART_SERCOM_HANDLER_OTHER_FROM_TOKEN(PERIPH_SERIAL)
+#endif // ARDUINO_SAMD51_E51 / ARDUINO_SAME53_E54
+#endif // !SERIAL_IT_HANDLER_0
+UART_DEFINE_SERCOM_HANDLERS(SERIAL, Serial)
+#endif // PERIPH_SERIAL && !UART_VARIANT_OWNS_SERIAL
 
 #if defined(PERIPH_SERIAL_UART) && !defined(UART_VARIANT_OWNS_SERIAL_UART)
 Uart SerialUART(&PERIPH_SERIAL_UART, PIN_SERIAL_UART_RX, PIN_SERIAL_UART_TX,
                 PAD_SERIAL_UART_RX, PAD_SERIAL_UART_TX);
-
 #ifndef SERIAL_UART_IT_HANDLER
 #define SERIAL_UART_IT_HANDLER UART_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SERIAL_UART)
-#endif
-#ifndef FAMILY_SAMD5X
-void SERIAL_UART_IT_HANDLER()
-{
-  SerialUART.IrqHandler();
-}
-#else
+#endif // !SERIAL_UART_IT_HANDLER
 #ifndef SERIAL_UART_IT_HANDLER_0
 #define SERIAL_UART_IT_HANDLER_0 UART_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SERIAL_UART)
 #define SERIAL_UART_IT_HANDLER_1 UART_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SERIAL_UART)
 #define SERIAL_UART_IT_HANDLER_2 UART_SERCOM_HANDLER2_FROM_TOKEN(PERIPH_SERIAL_UART)
+#ifdef ARDUINO_SAMD51_E51
 #define SERIAL_UART_IT_HANDLER_3 UART_SERCOM_HANDLER3_FROM_TOKEN(PERIPH_SERIAL_UART)
-#endif
-void SERIAL_UART_IT_HANDLER_0() { SerialUART.IrqHandler(); }
-void SERIAL_UART_IT_HANDLER_1() { SerialUART.IrqHandler(); }
-void SERIAL_UART_IT_HANDLER_2() { SerialUART.IrqHandler(); }
-void SERIAL_UART_IT_HANDLER_3() { SerialUART.IrqHandler(); }
-#endif
-#endif
+#elif defined(ARDUINO_SAME53_E54)
+#define SERIAL_UART_IT_HANDLER_OTHER UART_SERCOM_HANDLER_OTHER_FROM_TOKEN(PERIPH_SERIAL_UART)
+#endif // ARDUINO_SAMD51_E51 / ARDUINO_SAME53_E54
+#endif // !SERIAL_UART_IT_HANDLER_0
+UART_DEFINE_SERCOM_HANDLERS(SERIAL_UART, SerialUART)
+#endif // PERIPH_SERIAL_UART && !UART_VARIANT_OWNS_SERIAL_UART
 
 #if defined(PERIPH_SERIAL1) && !defined(UART_VARIANT_OWNS_SERIAL1)
 #ifdef PIN_SERIAL1_RTS
@@ -479,25 +510,19 @@ Uart Serial1(&PERIPH_SERIAL1, PIN_SERIAL1_RX, PIN_SERIAL1_TX, PAD_SERIAL1_RX,
 
 #ifndef SERIAL1_IT_HANDLER
 #define SERIAL1_IT_HANDLER UART_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SERIAL1)
-#endif
-#ifndef FAMILY_SAMD5X
-void SERIAL1_IT_HANDLER()
-{
-  Serial1.IrqHandler();
-}
-#else
+#endif // !SERIAL1_IT_HANDLER
 #ifndef SERIAL1_IT_HANDLER_0
 #define SERIAL1_IT_HANDLER_0 UART_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SERIAL1)
 #define SERIAL1_IT_HANDLER_1 UART_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SERIAL1)
 #define SERIAL1_IT_HANDLER_2 UART_SERCOM_HANDLER2_FROM_TOKEN(PERIPH_SERIAL1)
+#ifdef ARDUINO_SAMD51_E51
 #define SERIAL1_IT_HANDLER_3 UART_SERCOM_HANDLER3_FROM_TOKEN(PERIPH_SERIAL1)
-#endif
-void SERIAL1_IT_HANDLER_0() { Serial1.IrqHandler(); }
-void SERIAL1_IT_HANDLER_1() { Serial1.IrqHandler(); }
-void SERIAL1_IT_HANDLER_2() { Serial1.IrqHandler(); }
-void SERIAL1_IT_HANDLER_3() { Serial1.IrqHandler(); }
-#endif
-#endif
+#elif defined(ARDUINO_SAME53_E54)
+#define SERIAL1_IT_HANDLER_OTHER UART_SERCOM_HANDLER_OTHER_FROM_TOKEN(PERIPH_SERIAL1)
+#endif // ARDUINO_SAMD51_E51 / ARDUINO_SAME53_E54
+#endif // !SERIAL1_IT_HANDLER_0
+UART_DEFINE_SERCOM_HANDLERS(SERIAL1, Serial1)
+#endif // PERIPH_SERIAL1 && !UART_VARIANT_OWNS_SERIAL1
 
 #if defined(PERIPH_SERIAL2) && !defined(UART_VARIANT_OWNS_SERIAL2)
 #ifdef PIN_SERIAL2_RTS
@@ -510,100 +535,73 @@ Uart Serial2(&PERIPH_SERIAL2, PIN_SERIAL2_RX, PIN_SERIAL2_TX, PAD_SERIAL2_RX,
 
 #ifndef SERIAL2_IT_HANDLER
 #define SERIAL2_IT_HANDLER UART_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SERIAL2)
-#endif
-#ifndef FAMILY_SAMD5X
-void SERIAL2_IT_HANDLER()
-{
-  Serial2.IrqHandler();
-}
-#else
+#endif // !SERIAL2_IT_HANDLER
 #ifndef SERIAL2_IT_HANDLER_0
 #define SERIAL2_IT_HANDLER_0 UART_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SERIAL2)
 #define SERIAL2_IT_HANDLER_1 UART_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SERIAL2)
 #define SERIAL2_IT_HANDLER_2 UART_SERCOM_HANDLER2_FROM_TOKEN(PERIPH_SERIAL2)
+#ifdef ARDUINO_SAMD51_E51
 #define SERIAL2_IT_HANDLER_3 UART_SERCOM_HANDLER3_FROM_TOKEN(PERIPH_SERIAL2)
-#endif
-void SERIAL2_IT_HANDLER_0() { Serial2.IrqHandler(); }
-void SERIAL2_IT_HANDLER_1() { Serial2.IrqHandler(); }
-void SERIAL2_IT_HANDLER_2() { Serial2.IrqHandler(); }
-void SERIAL2_IT_HANDLER_3() { Serial2.IrqHandler(); }
-#endif
-#endif
+#elif defined(ARDUINO_SAME53_E54)
+#define SERIAL2_IT_HANDLER_OTHER UART_SERCOM_HANDLER_OTHER_FROM_TOKEN(PERIPH_SERIAL2)
+#endif // ARDUINO_SAMD51_E51 / ARDUINO_SAME53_E54
+#endif // !SERIAL2_IT_HANDLER_0
+UART_DEFINE_SERCOM_HANDLERS(SERIAL2, Serial2)
+#endif // PERIPH_SERIAL2 && !UART_VARIANT_OWNS_SERIAL2
 
 #if defined(PERIPH_SERIAL3) && !defined(UART_VARIANT_OWNS_SERIAL3)
 Uart Serial3(&PERIPH_SERIAL3, PIN_SERIAL3_RX, PIN_SERIAL3_TX, PAD_SERIAL3_RX,
              PAD_SERIAL3_TX);
-
 #ifndef SERIAL3_IT_HANDLER
 #define SERIAL3_IT_HANDLER UART_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SERIAL3)
-#endif
-#ifndef FAMILY_SAMD5X
-void SERIAL3_IT_HANDLER()
-{
-  Serial3.IrqHandler();
-}
-#else
+#endif // !SERIAL3_IT_HANDLER
 #ifndef SERIAL3_IT_HANDLER_0
 #define SERIAL3_IT_HANDLER_0 UART_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SERIAL3)
 #define SERIAL3_IT_HANDLER_1 UART_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SERIAL3)
 #define SERIAL3_IT_HANDLER_2 UART_SERCOM_HANDLER2_FROM_TOKEN(PERIPH_SERIAL3)
+#ifdef ARDUINO_SAMD51_E51
 #define SERIAL3_IT_HANDLER_3 UART_SERCOM_HANDLER3_FROM_TOKEN(PERIPH_SERIAL3)
-#endif
-void SERIAL3_IT_HANDLER_0() { Serial3.IrqHandler(); }
-void SERIAL3_IT_HANDLER_1() { Serial3.IrqHandler(); }
-void SERIAL3_IT_HANDLER_2() { Serial3.IrqHandler(); }
-void SERIAL3_IT_HANDLER_3() { Serial3.IrqHandler(); }
-#endif
-#endif
+#elif defined(ARDUINO_SAME53_E54)
+#define SERIAL3_IT_HANDLER_OTHER UART_SERCOM_HANDLER_OTHER_FROM_TOKEN(PERIPH_SERIAL3)
+#endif // ARDUINO_SAMD51_E51 / ARDUINO_SAME53_E54
+#endif // !SERIAL3_IT_HANDLER_0
+UART_DEFINE_SERCOM_HANDLERS(SERIAL3, Serial3)
+#endif // PERIPH_SERIAL3 && !UART_VARIANT_OWNS_SERIAL3
 
 #if defined(PERIPH_SERIAL4) && !defined(UART_VARIANT_OWNS_SERIAL4)
 Uart Serial4(&PERIPH_SERIAL4, PIN_SERIAL4_RX, PIN_SERIAL4_TX, PAD_SERIAL4_RX,
              PAD_SERIAL4_TX);
-
 #ifndef SERIAL4_IT_HANDLER
 #define SERIAL4_IT_HANDLER UART_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SERIAL4)
-#endif
-#ifndef FAMILY_SAMD5X
-void SERIAL4_IT_HANDLER()
-{
-  Serial4.IrqHandler();
-}
-#else
+#endif // !SERIAL4_IT_HANDLER
 #ifndef SERIAL4_IT_HANDLER_0
 #define SERIAL4_IT_HANDLER_0 UART_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SERIAL4)
 #define SERIAL4_IT_HANDLER_1 UART_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SERIAL4)
 #define SERIAL4_IT_HANDLER_2 UART_SERCOM_HANDLER2_FROM_TOKEN(PERIPH_SERIAL4)
+#ifdef ARDUINO_SAMD51_E51
 #define SERIAL4_IT_HANDLER_3 UART_SERCOM_HANDLER3_FROM_TOKEN(PERIPH_SERIAL4)
-#endif
-void SERIAL4_IT_HANDLER_0() { Serial4.IrqHandler(); }
-void SERIAL4_IT_HANDLER_1() { Serial4.IrqHandler(); }
-void SERIAL4_IT_HANDLER_2() { Serial4.IrqHandler(); }
-void SERIAL4_IT_HANDLER_3() { Serial4.IrqHandler(); }
-#endif
-#endif
+#elif defined(ARDUINO_SAME53_E54)
+#define SERIAL4_IT_HANDLER_OTHER UART_SERCOM_HANDLER_OTHER_FROM_TOKEN(PERIPH_SERIAL4)
+#endif // ARDUINO_SAMD51_E51 / ARDUINO_SAME53_E54
+#endif // !SERIAL4_IT_HANDLER_0
+UART_DEFINE_SERCOM_HANDLERS(SERIAL4, Serial4)
+#endif // PERIPH_SERIAL4 && !UART_VARIANT_OWNS_SERIAL4
 
 #if defined(PERIPH_SERIAL5) && !defined(UART_VARIANT_OWNS_SERIAL5)
 Uart Serial5(&PERIPH_SERIAL5, PIN_SERIAL_RX, PIN_SERIAL_TX, PAD_SERIAL_RX,
              PAD_SERIAL_TX);
-
 #ifndef SERIAL5_IT_HANDLER
 #define SERIAL5_IT_HANDLER UART_SERCOM_HANDLER_FROM_TOKEN(PERIPH_SERIAL5)
-#endif
-void SERIAL5_IT_HANDLER()
-{
-  Serial5.IrqHandler();
-}
-
-#ifdef FAMILY_SAMD5X
+#endif // !SERIAL5_IT_HANDLER
 #ifndef SERIAL5_IT_HANDLER_0
 #define SERIAL5_IT_HANDLER_0 UART_SERCOM_HANDLER0_FROM_TOKEN(PERIPH_SERIAL5)
 #define SERIAL5_IT_HANDLER_1 UART_SERCOM_HANDLER1_FROM_TOKEN(PERIPH_SERIAL5)
 #define SERIAL5_IT_HANDLER_2 UART_SERCOM_HANDLER2_FROM_TOKEN(PERIPH_SERIAL5)
+#ifdef ARDUINO_SAMD51_E51
 #define SERIAL5_IT_HANDLER_3 UART_SERCOM_HANDLER3_FROM_TOKEN(PERIPH_SERIAL5)
-#endif
-void SERIAL5_IT_HANDLER_0() { Serial5.IrqHandler(); }
-void SERIAL5_IT_HANDLER_1() { Serial5.IrqHandler(); }
-void SERIAL5_IT_HANDLER_2() { Serial5.IrqHandler(); }
-void SERIAL5_IT_HANDLER_3() { Serial5.IrqHandler(); }
-#endif
-#endif
+#elif defined(ARDUINO_SAME53_E54)
+#define SERIAL5_IT_HANDLER_OTHER UART_SERCOM_HANDLER_OTHER_FROM_TOKEN(PERIPH_SERIAL5)
+#endif // ARDUINO_SAMD51_E51 / ARDUINO_SAME53_E54
+#endif // !SERIAL5_IT_HANDLER_0
+UART_DEFINE_SERCOM_HANDLERS(SERIAL5, Serial5)
+#endif // PERIPH_SERIAL5 && !UART_VARIANT_OWNS_SERIAL5
