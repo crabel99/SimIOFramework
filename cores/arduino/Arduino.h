@@ -46,7 +46,6 @@ extern "C"{
 
 // Include Atmel headers
 #include "sam.h"
-#include "same5x_compat_shim.h"
 #include "wiring_constants.h"
 
 extern uint32_t SystemCoreClock;
