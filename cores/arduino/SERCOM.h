@@ -20,7 +20,6 @@
 #define _SERCOM_CLASS_
 
 #include "sam.h"
-#include "same5x_compat_shim.h"
 #include "SERCOM_PinMux.h"
 #include "SERCOM_Txn.h"
 #include "RingBuffer.h"
