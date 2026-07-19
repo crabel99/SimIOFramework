@@ -170,7 +170,25 @@ inline void TwoWire::onService(void)
   if (flags == 0)
     return;
 
-  if (status & SERCOM_I2CM_STATUS_RXNACK) {
+#ifdef ARDUINO_SAME53_E54
+  bool masterRxNack = (status & SERCOM_I2CM_STATUS_RXNACK_Msk);
+  bool masterError = (flags & SERCOM_I2CM_INTFLAG_ERROR_Msk);
+  bool masterArbLost = (status & SERCOM_I2CM_STATUS_ARBLOST_Msk);
+  bool masterBusError = (status & SERCOM_I2CM_STATUS_BUSERR_Msk);
+  bool masterExtendTimeout = (status & SERCOM_I2CM_STATUS_MEXTTOUT_Msk);
+  bool slaveExtendTimeout = (status & SERCOM_I2CM_STATUS_SEXTTOUT_Msk);
+  bool lengthError = (status & SERCOM_I2CM_STATUS_LENERR_Msk);
+#else
+  bool masterRxNack = (status & SERCOM_I2CM_STATUS_RXNACK);
+  bool masterError = (flags & SERCOM_I2CM_INTFLAG_ERROR);
+  bool masterArbLost = (status & SERCOM_I2CM_STATUS_ARBLOST);
+  bool masterBusError = (status & SERCOM_I2CM_STATUS_BUSERR);
+  bool masterExtendTimeout = (status & SERCOM_I2CM_STATUS_MEXTTOUT);
+  bool slaveExtendTimeout = (status & SERCOM_I2CM_STATUS_SEXTTOUT);
+  bool lengthError = (status & SERCOM_I2CM_STATUS_LENERR);
+#endif // ARDUINO_SAME53_E54
+
+  if (masterRxNack) {
     sercom->prepareCommandBitsWIRE(WIRE_MASTER_ACT_STOP);
     SercomWireError err = awaitingAddressAck ? SercomWireError::NACK_ON_ADDRESS
                                              : SercomWireError::NACK_ON_DATA;
@@ -185,20 +203,20 @@ inline void TwoWire::onService(void)
       return;
     }
 
-    if (flags & SERCOM_I2CM_INTFLAG_ERROR) {
+    if (masterError) {
       sercom->prepareCommandBitsWIRE(WIRE_MASTER_ACT_STOP);
       uint8_t busState = (status & SERCOM_I2CM_STATUS_BUSSTATE_Msk) >> SERCOM_I2CM_STATUS_BUSSTATE_Pos;
       SercomWireError err = SercomWireError::UNKNOWN_ERROR;
 
-      if (status & SERCOM_I2CM_STATUS_ARBLOST)
+      if (masterArbLost)
         err = SercomWireError::ARBITRATION_LOST;
-      if (status & SERCOM_I2CM_STATUS_BUSERR)
+      if (masterBusError)
         err = SercomWireError::BUS_ERROR;
-      if (status & SERCOM_I2CM_STATUS_MEXTTOUT)
+      if (masterExtendTimeout)
         err = SercomWireError::MASTER_TIMEOUT;
-      if (status & SERCOM_I2CM_STATUS_SEXTTOUT)
+      if (slaveExtendTimeout)
         err = SercomWireError::SLAVE_TIMEOUT;
-      if (status & SERCOM_I2CM_STATUS_LENERR)
+      if (lengthError)
         err = SercomWireError::LENGTH_ERROR;
       if (busState == 0x0)
         err = SercomWireError::BUS_STATE_UNKNOWN;
@@ -227,16 +245,40 @@ inline void TwoWire::onService(void)
     return;
   }
   else {
-    if (flags & SERCOM_I2CS_INTFLAG_ERROR) {
+#ifdef ARDUINO_SAME53_E54
+    bool slaveError = (flags & SERCOM_I2CS_INTFLAG_ERROR_Msk);
+    bool slaveBusError = (status & SERCOM_I2CS_STATUS_BUSERR_Msk);
+    bool slaveCollision = (status & SERCOM_I2CS_STATUS_COLL_Msk);
+    bool slaveSclExtendTimeout = (status & SERCOM_I2CS_STATUS_SEXTTOUT_Msk);
+    bool slaveSclLowTimeout = (status & SERCOM_I2CS_STATUS_LOWTOUT_Msk);
+    bool isMasterRead = (status & SERCOM_I2CS_STATUS_DIR_Msk);
+    bool sr = (status & SERCOM_I2CS_STATUS_SR_Msk);
+    bool prec = (flags & SERCOM_I2CS_INTFLAG_PREC_Msk);
+    bool amatch = (flags & SERCOM_I2CS_INTFLAG_AMATCH_Msk);
+    bool drdy = (flags & SERCOM_I2CS_INTFLAG_DRDY_Msk);
+#else
+    bool slaveError = (flags & SERCOM_I2CS_INTFLAG_ERROR);
+    bool slaveBusError = (status & SERCOM_I2CS_STATUS_BUSERR);
+    bool slaveCollision = (status & SERCOM_I2CS_STATUS_COLL);
+    bool slaveSclExtendTimeout = (status & SERCOM_I2CS_STATUS_SEXTTOUT);
+    bool slaveSclLowTimeout = (status & SERCOM_I2CS_STATUS_LOWTOUT);
+    bool isMasterRead = (status & SERCOM_I2CS_STATUS_DIR); // Master Read / Slave Transmit
+    bool sr = (status & SERCOM_I2CS_STATUS_SR);            // Repeated Start detected
+    bool prec = (flags & SERCOM_I2CS_INTFLAG_PREC);        // Stop detected
+    bool amatch = (flags & SERCOM_I2CS_INTFLAG_AMATCH);    // Address Match detected
+    bool drdy = (flags & SERCOM_I2CS_INTFLAG_DRDY);        // Data Ready detected
+#endif // ARDUINO_SAME53_E54
+
+    if (slaveError) {
       SercomWireError err = SercomWireError::UNKNOWN_ERROR;
 
-      if (status & SERCOM_I2CS_STATUS_BUSERR)
+      if (slaveBusError)
         err = SercomWireError::BUS_ERROR;
-      if (status & SERCOM_I2CS_STATUS_COLL)
+      if (slaveCollision)
         err = SercomWireError::ARBITRATION_LOST;
-      if (status & SERCOM_I2CS_STATUS_SEXTTOUT)
+      if (slaveSclExtendTimeout)
         err = SercomWireError::SLAVE_TIMEOUT;
-      if (status & SERCOM_I2CS_STATUS_LOWTOUT)
+      if (slaveSclLowTimeout)
         err = SercomWireError::SLAVE_TIMEOUT;
 
       sercom->clearINTFLAG();
@@ -245,11 +287,6 @@ inline void TwoWire::onService(void)
     }
 
     // To avoid unnecessary clock cycles for register reads, avoid using inline getters
-    bool isMasterRead = (status & SERCOM_I2CS_STATUS_DIR); // Master Read / Slave Transmit
-    bool sr = (status & SERCOM_I2CS_STATUS_SR);            // Repeated Start detected
-    bool prec = (flags & SERCOM_I2CS_INTFLAG_PREC);        // Stop detected
-    bool amatch = (flags & SERCOM_I2CS_INTFLAG_AMATCH);    // Address Match detected
-    bool drdy = (flags & SERCOM_I2CS_INTFLAG_DRDY);        // Data Ready detected
 
     // Stop or Restart detected - defer receive callback
     if (prec || (amatch && sr && !isMasterRead))
