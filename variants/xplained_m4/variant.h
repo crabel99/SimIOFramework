@@ -65,9 +65,7 @@ extern "C"
 
 extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 
-#ifdef ARDUINO_SAME53_E54
-#ifdef ARDUINO_SAME53_E54
-#ifdef ARDUINO_SAME53_E54
+#if defined(__SAME53__) || defined(__SAME54__)
 #define digitalPinToPort(P)        ( &(PORT_REGS->GROUP[g_APinDescription[P].ulPort]) )
 #define digitalPinToBitMask(P)     ( 1 << g_APinDescription[P].ulPin )
 // #define analogInPinToBit(P)        ( )
@@ -81,7 +79,7 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define portOutputRegister(port)   ( &((port)->OUT.reg) )
 #define portInputRegister(port)    ( &((port)->IN.reg) )
 #define portModeRegister(port)     ( &((port)->DIR.reg) )
-#endif // ARDUINO_SAME53_E54
+#endif // __SAME53__ / __SAME54__
 #define digitalPinHasPWM(P) (g_APinDescription[P].ulPWMChannel != NOT_ON_PWM || g_APinDescription[P].ulTCChannel != NOT_ON_TIMER)
 
 /*
@@ -159,10 +157,6 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PAD_SERIAL1_RX           SERCOM_RX_PAD_1
 #define PAD_SERIAL1_TX           UART_TX_PAD_0
 #define PERIPH_SERIAL1           sercom0
-#define SERIAL1_IT_HANDLER_0     SERCOM0_0_Handler
-#define SERIAL1_IT_HANDLER_1     SERCOM0_1_Handler
-#define SERIAL1_IT_HANDLER_2     SERCOM0_2_Handler
-#define SERIAL1_IT_HANDLER_OTHER SERCOM0_OTHER_Handler
 #define UART_VARIANT_OWNS_SERIAL1
 
 #define PIN_SERIAL2_RX           (16u)
@@ -170,10 +164,6 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PAD_SERIAL2_RX           SERCOM_RX_PAD_1
 #define PAD_SERIAL2_TX           UART_TX_PAD_0
 #define PERIPH_SERIAL2           sercom5
-#define SERIAL2_IT_HANDLER_0     SERCOM5_0_Handler
-#define SERIAL2_IT_HANDLER_1     SERCOM5_1_Handler
-#define SERIAL2_IT_HANDLER_2     SERCOM5_2_Handler
-#define SERIAL2_IT_HANDLER_OTHER SERCOM5_OTHER_Handler
 #define UART_VARIANT_OWNS_SERIAL2
 
 #define PIN_SERIAL3_RX           (32u)
@@ -181,10 +171,6 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PAD_SERIAL3_RX           SERCOM_RX_PAD_1
 #define PAD_SERIAL3_TX           UART_TX_PAD_0
 #define PERIPH_SERIAL3           sercom1
-#define SERIAL3_IT_HANDLER_0     SERCOM1_0_Handler
-#define SERIAL3_IT_HANDLER_1     SERCOM1_1_Handler
-#define SERIAL3_IT_HANDLER_2     SERCOM1_2_Handler
-#define SERIAL3_IT_HANDLER_OTHER SERCOM1_OTHER_Handler
 #define UART_VARIANT_OWNS_SERIAL3
 
 #define PIN_SERIAL4_RX           (47u)
@@ -192,10 +178,6 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PAD_SERIAL4_RX           SERCOM_RX_PAD_1
 #define PAD_SERIAL4_TX           UART_TX_PAD_0
 #define PERIPH_SERIAL4           sercom2
-#define SERIAL4_IT_HANDLER_0     SERCOM2_0_Handler
-#define SERIAL4_IT_HANDLER_1     SERCOM2_1_Handler
-#define SERIAL4_IT_HANDLER_2     SERCOM2_2_Handler
-#define SERIAL4_IT_HANDLER_OTHER SERCOM2_OTHER_Handler
 #define UART_VARIANT_OWNS_SERIAL4
 
 /*
