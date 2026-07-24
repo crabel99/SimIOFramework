@@ -11,6 +11,7 @@
     "Atmel",
     "atsame",
     "BAUDLOW",
+    "BTCNT",
     "BUFOVF",
     "CHIPNAME",
     "CLKCTRL",
@@ -91,6 +92,7 @@
     "SEXTTOUT",
     "simio",
     "SMEN",
+    "SPIM",
     "SS",
     "SWCLK",
     "SWDIO",
@@ -110,6 +112,7 @@
     "VECTACTIVE",
     "VREFA",
     "VREFB",
+    "WRBADDR",
     "ZERODMA"
   ],
   "ignoreWords": [],
