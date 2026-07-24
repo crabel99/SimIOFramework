@@ -1,6 +1,6 @@
 #pragma once
 
-#include "sam.h"
+#include <sam.h>
 
 #include <array>
 #include <stdint.h>
