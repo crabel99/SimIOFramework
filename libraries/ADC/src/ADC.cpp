@@ -162,6 +162,7 @@ void analogReadCorrection(int offset, uint16_t gain) {
 
 namespace {
 constexpr uint8_t kMaxAdjres = 4;
+constexpr uint8_t kAdcPendSvServiceId = PendSVChannels::Adc;
 constexpr uint32_t kAdcNvicPriority = (1u << __NVIC_PRIO_BITS) - 1u;
 
 #ifdef ADC_HAS_D5X_E5X_REGISTERS
@@ -480,8 +481,10 @@ IRQn_Type adcIrqAt(uint8_t index) {
 }
 
 void adcPendSvService(uint8_t serviceId, void *context) {
-    (void)serviceId;
     (void)context;
+    if (serviceId != kAdcPendSvServiceId)
+        return;
+
     AdcEngine::instance().onPendSv();
 }
 
@@ -545,6 +548,9 @@ bool AdcEngine::begin() {
     if (initialized_)
         return true;
 
+    if (!PendSVChannels::isAvailable(kAdcPendSvServiceId))
+        return false;
+
     queueHead_ = 0;
     queueTail_ = 0;
     queueCount_ = 0;
@@ -566,11 +572,11 @@ bool AdcEngine::begin() {
         registeredChannels_[i] = nullptr;
     }
 
-    if (!PendSV::instance().registerService(PendSVChannels::Adc, adcPendSvService, nullptr))
+    if (!PendSV::instance().registerService(kAdcPendSvServiceId, adcPendSvService, nullptr))
         return false;
 
     if (dma_.allocate() != DMA_STATUS_OK) {
-        PendSV::instance().clearService(PendSVChannels::Adc);
+        PendSV::instance().clearService(kAdcPendSvServiceId);
         return false;
     }
 
@@ -584,7 +590,7 @@ bool AdcEngine::begin() {
                            DMA_BEAT_SIZE_HWORD, false, false);
     if (dmaDescriptor_ == nullptr) {
         dma_.free();
-        PendSV::instance().clearService(PendSVChannels::Adc);
+        PendSV::instance().clearService(kAdcPendSvServiceId);
         return false;
     }
 
@@ -630,7 +636,7 @@ void AdcEngine::end() {
       ;
     waitAdcSync();
 
-    PendSV::instance().clearService(PendSVChannels::Adc);
+    PendSV::instance().clearService(kAdcPendSvServiceId);
 
     initialized_ = false;
     dmaActive_ = false;
@@ -763,7 +769,7 @@ void AdcEngine::onResrdyIsr() {
         adcDisableResultReady(adc);
         pendingStartConversion_ = true;
         pendSvPending_ = true;
-        PendSV::instance().setPending(PendSVChannels::Adc);
+        PendSV::instance().setPending(kAdcPendSvServiceId);
       } else {
 #ifdef ADC_HAS_SAME53_E54_REGISTERS
         adcClearFlags(adc, ADC_INTFLAG_RESRDY_Msk);
@@ -1055,7 +1061,7 @@ void AdcEngine::dmaDoneCallback(Adafruit_ZeroDMA *dma) {
     engine.activeMonitorMode_ = false;
 
     engine.pendSvPending_ = true;
-    PendSV::instance().setPending(PendSVChannels::Adc);
+    PendSV::instance().setPending(kAdcPendSvServiceId);
 }
 
 bool ChannelADC::setAttachedSources(uint8_t muxPos, uint8_t muxNeg, AdcSampleNum sampleNum) {
