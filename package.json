@@ -1,5 +1,5 @@
 {
-  "name": "framework-arduino-samd-simio",
+  "name": "framework-arduino-samd-adafruit",
   "version": "0.6.0",
   "description": "Arduino Wiring-based framework for Microchip SAM D and SAME microcontrollers (SimIO SAMD Core)",
   "keywords": [
