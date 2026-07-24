@@ -17,7 +17,7 @@
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
-#include "sam.h"
+#include <sam.h>
 #include <string.h>
 #include "sam_ba_monitor.h"
 #include "sam_ba_serial.h"

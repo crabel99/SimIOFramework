@@ -27,7 +27,7 @@ extern "C" {
 static int _readResolution = 10;
 static int _ADCResolution = 10;
 
-#if defined(ARDUINO_SAMD51_E51) || defined(ARDUINO_SAME53_E54)
+#if defined(__SAMD51__) || defined(__SAME51__) || defined(__SAME53__) || defined(__SAME54__)
 static int _writeResolution = 12;
 static int _dacResolution = 12;
 #else
@@ -36,7 +36,7 @@ static int _writeResolution = 8;
 #endif
 
 
-#if !defined(ARDUINO_SAMD51_E51) && !defined(ARDUINO_SAME53_E54)
+#if !defined(__SAMD51__) && !defined(__SAME51__) && !defined(__SAME53__) && !defined(__SAME54__)
 // Wait for synchronization of registers between the clock domains
 static __inline__ void syncADC() __attribute__((always_inline, unused));
 static void syncADC() {
@@ -73,7 +73,7 @@ static bool dacEnabled[2];
 void analogReadResolution(int res)
 {
   _readResolution = res;
-#if defined(ARDUINO_SAMD51_E51)
+#if defined(__SAMD51__) || defined(__SAME51__)
 
 	if (res > 10) {
 		ADC0->CTRLB.bit.RESSEL = ADC_CTRLB_RESSEL_12BIT_Val;
@@ -92,7 +92,7 @@ void analogReadResolution(int res)
 
 	while(ADC0->SYNCBUSY.reg & ADC_SYNCBUSY_CTRLB); //wait for sync
 	while(ADC1->SYNCBUSY.reg & ADC_SYNCBUSY_CTRLB); //wait for sync
-#elif defined(ARDUINO_SAME53_E54)
+#elif defined(__SAME53__) || defined(__SAME54__)
 	uint32_t resolution;
 	if (res > 10) {
 		resolution = ADC_CTRLB_RESSEL_12BIT;
@@ -150,7 +150,7 @@ static inline uint32_t mapResolution(uint32_t value, uint32_t from, uint32_t to)
  */
 void analogReference(eAnalogReference mode)
 {
-		#if defined(ARDUINO_SAMD51_E51)
+		#if defined(__SAMD51__) || defined(__SAME51__)
 	while(ADC0->SYNCBUSY.reg & ADC_SYNCBUSY_REFCTRL); //wait for sync
 	while(ADC1->SYNCBUSY.reg & ADC_SYNCBUSY_REFCTRL); //wait for sync
 	
@@ -241,7 +241,7 @@ void analogReference(eAnalogReference mode)
 		break;
 	}
 
-#elif defined(ARDUINO_SAME53_E54)
+#elif defined(__SAME53__) || defined(__SAME54__)
 	uint32_t reference = ADC_REFCTRL_REFSEL_INTVCC1;
 	uint32_t vref = SUPC_REGS->SUPC_VREF;
 
@@ -323,7 +323,7 @@ uint32_t analogRead(uint32_t pin)
  //ATSAMR, for example, doesn't have a DAC
 #if defined(DAC) || defined(DAC_REGS)
 
-	#if defined(ARDUINO_SAMD51_E51)
+	#if defined(__SAMD51__) || defined(__SAME51__)
 	  if (pin == PIN_DAC0 || pin == PIN_DAC1) { // Disable DAC, if analogWrite(A0,dval) used previously the DAC is enabled
 		uint8_t channel = (pin == PIN_DAC0 ? 0 : 1);
 		
@@ -341,7 +341,7 @@ uint32_t analogRead(uint32_t pin)
 		}
 		
 		while (DAC->SYNCBUSY.bit.ENABLE);
-		#elif defined(ARDUINO_SAME53_E54)
+		#elif defined(__SAME53__) || defined(__SAME54__)
 		  if (pin == PIN_DAC0) {
 			if (dacEnabled[0]) {
 				dacEnabled[0] = false;
@@ -362,7 +362,7 @@ uint32_t analogRead(uint32_t pin)
 
 #endif
 
-#if defined(ARDUINO_SAMD51_E51)
+#if defined(__SAMD51__) || defined(__SAME51__)
   Adc *adc;
   if(g_APinDescription[pin].ulPinAttribute & PIN_ATTR_ANALOG) adc = ADC0;
   else if(g_APinDescription[pin].ulPinAttribute & PIN_ATTR_ANALOG_ALT) adc = ADC1;
@@ -405,7 +405,7 @@ uint32_t analogRead(uint32_t pin)
   adc->CTRLA.bit.ENABLE = 0x00;             // Disable ADC
   while( adc->SYNCBUSY.reg & ADC_SYNCBUSY_ENABLE ); //wait for sync
   
-#elif defined(ARDUINO_SAME53_E54)
+#elif defined(__SAME53__) || defined(__SAME54__)
   adc_registers_t *adc;
   if (g_APinDescription[pin].ulPinAttribute & PIN_ATTR_ANALOG) adc = ADC0_REGS;
   else if (g_APinDescription[pin].ulPinAttribute & PIN_ATTR_ANALOG_ALT) adc = ADC1_REGS;
@@ -491,15 +491,15 @@ void analogWrite(uint32_t pin, uint32_t value)
 	  if ((attr & PIN_ATTR_ANALOG) == PIN_ATTR_ANALOG)
 	  {
 	    // DAC handling code
-#if defined(ARDUINO_SAMD51_E51)
+#if defined(__SAMD51__) || defined(__SAME51__)
 		if (pin == PIN_DAC0 || pin == PIN_DAC1) { // 2 DACs on A0 (PA02) and A1 (PA05)
-#elif defined(ARDUINO_SAME53_E54)
+#elif defined(__SAME53__) || defined(__SAME54__)
 		if (pin == PIN_DAC0) {
 #else
 	    if (pin == PIN_DAC0) { // Only 1 DAC on A0 (PA02)
 #endif
 
-#if defined(ARDUINO_SAMD51_E51)
+#if defined(__SAMD51__) || defined(__SAME51__)
 
 	    value = mapResolution(value, _writeResolution, _dacResolution);
 
@@ -554,7 +554,7 @@ void analogWrite(uint32_t pin, uint32_t value)
 				DAC->DATA[1].reg = value;  // DAC on 10 bits.
 			}
 
-#elif defined(ARDUINO_SAME53_E54)
+#elif defined(__SAME53__) || defined(__SAME54__)
 		value = mapResolution(value, _writeResolution, _dacResolution);
 		uint8_t channel = 0;
 		pinPeripheral(pin, PIO_ANALOG);
@@ -583,7 +583,7 @@ void analogWrite(uint32_t pin, uint32_t value)
 	}
 #endif // DAC
 
-#if defined(ARDUINO_SAMD51_E51)
+#if defined(__SAMD51__) || defined(__SAME51__)
 	if(attr & (PIN_ATTR_PWM_E|PIN_ATTR_PWM_F|PIN_ATTR_PWM_G)){
 
 		uint32_t tcNum = GetTCNumber(pinDesc.ulPWMChannel);
@@ -675,7 +675,7 @@ void analogWrite(uint32_t pin, uint32_t value)
 		return;
 	}
 
-#elif defined(ARDUINO_SAME53_E54)
+#elif defined(__SAME53__) || defined(__SAME54__)
 	if (attr & (PIN_ATTR_PWM_E | PIN_ATTR_PWM_F | PIN_ATTR_PWM_G)) {
 		uint32_t tcNum = GetTCNumber(pinDesc.ulPWMChannel);
 		uint8_t tcChannel = GetTCChannelNumber(pinDesc.ulPWMChannel);

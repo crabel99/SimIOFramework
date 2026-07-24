@@ -65,9 +65,7 @@ extern "C"
 
 extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 
-#ifdef ARDUINO_SAME53_E54
-#ifdef ARDUINO_SAME53_E54
-#ifdef ARDUINO_SAME53_E54
+#if defined(__SAME53__) || defined(__SAME54__)
 #define digitalPinToPort(P)        ( &(PORT_REGS->GROUP[g_APinDescription[P].ulPort]) )
 #define digitalPinToBitMask(P)     ( 1 << g_APinDescription[P].ulPin )
 // #define analogInPinToBit(P)        ( )
@@ -81,7 +79,7 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define portOutputRegister(port)   ( &((port)->OUT.reg) )
 #define portInputRegister(port)    ( &((port)->IN.reg) )
 #define portModeRegister(port)     ( &((port)->DIR.reg) )
-#endif // ARDUINO_SAME53_E54
+#endif // __SAME53__ / __SAME54__
 #define digitalPinHasPWM(P) (g_APinDescription[P].ulPWMChannel != NOT_ON_PWM || g_APinDescription[P].ulTCChannel != NOT_ON_TIMER)
 
 /*
@@ -164,10 +162,6 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PERIPH_SPI sercom4
 #define PAD_SPI_TX SPI_PAD_0_SCK_1
 #define PAD_SPI_RX SERCOM_RX_PAD_3
-#define SPI_IT_HANDLER_0 SERCOM4_0_Handler
-#define SPI_IT_HANDLER_1 SERCOM4_1_Handler
-#define SPI_IT_HANDLER_2 SERCOM4_2_Handler
-#define SPI_IT_HANDLER_3 SERCOM4_3_Handler
 
   static const uint8_t SS = PIN_SPI_SS;
   static const uint8_t MOSI = PIN_SPI_MOSI;
@@ -183,11 +177,6 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PIN_WIRE_SDA PIN_EXT1_SDA
 #define PIN_WIRE_SCL PIN_EXT1_SCL
 #define PERIPH_WIRE sercom3
-#define WIRE_IT_HANDLER SERCOM3_Handler
-#define WIRE_IT_HANDLER_0 SERCOM3_0_Handler
-#define WIRE_IT_HANDLER_1 SERCOM3_1_Handler
-#define WIRE_IT_HANDLER_2 SERCOM3_2_Handler
-#define WIRE_IT_HANDLER_3 SERCOM3_3_Handler
 
   static const uint8_t SDA = PIN_WIRE_SDA;
   static const uint8_t SCL = PIN_WIRE_SCL;
@@ -196,11 +185,6 @@ extern const uint8_t g_AAnalogPinMap[NUM_ANALOG_INPUTS];
 #define PIN_WIRE1_SDA (30u)
 #define PIN_WIRE1_SCL (31u)
 #define PERIPH_WIRE1 sercom7
-#define WIRE1_IT_HANDLER SERCOM7_Handler
-#define WIRE1_IT_HANDLER_0 SERCOM7_0_Handler
-#define WIRE1_IT_HANDLER_1 SERCOM7_1_Handler
-#define WIRE1_IT_HANDLER_2 SERCOM7_2_Handler
-#define WIRE1_IT_HANDLER_3 SERCOM7_3_Handler
 
   static const uint8_t SDA1 = PIN_WIRE1_SDA;
   static const uint8_t SCL1 = PIN_WIRE1_SCL;
