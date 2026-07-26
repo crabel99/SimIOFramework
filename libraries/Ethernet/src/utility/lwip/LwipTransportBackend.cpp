@@ -1,0 +1,884 @@
+#include "LwipTransportBackend.h"
+
+#include <string.h>
+
+#include <lwip/dns.h>
+#include <lwip/igmp.h>
+#include <lwip/ip_addr.h>
+#include <lwip/pbuf.h>
+#include <lwip/tcp.h>
+#include <lwip/udp.h>
+
+namespace {
+
+constexpr size_t kTcpBufferSize = 8192;
+constexpr size_t kUdpBufferSize = 1536;
+
+struct SockAddrParts {
+  uint32_t address;
+  uint16_t port;
+};
+
+uint32_t ipToHostOrderAddress(IPAddress ip) {
+  return (static_cast<uint32_t>(ip[0]) << 24) |
+         (static_cast<uint32_t>(ip[1]) << 16) |
+         (static_cast<uint32_t>(ip[2]) << 8) | static_cast<uint32_t>(ip[3]);
+}
+
+IPAddress hostOrderAddressToIp(uint32_t address) {
+  return IPAddress(static_cast<uint8_t>((address >> 24) & 0xff),
+                   static_cast<uint8_t>((address >> 16) & 0xff),
+                   static_cast<uint8_t>((address >> 8) & 0xff),
+                   static_cast<uint8_t>(address & 0xff));
+}
+
+ip_addr_t makeRawIpAddress(IPAddress ip) {
+  ip_addr_t address;
+  IP_ADDR4(&address, ip[0], ip[1], ip[2], ip[3]);
+  return address;
+}
+
+IPAddress rawIpAddressToIp(const ip_addr_t *address) {
+  if (address == nullptr)
+    return IPAddress();
+
+  return hostOrderAddressToIp(lwip_ntohl(ip_addr_get_ip4_u32(address)));
+}
+
+uint32_t rawIpAddressToHostOrder(const ip_addr_t *address) {
+  return address == nullptr ? 0 : lwip_ntohl(ip_addr_get_ip4_u32(address));
+}
+
+void ignoreDnsResult(const char *name, const ip_addr_t *address,
+                     void *context) {
+  (void)name;
+  (void)address;
+  (void)context;
+}
+
+bool resolveRawHostImmediate(const char *host, ip_addr_t &address) {
+  if (host == nullptr || host[0] == '\0')
+    return false;
+
+  return dns_gethostbyname(host, &address, ignoreDnsResult, nullptr) == ERR_OK;
+}
+
+} // namespace
+
+struct LwipTransportBackend::TcpHandle {
+  tcp_pcb *pcb = nullptr;
+  bool acquired = false;
+  bool connected = false;
+  bool connecting = false;
+  bool dnsPending = false;
+  EthernetSocketState state = EthernetSocketState::Closed;
+  uint16_t dnsPort = 0;
+  uint32_t receiveCallbacks = 0;
+  size_t totalReceived = 0;
+  size_t totalDelivered = 0;
+  size_t droppedBytes = 0;
+  size_t lastReceiveLength = 0;
+  uint32_t writeCalls = 0;
+  size_t totalWriteRequested = 0;
+  size_t totalWriteAccepted = 0;
+  size_t writeRejectedBytes = 0;
+  size_t lastWriteRequested = 0;
+  size_t lastWriteAccepted = 0;
+  size_t lastSendBuffer = 0;
+  int lastTcpWriteError = 0;
+  int lastTcpOutputError = 0;
+  uint8_t rx[kTcpBufferSize];
+  size_t rxLength = 0;
+  size_t rxIndex = 0;
+};
+
+struct LwipTransportBackend::UdpState {
+  udp_pcb *pcb = nullptr;
+  bool started = false;
+  bool packetOpen = false;
+  uint8_t tx[kUdpBufferSize];
+  size_t txLength = 0;
+  uint8_t rx[kUdpBufferSize];
+  size_t rxLength = 0;
+  size_t rxIndex = 0;
+  SockAddrParts txRemote = {0, 0};
+  SockAddrParts rxRemote = {0, 0};
+  bool multicastJoined = false;
+  uint32_t multicastAddress = 0;
+};
+
+namespace {
+void resetTcpReceiveBuffer(LwipTransportBackend::TcpHandle *state) {
+  if (state == nullptr)
+    return;
+
+  state->rxLength = 0;
+  state->rxIndex = 0;
+}
+
+void resetTcpDiagnostics(LwipTransportBackend::TcpHandle *state) {
+  if (state == nullptr)
+    return;
+
+  state->receiveCallbacks = 0;
+  state->totalReceived = 0;
+  state->totalDelivered = 0;
+  state->droppedBytes = 0;
+  state->lastReceiveLength = 0;
+  state->writeCalls = 0;
+  state->totalWriteRequested = 0;
+  state->totalWriteAccepted = 0;
+  state->writeRejectedBytes = 0;
+  state->lastWriteRequested = 0;
+  state->lastWriteAccepted = 0;
+  state->lastSendBuffer = 0;
+  state->lastTcpWriteError = 0;
+  state->lastTcpOutputError = 0;
+}
+
+err_t startTcpConnect(LwipTransportBackend::TcpHandle *tcp, IPAddress ip,
+                      uint16_t port);
+
+void handleTcpDnsResult(const char *name, const ip_addr_t *address,
+                        void *context) {
+  (void)name;
+  auto *tcp = static_cast<LwipTransportBackend::TcpHandle *>(context);
+  if (tcp == nullptr || !tcp->dnsPending || !tcp->acquired)
+    return;
+
+  tcp->dnsPending = false;
+  if (address == nullptr || tcp->pcb == nullptr) {
+    tcp->connecting = false;
+    tcp->state = EthernetSocketState::DnsFailed;
+    return;
+  }
+
+  if (startTcpConnect(tcp, rawIpAddressToIp(address), tcp->dnsPort) != ERR_OK) {
+    tcp->connecting = false;
+    tcp->state = EthernetSocketState::ConnectFailed;
+  }
+}
+} // namespace
+
+namespace {
+void detachTcpCallbacks(tcp_pcb *pcb) {
+  if (pcb == nullptr)
+    return;
+
+  tcp_arg(pcb, nullptr);
+  tcp_recv(pcb, nullptr);
+  tcp_sent(pcb, nullptr);
+  tcp_err(pcb, nullptr);
+}
+
+err_t receiveTcpData(void *arg, tcp_pcb *pcb, pbuf *packet, err_t err) {
+  auto *state = static_cast<LwipTransportBackend::TcpHandle *>(arg);
+  if (state == nullptr || pcb == nullptr)
+    return ERR_ARG;
+
+  if (packet == nullptr) {
+    state->connected = false;
+    state->connecting = false;
+    state->pcb = nullptr;
+    state->state = EthernetSocketState::Closed;
+    return ERR_OK;
+  }
+
+  if (err != ERR_OK) {
+    pbuf_free(packet);
+    return err;
+  }
+
+  const size_t receivedLength = packet->tot_len;
+  state->receiveCallbacks++;
+  state->lastReceiveLength = receivedLength;
+  size_t availableSpace = kTcpBufferSize - state->rxLength;
+  size_t bytesToCopy = receivedLength;
+  if (bytesToCopy > availableSpace)
+    bytesToCopy = availableSpace;
+
+  if (bytesToCopy > 0) {
+    pbuf_copy_partial(packet, &state->rx[state->rxLength], bytesToCopy, 0);
+    state->rxLength += bytesToCopy;
+    state->totalReceived += bytesToCopy;
+    tcp_recved(pcb, static_cast<u16_t>(bytesToCopy));
+  }
+  if (bytesToCopy < receivedLength)
+    state->droppedBytes += receivedLength - bytesToCopy;
+
+  pbuf_free(packet);
+  return bytesToCopy == receivedLength ? ERR_OK : ERR_MEM;
+}
+
+void handleTcpError(void *arg, err_t err) {
+  (void)err;
+  auto *state = static_cast<LwipTransportBackend::TcpHandle *>(arg);
+  if (state == nullptr)
+    return;
+
+  state->pcb = nullptr;
+  state->acquired = false;
+  state->connected = false;
+  state->connecting = false;
+  state->state = EthernetSocketState::ConnectFailed;
+  resetTcpReceiveBuffer(state);
+  resetTcpDiagnostics(state);
+}
+
+err_t tcpConnected(void *arg, tcp_pcb *pcb, err_t err) {
+  auto *state = static_cast<LwipTransportBackend::TcpHandle *>(arg);
+  if (state == nullptr || pcb == nullptr)
+    return ERR_ARG;
+
+  state->connecting = false;
+  state->connected = err == ERR_OK;
+  state->state = err == ERR_OK ? EthernetSocketState::Connected
+                               : EthernetSocketState::ConnectFailed;
+  return err == ERR_OK ? ERR_OK : err;
+}
+
+void armTcpCallbacks(LwipTransportBackend::TcpHandle *state, tcp_pcb *pcb) {
+  if (state == nullptr || pcb == nullptr)
+    return;
+
+  tcp_arg(pcb, state);
+  tcp_recv(pcb, receiveTcpData);
+  tcp_err(pcb, handleTcpError);
+}
+
+err_t startTcpConnect(LwipTransportBackend::TcpHandle *tcp, IPAddress ip,
+                      uint16_t port) {
+  if (tcp == nullptr || tcp->pcb == nullptr)
+    return ERR_ARG;
+
+  ip_addr_t address = makeRawIpAddress(ip);
+  const err_t result = tcp_connect(tcp->pcb, &address, port, tcpConnected);
+  if (result == ERR_OK)
+    tcp->connecting = true;
+  tcp->state = result == ERR_OK ? EthernetSocketState::TcpConnecting
+                                : EthernetSocketState::ConnectFailed;
+  return result;
+}
+
+err_t acceptTcpConnection(void *arg, tcp_pcb *newPcb, err_t err) {
+  auto *state = static_cast<LwipTransportBackend::TcpHandle *>(arg);
+  if (state == nullptr || newPcb == nullptr || err != ERR_OK)
+    return ERR_VAL;
+
+  if (state->pcb != nullptr || state->acquired) {
+    tcp_abort(newPcb);
+    return ERR_ABRT;
+  }
+
+  state->pcb = newPcb;
+  state->acquired = false;
+  state->connected = true;
+  state->connecting = false;
+  state->state = EthernetSocketState::Connected;
+  resetTcpReceiveBuffer(state);
+  resetTcpDiagnostics(state);
+  armTcpCallbacks(state, newPcb);
+  tcp_accepted(newPcb);
+  return ERR_OK;
+}
+
+void receiveUdpPacket(void *arg, udp_pcb *pcb, pbuf *packet,
+                      const ip_addr_t *address, u16_t port) {
+  (void)pcb;
+  auto *state = static_cast<LwipTransportBackend::UdpState *>(arg);
+  if (state == nullptr || packet == nullptr) {
+    if (packet != nullptr)
+      pbuf_free(packet);
+    return;
+  }
+
+  size_t bytesToCopy = packet->tot_len;
+  if (bytesToCopy > kUdpBufferSize)
+    bytesToCopy = kUdpBufferSize;
+
+  pbuf_copy_partial(packet, state->rx, bytesToCopy, 0);
+  state->rxLength = bytesToCopy;
+  state->rxIndex = 0;
+  state->rxRemote = {rawIpAddressToHostOrder(address), port};
+  pbuf_free(packet);
+}
+} // namespace
+
+LwipTransportBackend::LwipTransportBackend()
+    : _client(new TcpHandle), _secure(new TcpHandle),
+      _accepted(new TcpHandle), _udp(new UdpState), _serverPcb(nullptr),
+      _serverPort(0), _carrierProvider(nullptr),
+      _carrierProviderContext(nullptr) {}
+
+LwipTransportBackend::~LwipTransportBackend() {
+  stopServer(_serverPort);
+  stop();
+  closeTcpHandle(_client);
+  closeTcpHandle(_secure);
+  closeTcpHandle(_accepted);
+  delete _client;
+  delete _secure;
+  delete _accepted;
+  delete _udp;
+}
+
+void LwipTransportBackend::setCarrierProvider(CarrierProvider provider,
+                                              void *context) {
+  _carrierProvider = provider;
+  _carrierProviderContext = context;
+}
+
+void LwipTransportBackend::clearCarrierProvider() {
+  _carrierProvider = nullptr;
+  _carrierProviderContext = nullptr;
+}
+
+void *LwipTransportBackend::acquireClientSocket() {
+  if (_client == nullptr || _client->acquired)
+    return nullptr;
+
+  closeTcpHandle(_client);
+  _client->pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
+  if (_client->pcb == nullptr)
+    return nullptr;
+
+  armTcpCallbacks(_client, _client->pcb);
+  _client->acquired = true;
+  _client->state = EthernetSocketState::Idle;
+  return _client;
+}
+
+void *LwipTransportBackend::acquireSecureClientSocket() {
+  if (_secure == nullptr || _secure->acquired)
+    return nullptr;
+
+  closeTcpHandle(_secure);
+  _secure->pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
+  if (_secure->pcb == nullptr)
+    return nullptr;
+
+  armTcpCallbacks(_secure, _secure->pcb);
+  _secure->acquired = true;
+  _secure->state = EthernetSocketState::Idle;
+  return _secure;
+}
+
+void LwipTransportBackend::releaseSocket(void *handle) {
+  closeTcpHandle(asTcpHandle(handle));
+}
+
+bool LwipTransportBackend::tlsAvailable() const { return _secure != nullptr; }
+
+LwipTransportBackend::TcpDiagnostics
+LwipTransportBackend::secureTcpDiagnostics() const {
+  return diagnosticsFor(_secure);
+}
+
+bool LwipTransportBackend::beginServer(uint16_t port) {
+  stopServer(_serverPort);
+
+  tcp_pcb *pcb = tcp_new_ip_type(IPADDR_TYPE_V4);
+  if (pcb == nullptr)
+    return false;
+
+  ip_addr_t address;
+  ip_addr_set_any(0, &address);
+  if (tcp_bind(pcb, &address, port) != ERR_OK) {
+    tcp_abort(pcb);
+    return false;
+  }
+
+  err_t listenError = ERR_OK;
+  tcp_pcb *listenPcb = reinterpret_cast<tcp_pcb *>(
+      tcp_listen_with_backlog_and_err(pcb, 1, &listenError));
+  if (listenPcb == nullptr || listenError != ERR_OK) {
+    tcp_abort(pcb);
+    return false;
+  }
+
+  tcp_arg(listenPcb, _accepted);
+  tcp_accept(listenPcb, acceptTcpConnection);
+  _serverPcb = listenPcb;
+  _serverPort = port;
+  return true;
+}
+
+void LwipTransportBackend::stopServer(uint16_t port) {
+  (void)port;
+  if (_serverPcb != nullptr) {
+    auto *pcb = static_cast<tcp_pcb *>(_serverPcb);
+    tcp_arg(pcb, nullptr);
+    tcp_accept(pcb, nullptr);
+    if (tcp_close(pcb) != ERR_OK)
+      tcp_abort(pcb);
+  }
+  _serverPcb = nullptr;
+  _serverPort = 0;
+  if (_accepted != nullptr && !_accepted->acquired)
+    closeTcpHandle(_accepted);
+}
+
+void *LwipTransportBackend::acceptClientSocket(uint16_t port) {
+  if (_accepted == nullptr || _accepted->acquired || _accepted->pcb == nullptr ||
+      port != _serverPort)
+    return nullptr;
+
+  _accepted->acquired = true;
+  return _accepted;
+}
+
+size_t LwipTransportBackend::writeServer(uint16_t port, uint8_t value) {
+  return writeServer(port, &value, 1);
+}
+
+size_t LwipTransportBackend::writeServer(uint16_t port, const uint8_t *buffer,
+                                      size_t size) {
+  if (port != _serverPort)
+    return 0;
+
+  return writeServerToAccepted(buffer, size);
+}
+
+bool LwipTransportBackend::carrierUp(void *handle) const {
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr)
+    return false;
+
+  return tcp->pcb != nullptr && transportCarrierUp();
+}
+
+EthernetSocketState LwipTransportBackend::state(void *handle) const {
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr)
+    return EthernetSocketState::Closed;
+
+  if (tcp->pcb != nullptr && !transportCarrierUp())
+    return EthernetSocketState::CarrierDown;
+
+  return tcp->state;
+}
+
+int LwipTransportBackend::connect(void *handle, IPAddress ip, uint16_t port) {
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr)
+    return 0;
+  if (tcp->pcb == nullptr) {
+    tcp->state = EthernetSocketState::Closed;
+    return 0;
+  }
+  if (!transportCarrierUp()) {
+    tcp->state = EthernetSocketState::CarrierDown;
+    return 0;
+  }
+
+  tcp->dnsPending = false;
+  tcp->dnsPort = 0;
+  if (startTcpConnect(tcp, ip, port) != ERR_OK) {
+    closeTcpHandle(tcp);
+    return 0;
+  }
+
+  return 1;
+}
+
+int LwipTransportBackend::connect(void *handle, const char *host, uint16_t port) {
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr)
+    return 0;
+  if (host == nullptr || host[0] == '\0') {
+    tcp->state = EthernetSocketState::DnsFailed;
+    return 0;
+  }
+  if (tcp->pcb == nullptr) {
+    tcp->state = EthernetSocketState::Closed;
+    return 0;
+  }
+  if (!transportCarrierUp()) {
+    tcp->state = EthernetSocketState::CarrierDown;
+    return 0;
+  }
+
+  ip_addr_t address;
+  const err_t result =
+      dns_gethostbyname(host, &address, handleTcpDnsResult, tcp);
+  if (result == ERR_OK)
+    return connect(handle, rawIpAddressToIp(&address), port);
+  if (result != ERR_INPROGRESS) {
+    tcp->state = EthernetSocketState::DnsFailed;
+    return 0;
+  }
+
+  tcp->dnsPending = true;
+  tcp->dnsPort = port;
+  tcp->connecting = true;
+  tcp->state = EthernetSocketState::DnsPending;
+  return 1;
+}
+
+size_t LwipTransportBackend::write(void *handle, uint8_t value) {
+  return write(handle, &value, 1);
+}
+
+size_t LwipTransportBackend::write(void *handle, const uint8_t *buffer,
+                                size_t size) {
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr)
+    return 0;
+
+  const size_t requestedSize = size;
+  tcp->writeCalls++;
+  tcp->lastWriteRequested = requestedSize;
+  tcp->lastWriteAccepted = 0;
+  tcp->totalWriteRequested += requestedSize;
+
+  if (tcp->pcb == nullptr || !tcp->connected || !transportCarrierUp() ||
+      buffer == nullptr || size == 0) {
+    tcp->writeRejectedBytes += requestedSize;
+    return 0;
+  }
+
+  tcp->lastSendBuffer = tcp_sndbuf(tcp->pcb);
+  if (size > tcp->lastSendBuffer)
+    size = tcp->lastSendBuffer;
+  if (size == 0) {
+    tcp->writeRejectedBytes += requestedSize;
+    return 0;
+  }
+
+  const err_t writeError =
+      tcp_write(tcp->pcb, buffer, static_cast<u16_t>(size),
+                TCP_WRITE_FLAG_COPY);
+  tcp->lastTcpWriteError = writeError;
+  if (writeError != ERR_OK) {
+    tcp->writeRejectedBytes += requestedSize;
+    return 0;
+  }
+
+  const err_t outputError = tcp_output(tcp->pcb);
+  tcp->lastTcpOutputError = outputError;
+  if (outputError != ERR_OK) {
+    tcp->writeRejectedBytes += requestedSize;
+    return 0;
+  }
+
+  tcp->lastWriteAccepted = size;
+  tcp->totalWriteAccepted += size;
+  if (size < requestedSize)
+    tcp->writeRejectedBytes += requestedSize - size;
+  return size;
+}
+
+int LwipTransportBackend::available(void *handle) {
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr || tcp->rxIndex >= tcp->rxLength)
+    return 0;
+
+  return static_cast<int>(tcp->rxLength - tcp->rxIndex);
+}
+
+int LwipTransportBackend::read(void *handle) {
+  uint8_t value = 0;
+  int result = read(handle, &value, 1);
+  return result == 1 ? value : -1;
+}
+
+int LwipTransportBackend::read(void *handle, uint8_t *buffer, size_t size) {
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr || buffer == nullptr || size == 0 ||
+      tcp->rxIndex >= tcp->rxLength)
+    return 0;
+
+  size_t bytesToRead = tcp->rxLength - tcp->rxIndex;
+  if (bytesToRead > size)
+    bytesToRead = size;
+
+  memcpy(buffer, &tcp->rx[tcp->rxIndex], bytesToRead);
+  tcp->rxIndex += bytesToRead;
+  tcp->totalDelivered += bytesToRead;
+  if (tcp->rxIndex >= tcp->rxLength)
+    resetTcpReceiveBuffer(tcp);
+
+  return static_cast<int>(bytesToRead);
+}
+
+int LwipTransportBackend::peek(void *handle) {
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr || tcp->rxIndex >= tcp->rxLength)
+    return -1;
+
+  return tcp->rx[tcp->rxIndex];
+}
+
+void LwipTransportBackend::flush(void *handle) { (void)handle; }
+
+void LwipTransportBackend::stop(void *handle) {
+  closeTcpHandle(asTcpHandle(handle));
+}
+
+uint8_t LwipTransportBackend::connected(void *handle) {
+  TcpHandle *tcp = asTcpHandle(handle);
+  if (tcp == nullptr || tcp->pcb == nullptr || !transportCarrierUp())
+    return 0;
+
+  return tcp->connected ? 1 : 0;
+}
+
+uint8_t LwipTransportBackend::begin(uint16_t port) {
+  if (_udp == nullptr)
+    return 0;
+
+  stop();
+  _udp->pcb = udp_new_ip_type(IPADDR_TYPE_V4);
+  if (_udp->pcb == nullptr) {
+    stop();
+    return 0;
+  }
+
+  ip_addr_t address;
+  ip_addr_set_any(0, &address);
+  if (udp_bind(_udp->pcb, &address, port) != ERR_OK) {
+    stop();
+    return 0;
+  }
+
+  udp_recv(_udp->pcb, receiveUdpPacket, _udp);
+  _udp->started = true;
+  return 1;
+}
+
+uint8_t LwipTransportBackend::beginMulticast(IPAddress ip, uint16_t port) {
+  uint8_t started = begin(port);
+  if (!started)
+    return 0;
+
+#if LWIP_IGMP
+  ip_addr_t groupAddress = makeRawIpAddress(ip);
+  if (igmp_joingroup(IP4_ADDR_ANY, ip_2_ip4(&groupAddress)) != ERR_OK) {
+    stop();
+    return 0;
+  }
+  _udp->multicastJoined = true;
+  _udp->multicastAddress = ipToHostOrderAddress(ip);
+#else
+  (void)ip;
+#endif
+  return 1;
+}
+
+void LwipTransportBackend::stop() {
+#if LWIP_IGMP
+  if (_udp != nullptr && _udp->multicastJoined) {
+    ip_addr_t groupAddress =
+        makeRawIpAddress(hostOrderAddressToIp(_udp->multicastAddress));
+    igmp_leavegroup(IP4_ADDR_ANY, ip_2_ip4(&groupAddress));
+  }
+#endif
+  if (_udp != nullptr && _udp->pcb != nullptr) {
+    udp_recv(_udp->pcb, nullptr, nullptr);
+    udp_remove(_udp->pcb);
+  }
+  if (_udp == nullptr)
+    return;
+
+  _udp->pcb = nullptr;
+  _udp->started = false;
+  _udp->packetOpen = false;
+  _udp->txLength = 0;
+  _udp->rxLength = 0;
+  _udp->rxIndex = 0;
+  _udp->txRemote = {0, 0};
+  _udp->rxRemote = {0, 0};
+  _udp->multicastJoined = false;
+  _udp->multicastAddress = 0;
+}
+
+LwipTransportBackend::UdpEndpointState LwipTransportBackend::udpState() const {
+  if (_udp == nullptr || !_udp->started)
+    return UdpEndpointState::Stopped;
+  if (_udp->packetOpen)
+    return UdpEndpointState::PacketOpen;
+  if (_udp->rxIndex < _udp->rxLength)
+    return UdpEndpointState::PacketAvailable;
+  return UdpEndpointState::Bound;
+}
+
+int LwipTransportBackend::beginPacket(IPAddress ip, uint16_t port) {
+  if (_udp == nullptr || !_udp->started)
+    return 0;
+
+  _udp->txRemote = {ipToHostOrderAddress(ip), port};
+  _udp->txLength = 0;
+  _udp->packetOpen = true;
+  return 1;
+}
+
+int LwipTransportBackend::beginPacket(const char *host, uint16_t port) {
+  ip_addr_t address;
+  if (!resolveRawHostImmediate(host, address))
+    return 0;
+
+  return beginPacket(rawIpAddressToIp(&address), port);
+}
+
+int LwipTransportBackend::endPacket() {
+  if (_udp == nullptr || !_udp->started || !_udp->packetOpen ||
+      _udp->pcb == nullptr)
+    return 0;
+
+  pbuf *packet = pbuf_alloc(PBUF_TRANSPORT, _udp->txLength, PBUF_RAM);
+  if (packet == nullptr)
+    return 0;
+
+  if (pbuf_take(packet, _udp->tx, _udp->txLength) != ERR_OK) {
+    pbuf_free(packet);
+    return 0;
+  }
+
+  ip_addr_t address =
+      makeRawIpAddress(hostOrderAddressToIp(_udp->txRemote.address));
+  err_t result = udp_sendto(_udp->pcb, packet, &address, _udp->txRemote.port);
+  pbuf_free(packet);
+  _udp->packetOpen = false;
+  _udp->txLength = 0;
+  return result == ERR_OK ? 1 : 0;
+}
+
+size_t LwipTransportBackend::write(uint8_t value) { return write(&value, 1); }
+
+size_t LwipTransportBackend::write(const uint8_t *buffer, size_t size) {
+  if (_udp == nullptr || !_udp->started || !_udp->packetOpen ||
+      buffer == nullptr || size == 0)
+    return 0;
+
+  size_t availableSpace = kUdpBufferSize - _udp->txLength;
+  if (size > availableSpace)
+    size = availableSpace;
+
+  memcpy(&_udp->tx[_udp->txLength], buffer, size);
+  _udp->txLength += size;
+  return size;
+}
+
+int LwipTransportBackend::parsePacket() {
+  return available();
+}
+
+int LwipTransportBackend::available() {
+  if (_udp == nullptr || !_udp->started || _udp->rxIndex >= _udp->rxLength)
+    return 0;
+
+  return static_cast<int>(_udp->rxLength - _udp->rxIndex);
+}
+
+int LwipTransportBackend::read() {
+  if (available() <= 0)
+    return -1;
+
+  return _udp->rx[_udp->rxIndex++];
+}
+
+int LwipTransportBackend::read(uint8_t *buffer, size_t size) {
+  if (buffer == nullptr || size == 0 || available() <= 0)
+    return 0;
+
+  size_t bytesToRead = static_cast<size_t>(available());
+  if (bytesToRead > size)
+    bytesToRead = size;
+
+  memcpy(buffer, &_udp->rx[_udp->rxIndex], bytesToRead);
+  _udp->rxIndex += bytesToRead;
+  return static_cast<int>(bytesToRead);
+}
+
+int LwipTransportBackend::peek() {
+  if (available() <= 0)
+    return -1;
+
+  return _udp->rx[_udp->rxIndex];
+}
+
+void LwipTransportBackend::flush() {
+  if (_udp == nullptr)
+    return;
+
+  _udp->rxIndex = _udp->rxLength;
+}
+
+IPAddress LwipTransportBackend::remoteIP() {
+  if (_udp == nullptr)
+    return IPAddress();
+
+  return hostOrderAddressToIp(_udp->rxRemote.address);
+}
+
+uint16_t LwipTransportBackend::remotePort() {
+  return _udp == nullptr ? 0 : _udp->rxRemote.port;
+}
+
+LwipTransportBackend::TcpHandle *LwipTransportBackend::asTcpHandle(void *handle) const {
+  if (handle == _client)
+    return _client;
+  if (handle == _secure)
+    return _secure;
+  if (handle == _accepted)
+    return _accepted;
+
+  return nullptr;
+}
+
+bool LwipTransportBackend::transportCarrierUp() const {
+  return _carrierProvider == nullptr ||
+         _carrierProvider(_carrierProviderContext);
+}
+
+void LwipTransportBackend::closeTcpHandle(TcpHandle *handle) {
+  if (handle == nullptr)
+    return;
+
+  if (handle->pcb != nullptr) {
+    tcp_pcb *pcb = handle->pcb;
+    detachTcpCallbacks(pcb);
+    if (tcp_close(pcb) != ERR_OK)
+      tcp_abort(pcb);
+  }
+  handle->pcb = nullptr;
+  handle->acquired = false;
+  handle->connected = false;
+  handle->connecting = false;
+  handle->dnsPending = false;
+  handle->state = EthernetSocketState::Closed;
+  handle->dnsPort = 0;
+  resetTcpReceiveBuffer(handle);
+  resetTcpDiagnostics(handle);
+}
+
+LwipTransportBackend::TcpDiagnostics
+LwipTransportBackend::diagnosticsFor(const TcpHandle *handle) const {
+  TcpDiagnostics diagnostics;
+  if (handle == nullptr)
+    return diagnostics;
+
+  diagnostics.receiveCallbacks = handle->receiveCallbacks;
+  diagnostics.totalReceived = handle->totalReceived;
+  diagnostics.totalDelivered = handle->totalDelivered;
+  diagnostics.droppedBytes = handle->droppedBytes;
+  diagnostics.lastReceiveLength = handle->lastReceiveLength;
+  diagnostics.bufferedBytes =
+      handle->rxLength > handle->rxIndex ? handle->rxLength - handle->rxIndex
+                                         : 0;
+  diagnostics.writeCalls = handle->writeCalls;
+  diagnostics.totalWriteRequested = handle->totalWriteRequested;
+  diagnostics.totalWriteAccepted = handle->totalWriteAccepted;
+  diagnostics.writeRejectedBytes = handle->writeRejectedBytes;
+  diagnostics.lastWriteRequested = handle->lastWriteRequested;
+  diagnostics.lastWriteAccepted = handle->lastWriteAccepted;
+  diagnostics.lastSendBuffer = handle->lastSendBuffer;
+  diagnostics.lastTcpWriteError = handle->lastTcpWriteError;
+  diagnostics.lastTcpOutputError = handle->lastTcpOutputError;
+  return diagnostics;
+}
+
+size_t LwipTransportBackend::writeServerToAccepted(const uint8_t *buffer,
+                                                size_t size) {
+  return write(_accepted, buffer, size);
+}

@@ -6,3 +6,6 @@
 	path = libraries/Adafruit_ZeroDMA
 	url = https://github.com/crabel99/Adafruit_ZeroDMA.git
 	branch = same5x-support
+[submodule "libraries/Crypto/src/utility/third_party/mbedtls"]
+	path = libraries/Crypto/src/utility/third_party/mbedtls
+	url = https://github.com/crabel99/mbedtls.git
