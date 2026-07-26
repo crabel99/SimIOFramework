@@ -22,6 +22,100 @@
 #include "PendSV.h"
 #include "variant.h"
 
+#if defined(SERCOM_WIRE_TEST_POINTS)
+volatile SercomWireTestPoint gSercomWireTestPoints[64] = {};
+volatile uint32_t gSercomWireTestPointWrite = 0u;
+volatile bool gSercomWireTestPointCaptureActive = false;
+volatile bool gSercomWireTestPointFrozen = false;
+
+void recordSercomWireTestPoint(SercomWireTestEvent event, int result,
+                               uint8_t sercomIndex, uint8_t role, uint8_t dma,
+                               uint32_t status, uint32_t intflag,
+                               uint32_t intenset, uint32_t address,
+                               uint32_t ctrlb, uint16_t txnLength,
+                               uint16_t txnIndex) {
+  const bool triggerMasterRead =
+      event == SercomWireTestEvent::SercomMasterAddress && sercomIndex == 2u &&
+      role == 1u && dma == 1u && txnLength == 1u;
+  if (triggerMasterRead) {
+    gSercomWireTestPointWrite = 0u;
+    gSercomWireTestPointCaptureActive = true;
+    gSercomWireTestPointFrozen = false;
+  } else if (gSercomWireTestPointFrozen) {
+    return;
+  }
+
+  if (gSercomWireTestPointWrite != 0u) {
+    const volatile SercomWireTestPoint &previous =
+        gSercomWireTestPoints[(gSercomWireTestPointWrite - 1u) % 64u];
+    if (previous.event == static_cast<uint8_t>(event) &&
+        previous.result == static_cast<int16_t>(result) &&
+        previous.sercomIndex == sercomIndex && previous.role == role &&
+        previous.dma == dma && previous.status == status &&
+        previous.intflag == intflag && previous.intenset == intenset &&
+        previous.address == address && previous.ctrlb == ctrlb &&
+        previous.txnLength == txnLength && previous.txnIndex == txnIndex)
+      return;
+  }
+  const uint32_t sequence = gSercomWireTestPointWrite++;
+  volatile SercomWireTestPoint &point = gSercomWireTestPoints[sequence % 64u];
+  point.sequence = sequence;
+  point.timestampUs = micros();
+  point.status = status;
+  point.intflag = intflag;
+  point.intenset = intenset;
+  point.address = address;
+  point.ctrlb = ctrlb;
+  point.txnLength = txnLength;
+  point.txnIndex = txnIndex;
+  point.result = static_cast<int16_t>(result);
+  point.event = static_cast<uint8_t>(event);
+  point.sercomIndex = sercomIndex;
+  point.role = role;
+  point.dma = dma;
+
+  if (gSercomWireTestPointCaptureActive &&
+      (event == SercomWireTestEvent::StopMasterComplete ||
+       event == SercomWireTestEvent::DmaError)) {
+    gSercomWireTestPointCaptureActive = false;
+    gSercomWireTestPointFrozen = true;
+  }
+}
+
+void SERCOM::recordTestPointWIRE(SercomWireTestEvent event, int result) {
+  const bool master = isMasterWIRE();
+  const bool slave = !master && isSlaveWIRE();
+#if defined(__SAME53__) || defined(__SAME54__)
+  const uint32_t status =
+      master ? sercom->I2CM.SERCOM_STATUS : sercom->I2CS.SERCOM_STATUS;
+  const uint32_t intflag =
+      master ? sercom->I2CM.SERCOM_INTFLAG : sercom->I2CS.SERCOM_INTFLAG;
+  const uint32_t intenset =
+      master ? sercom->I2CM.SERCOM_INTENSET : sercom->I2CS.SERCOM_INTENSET;
+  const uint32_t address =
+      master ? sercom->I2CM.SERCOM_ADDR : sercom->I2CS.SERCOM_ADDR;
+  const uint32_t ctrlb =
+      master ? sercom->I2CM.SERCOM_CTRLB : sercom->I2CS.SERCOM_CTRLB;
+#else
+  const uint32_t status =
+      master ? sercom->I2CM.STATUS.reg : sercom->I2CS.STATUS.reg;
+  const uint32_t intflag =
+      master ? sercom->I2CM.INTFLAG.reg : sercom->I2CS.INTFLAG.reg;
+  const uint32_t intenset =
+      master ? sercom->I2CM.INTENSET.reg : sercom->I2CS.INTENSET.reg;
+  const uint32_t address =
+      master ? sercom->I2CM.ADDR.reg : sercom->I2CS.ADDR.reg;
+  const uint32_t ctrlb =
+      master ? sercom->I2CM.CTRLB.reg : sercom->I2CS.CTRLB.reg;
+#endif
+  recordSercomWireTestPoint(
+      event, result, static_cast<uint8_t>(getSercomIndex()),
+      master ? 1u : (slave ? 2u : 0u), isDmaWIRE() ? 1u : 0u, status, intflag,
+      intenset, address, ctrlb, static_cast<uint16_t>(_wire.txnLength),
+      static_cast<uint16_t>(_wire.txnIndex));
+}
+#endif
+
 #ifdef USE_ZERODMA
 #include <Adafruit_ZeroDMA.h>
 #endif // USE_ZERODMA
@@ -1082,6 +1176,9 @@ void SERCOM::setBaudrateWIRE(uint32_t baudrate)
 
 SercomTxn* SERCOM::startTransmissionWIRE( void )
 {
+#if defined(SERCOM_WIRE_TEST_POINTS)
+  recordTestPointWIRE(SercomWireTestEvent::SercomStartEntry);
+#endif
   // Writing ADDR.ADDR drives different behavior based on BUSSTATE:
   // UNKNOWN: MB and BUSERR assert and the transfer aborts.
   // BUSY: The master waits until the bus is IDLE.
@@ -1150,6 +1247,9 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
 #endif // __SAME53__ / __SAME54__
     clearAmatch();
 #endif // USE_ZERODMA
+#if defined(SERCOM_WIRE_TEST_POINTS)
+    recordTestPointWIRE(SercomWireTestEvent::SercomSlaveStart);
+#endif
     return txn;
   }
 
@@ -1259,6 +1359,9 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
   sercom->I2CM.INTENSET.reg = SERCOM_I2CM_INTENSET_ERROR | SERCOM_I2CM_INTENSET_SB | SERCOM_I2CM_INTENSET_MB;
   sercom->I2CM.ADDR.reg = addrReg; // ADDR is write synchronized so just wait for the MB/SB to know when synced
 #endif // __SAME53__ / __SAME54__
+#if defined(SERCOM_WIRE_TEST_POINTS)
+  recordTestPointWIRE(SercomWireTestEvent::SercomMasterAddress);
+#endif
   return txn;
 }
 
@@ -1375,6 +1478,9 @@ SercomTxn* SERCOM::stopTransmissionWIRE( void )
 SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
 {
   constexpr uint32_t kWireStopSettleTimeoutUs = 100u;
+#if defined(SERCOM_WIRE_TEST_POINTS)
+  recordTestPointWIRE(SercomWireTestEvent::StopEntry, static_cast<int>(error));
+#endif
   // Policy: only auto-retry recoverable bus-state errors here. All other
   // errors are surfaced to the transaction callback for protocol handling.
   // Retry/backoff policy is intentionally deferred; a future change may add
@@ -1438,6 +1544,10 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
       retireSlaveTransactionWIRE(false);
 
     startNextQueuedWIRE();
+#if defined(SERCOM_WIRE_TEST_POINTS)
+    recordTestPointWIRE(SercomWireTestEvent::StopSlaveComplete,
+                        static_cast<int>(completionError));
+#endif
     return _wire.currentTxn;
   }
 
@@ -1496,6 +1606,11 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
 
     if (!busIsIdle()) {
       completionError = SercomWireError::BUS_RELEASE_TIMEOUT;
+#if defined(SERCOM_WIRE_TEST_POINTS)
+      // Capture the still-live fault registers before SWRST clears them.
+      recordTestPointWIRE(SercomWireTestEvent::StopBusReleaseTimeout,
+                          static_cast<int>(completionError));
+#endif
       // The device datasheet identifies CTRLA.SWRST as recovery for an I2C
       // protocol hang. Preserve the cached Wire configuration and transaction
       // queue, reset only the peripheral, then restore a known master state.
@@ -1544,6 +1659,10 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
       setSlaveWIRE();
   }
 
+#if defined(SERCOM_WIRE_TEST_POINTS)
+  recordTestPointWIRE(SercomWireTestEvent::StopMasterComplete,
+                      static_cast<int>(completionError));
+#endif
   return txn;
 }
 

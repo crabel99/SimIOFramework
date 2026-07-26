@@ -22,6 +22,7 @@
 #include <sam.h>
 #include "SERCOM_PinMux.h"
 #include "SERCOM_Txn.h"
+#include "SERCOM_WireTestPoints.h"
 #include "RingBuffer.h"
 #include <array>
 
@@ -335,6 +336,9 @@ class SERCOM
 		inline size_t getTxnIndexWIRE(void) const { return _wire.txnIndex; }
 		inline size_t getTxnLengthWIRE(void) const { return _wire.txnLength; }
 		inline bool isActiveWIRE(void) const { return _wire.active; }
+#if defined(SERCOM_WIRE_TEST_POINTS)
+		void recordTestPointWIRE(SercomWireTestEvent event, int result = 0);
+#endif
 
 		inline bool isDBGSTOP( void ) const;
 		inline void setDBGSTOP( bool stop );

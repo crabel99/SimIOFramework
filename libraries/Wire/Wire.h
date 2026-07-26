@@ -168,6 +168,9 @@ extern TwoWire Wire5;
 
 inline void TwoWire::onService(void)
 {
+#if defined(SERCOM_WIRE_TEST_POINTS)
+  sercom->recordTestPointWIRE(SercomWireTestEvent::WireServiceEntry);
+#endif
   uint8_t flags = (uint8_t)sercom->getINTFLAG();
   uint16_t status = (uint16_t)sercom->getSTATUS();
   bool isMaster = sercom->isMasterWIRE();
@@ -294,6 +297,9 @@ inline void TwoWire::onService(void)
     // before the follow-up setup so a combined write/read transaction publishes
     // its request bytes before onRequest prepares the response.
     if (amatch) {
+#if defined(SERCOM_WIRE_TEST_POINTS)
+      sercom->recordTestPointWIRE(SercomWireTestEvent::WireAmatch);
+#endif
       if (activeTxn && (activeTxn->config & I2C_CFG_READ) == 0)
         sercom->deferReceiveCompleteWIRE();
       if (isMasterRead)
@@ -337,6 +343,10 @@ inline void TwoWire::onService(void)
       sercom->deferReceiveCompleteWIRE();
     else if (prec)
       sercom->clearINTFLAG();
+#if defined(SERCOM_WIRE_TEST_POINTS)
+    if (prec)
+      sercom->recordTestPointWIRE(SercomWireTestEvent::WirePrec);
+#endif
   }
 }
 
