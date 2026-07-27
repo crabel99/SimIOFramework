@@ -250,7 +250,7 @@ inline void TwoWire::onService(void)
 
     if (isMaster && !arbitrationLost)
       sercom->prepareCommandBitsWIRE(WIRE_MASTER_ACT_STOP);
-    if (isMaster && wireError)
+    if (wireError)
       sercom->clearINTFLAG();
     sercom->deferStopWIRE(error);
     return;
