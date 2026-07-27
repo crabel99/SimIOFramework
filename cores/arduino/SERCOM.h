@@ -336,6 +336,9 @@ class SERCOM
 		inline size_t getTxnIndexWIRE(void) const { return _wire.txnIndex; }
 		inline size_t getTxnLengthWIRE(void) const { return _wire.txnLength; }
 		inline bool isActiveWIRE(void) const { return _wire.active; }
+		inline const SercomWireCompletionReport& lastCompletionReportWIRE(void) const {
+			return _wire.lastCompletionReport;
+		}
 #if defined(SERCOM_WIRE_TEST_POINTS)
 		void recordTestPointWIRE(SercomWireTestEvent event, int result = 0);
 #endif
@@ -505,6 +508,7 @@ class SERCOM
 			size_t txnIndex = 0;
 			size_t txnLength = 0;
 			size_t dmaBlockLength = 0;
+			SercomWireCompletionReport lastCompletionReport = {};
 		} _wire;
 
 		struct SpiConfig {
