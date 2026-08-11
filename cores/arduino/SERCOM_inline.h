@@ -169,6 +169,11 @@ inline bool SERCOM::readDataWIRE( void )
 			                   _wire.dmaBlockLength);
 #endif // __SAME53__ / __SAME54__
 		}
+#if defined(SERCOM_WIRE_TEST_POINTS)
+		recordTestPointWIRE(SercomWireTestEvent::DmaRxArm,
+		                    value == DmaStatus::Ok ? 1 :
+		                    -static_cast<int>(value));
+#endif
 		return value == DmaStatus::Ok;
 	}
 #endif // USE_ZERODMA

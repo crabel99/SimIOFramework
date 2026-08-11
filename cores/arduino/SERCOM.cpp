@@ -28,6 +28,11 @@ volatile SercomWireTestPoint gSercomWireTestPoints[64] = {};
 volatile uint32_t gSercomWireTestPointWrite = 0u;
 volatile bool gSercomWireTestPointCaptureActive = false;
 volatile bool gSercomWireTestPointFrozen = false;
+volatile bool gSercomWireInjectPrecWithNextAmatch = false;
+volatile uint32_t gSercomWireInjectedPrecAmatchCount = 0u;
+volatile uint32_t gSercomWireArbitrationLostCount = 0u;
+volatile uint32_t gSercomWireArbitrationRetryCount = 0u;
+volatile uint32_t gSercomWireArbitrationContinuedOwnerCount = 0u;
 
 void recordSercomWireTestPoint(SercomWireTestEvent event, int result,
                                uint8_t sercomIndex, uint8_t role, uint8_t dma,
@@ -1037,6 +1042,10 @@ void SERCOM::deferRequestWIRE(void) {
 
 void SERCOM::deferReceiveCompleteWIRE(void) {
 #ifdef USE_ZERODMA
+#if defined(SERCOM_WIRE_TEST_POINTS)
+  recordTestPointWIRE(SercomWireTestEvent::DeferReceiveComplete,
+                      _dmaRxActive ? 1 : 0);
+#endif
   // BTCNT for the active channel lives in the DMAC's internal descriptor.
   // Suspend first so hardware commits that counter to WRBADDR; the suspend
   // callback snapshots it, aborts the channel, and defers normal retirement.
@@ -1075,6 +1084,10 @@ void SERCOM::dmaRxSuspendCallbackWIRE(Adafruit_ZeroDMA *dma) {
       transferred = inst->_wire.dmaBlockLength - remaining;
   }
   inst->_wire.txnIndex += transferred;
+#if defined(SERCOM_WIRE_TEST_POINTS)
+  inst->recordTestPointWIRE(SercomWireTestEvent::DmaRxSuspend,
+                            static_cast<int>(transferred));
+#endif
   inst->dmaAbortRx();
   inst->deferStopWIRE(SercomWireError::SUCCESS);
 }
@@ -1532,6 +1545,9 @@ SercomTxn *SERCOM::serviceBusErrorRecoveryWIRE(void) {
           _wire.busErrorRecoveryDeadlineActive)) {
     _wire.busErrorRecoveryPending = false;
     _wire.busErrorRecoveryDeadlineActive = false;
+#if defined(SERCOM_WIRE_TEST_POINTS)
+    recordTestPointWIRE(SercomWireTestEvent::WireBusErrorTerminal);
+#endif
     return stopTransmissionWIRE(SercomWireError::BUS_ERROR);
   }
 
@@ -1548,6 +1564,9 @@ SercomTxn *SERCOM::serviceBusErrorRecoveryWIRE(void) {
        _wire.busErrorRecoveryCommandReady, false, true, true});
   if (action == simio::wire::BusErrorAction::RestartQueueHead) {
     _wire.busErrorRecoveryPending = false;
+#if defined(SERCOM_WIRE_TEST_POINTS)
+    recordTestPointWIRE(SercomWireTestEvent::WireBusErrorRetryQueued);
+#endif
     return startTransmissionWIRE();
   }
 
@@ -1570,10 +1589,16 @@ SercomTxn *SERCOM::serviceBusErrorRecoveryWIRE(void) {
       kBusErrorRecoveryTimeoutUs;
   if (simio::wire::decideBusErrorWaitAction(busState, timedOut) ==
       simio::wire::BusErrorAction::WaitForBusState) {
+#if defined(SERCOM_WIRE_TEST_POINTS)
+    recordTestPointWIRE(SercomWireTestEvent::WireBusErrorRecoveryWait);
+#endif
     setPending((uint8_t)getSercomIndex());
     return txn;
   }
 
+#if defined(SERCOM_WIRE_TEST_POINTS)
+  recordTestPointWIRE(SercomWireTestEvent::WireBusErrorPeripheralReset);
+#endif
   resetSERCOM();
   setMasterWIRE();
   _wire.busErrorRecoveryPending = false;

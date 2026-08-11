@@ -26,6 +26,17 @@ enum class SercomWireTestEvent : uint8_t {
   StopSlaveComplete,
   StopBusReleaseTimeout,
   StopMasterComplete,
+  WireBusError,
+  DmaRxSuspend,
+  DmaRxArm,
+  DeferReceiveComplete,
+  WireArbitrationLost,
+  WireArbitrationContinuedAsOwner,
+  WireArbitrationRestart,
+  WireBusErrorRetryQueued,
+  WireBusErrorRecoveryWait,
+  WireBusErrorPeripheralReset,
+  WireBusErrorTerminal,
 };
 
 struct SercomWireTestPoint {
@@ -49,6 +60,13 @@ extern volatile SercomWireTestPoint gSercomWireTestPoints[64];
 extern volatile uint32_t gSercomWireTestPointWrite;
 extern volatile bool gSercomWireTestPointCaptureActive;
 extern volatile bool gSercomWireTestPointFrozen;
+// Bench-only event-shaping hook. The next real slave AMATCH is serviced as if
+// the preceding STOP's PREC flag were coasserted with it.
+extern volatile bool gSercomWireInjectPrecWithNextAmatch;
+extern volatile uint32_t gSercomWireInjectedPrecAmatchCount;
+extern volatile uint32_t gSercomWireArbitrationLostCount;
+extern volatile uint32_t gSercomWireArbitrationRetryCount;
+extern volatile uint32_t gSercomWireArbitrationContinuedOwnerCount;
 
 void recordSercomWireTestPoint(SercomWireTestEvent event, int result = 0,
                                uint8_t sercomIndex = 0xFFu,
