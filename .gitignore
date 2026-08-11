@@ -8,3 +8,7 @@ bootloaders/*/build/
 .ci_home
 *.log
 .vscode/
+
+# Personal agent skills are provided by the user's global installation.
+.agents/
+skills-lock.json

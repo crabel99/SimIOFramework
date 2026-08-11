@@ -70,3 +70,17 @@ One binary per board. These enable USB drag-and-drop and bossac uploads.
 - **Upload via bossac**: Default upload uses the SAM-BA bootloader protocol. Board enters bootloader mode via double-tap reset or 1200-baud touch.
 - **USB stack choice**: Boards can select between Arduino's native USB stack and TinyUSB via the `build.usbstack` menu option in `boards.txt`.
 - **Submodules**: `Adafruit_TinyUSB_Arduino` and `Adafruit_ZeroDMA` are git submodules — remember to `git submodule update --init` after cloning.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as local Markdown under `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the five default Matt Pocock skill labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Domain documentation uses a single-context layout. See `docs/agents/domain.md`.
