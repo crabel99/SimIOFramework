@@ -61,6 +61,11 @@ public:
   inline const SercomWireCompletionReport &lastCompletionReport(void) const {
     return sercom->lastCompletionReportWIRE();
   }
+#if defined(SERCOM_WIRE_TEST_POINTS)
+  inline void captureDiagnosticSnapshot(uint32_t reason) {
+    sercom->captureDiagnosticSnapshotWIRE(reason);
+  }
+#endif
 
   // If onComplete is nullptr, this blocks for legacy sync behavior.
   // If onComplete is non-null, this enqueues and returns immediately (async).
@@ -547,6 +552,11 @@ inline void TwoWire::onService(void)
       }
       return;
     }
+
+#if defined(SERCOM_WIRE_TEST_POINTS)
+    if (slaveDrdy && !amatch && sercom->isDmaWIRE())
+      sercom->captureDmaDrdySnapshotWIRE();
+#endif
 
   }
 }

@@ -168,6 +168,11 @@ inline bool SERCOM::readDataWIRE( void )
 			                   &sercom->I2CM.DATA.reg,
 			                   _wire.dmaBlockLength);
 #endif // __SAME53__ / __SAME54__
+			if (value == DmaStatus::Ok) {
+#if defined(SERCOM_WIRE_TEST_POINTS)
+				++_wireRxDmaGeneration;
+#endif
+			}
 		}
 #if defined(SERCOM_WIRE_TEST_POINTS)
 		recordTestPointWIRE(SercomWireTestEvent::DmaRxArm,

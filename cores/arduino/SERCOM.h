@@ -362,6 +362,8 @@ class SERCOM
 		}
 #if defined(SERCOM_WIRE_TEST_POINTS)
 		void recordTestPointWIRE(SercomWireTestEvent event, int result = 0);
+		void captureDmaDrdySnapshotWIRE(void);
+		void captureDiagnosticSnapshotWIRE(uint32_t reason);
 #endif
 
 		inline bool isDBGSTOP( void ) const;
@@ -588,6 +590,12 @@ class SERCOM
 		bool _dmaTxActive = false;
 		bool _dmaRxActive = false;
 		bool _wireRxSuspendPending = false;
+#if defined(SERCOM_WIRE_TEST_POINTS)
+		uint32_t _wireRxDmaGeneration = 0;
+		uint32_t _wireRxSuspendRequestGeneration = 0;
+		uint32_t _wireRxSuspendCallbackGeneration = 0;
+		uint32_t _wireRxAbortGeneration = 0;
+#endif
 		DmaStatus _dmaLastError = DmaStatus::Ok;
 #endif // USE_ZERODMA
 };
