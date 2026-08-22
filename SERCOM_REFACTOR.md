@@ -1,6 +1,6 @@
-# SERCOM / WireDMA Refactor Plan (Async + DMA)
+# SERCOM async/DMA refactor history
 
-This document tracks the planned refactor to move WireDMA functionality into `SERCOM.h` and `Wire.h`, and to make I2C/SPI/UART fully async with DMA where possible. Keep commits small and scoped.
+This document records the plan used to move the former standalone WireDMA implementation into `SERCOM.h` and `Wire.h`. The standalone WireDMA and SercomRouter repositories were retired after that migration.
 
 ## Goals
 
@@ -19,13 +19,11 @@ This document tracks the planned refactor to move WireDMA functionality into `SE
 - Gate ZeroDMA integration behind `USE_ZERODMA` (mirroring `USE_TINYUSB`) so async works without DMA.
 - Avoid large commits; ship in stages with focused diffs.
 
-## Existing Resources
+## Original inputs
 
-- Pin/pad capability tables and datasheets: `DMA/Wire/docs/` (csv, pdf, txt).
-- Python generator for `Wire.inc`: `DMA/Wire/*` (script that generates wire tables).
-- Current async implementation: `DMA/WireDMA` (logic to migrate into core).
-- SimIO SercomRouter/SercomBus concepts to fold into core SERCOM ownership tracking.
-- SercomRouter linker-wrap ISR dispatch: `DMA/SercomRouter` + `DMA/docs/LINKER_WRAPS.md`.
+- Pin/pad capability tables and their generator supplied the data now emitted in `cores/arduino/SercomPinMux.inc`.
+- The former standalone WireDMA implementation supplied the initial transaction and DMA behavior.
+- The former SercomRouter and SercomBus implementations supplied the initial SERCOM ownership model.
 
 ## Pin Mux Generalization
 

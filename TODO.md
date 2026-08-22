@@ -46,7 +46,3 @@ background live in [SERCOM_REFACTOR.md](SERCOM_REFACTOR.md).
 - [ ] Keep `checkPending()` public or make PendSV-only?
 - [ ] DMA abstraction in core vs direct ZeroDMA linkage?
 - [ ] Figure out how to implement hardware CRC for DMA transactions
-
-## Archived
-
-- WireDMA-specific items are archived in [DMA/WireDMA/TODO.md](../DMA/WireDMA/TODO.md).
