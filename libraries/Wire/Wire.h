@@ -61,11 +61,6 @@ public:
   inline const SercomWireCompletionReport &lastCompletionReport(void) const {
     return sercom->lastCompletionReportWIRE();
   }
-#if defined(SERCOM_WIRE_TEST_POINTS)
-  inline void captureDiagnosticSnapshot(uint32_t reason) {
-    sercom->captureDiagnosticSnapshotWIRE(reason);
-  }
-#endif
 
   // If onComplete is nullptr, this blocks for legacy sync behavior.
   // If onComplete is non-null, this enqueues and returns immediately (async).
@@ -179,31 +174,9 @@ extern TwoWire Wire5;
 
 inline void TwoWire::onService(void)
 {
-#if defined(SERCOM_WIRE_TEST_POINTS)
-  sercom->recordTestPointWIRE(SercomWireTestEvent::WireServiceEntry);
-#endif
   uint8_t flags = (uint8_t)sercom->getINTFLAG();
   uint16_t status = (uint16_t)sercom->getSTATUS();
   bool isMaster = sercom->isMasterWIRE();
-
-#if defined(SERCOM_WIRE_TEST_POINTS)
-  if (!isMaster && gSercomWireInjectPrecWithNextAmatch) {
-#if defined(__SAME53__) || defined(__SAME54__)
-    if (flags & SERCOM_I2CS_INTFLAG_AMATCH_Msk) {
-      flags |= SERCOM_I2CS_INTFLAG_PREC_Msk;
-      gSercomWireInjectPrecWithNextAmatch = false;
-      gSercomWireInjectedPrecAmatchCount++;
-    }
-#else
-    if (flags & SERCOM_I2CS_INTFLAG_AMATCH) {
-      flags |= SERCOM_I2CS_INTFLAG_PREC;
-      gSercomWireInjectPrecWithNextAmatch = false;
-      gSercomWireInjectedPrecAmatchCount++;
-    }
-#endif
-  }
-#endif
-
   if (!isMaster && !sercom->isSlaveWIRE()) {
     sercom->clearINTFLAG();
     return;
@@ -245,10 +218,6 @@ inline void TwoWire::onService(void)
       (status & SERCOM_I2CM_STATUS_BUSSTATE_Msk) >>
       SERCOM_I2CM_STATUS_BUSSTATE_Pos;
   const bool slaveBusError = !isMaster && wireError && busError;
-#if defined(SERCOM_WIRE_TEST_POINTS)
-  if (wireError && busError)
-    sercom->recordTestPointWIRE(SercomWireTestEvent::WireBusError);
-#endif
   if (slaveBusError) {
 #if defined(__SAME53__) || defined(__SAME54__)
     sercom->clearStatusWIRE(SERCOM_I2CS_STATUS_BUSERR_Msk);
@@ -276,9 +245,6 @@ inline void TwoWire::onService(void)
       sercom->deferReceiveCompleteWIRE();
     else
       sercom->clearINTFLAG();
-#if defined(SERCOM_WIRE_TEST_POINTS)
-    sercom->recordTestPointWIRE(SercomWireTestEvent::WirePrec);
-#endif
     return;
   }
 
@@ -351,10 +317,6 @@ inline void TwoWire::onService(void)
     }
 
     if (isMaster && arbitrationLost && !busError) {
-#if defined(SERCOM_WIRE_TEST_POINTS)
-      ++gSercomWireArbitrationLostCount;
-      sercom->recordTestPointWIRE(SercomWireTestEvent::WireArbitrationLost);
-#endif
       if (busState == WIRE_OWNER_STATE && arbitrationOnly) {
         // ARBLOST normally transitions OWNER to BUSY. If OWNER remains set,
         // rewriting ADDR would request a repeated START and restart a
@@ -367,11 +329,6 @@ inline void TwoWire::onService(void)
         sercom->clearStatusWIRE(SERCOM_I2CM_STATUS_ARBLOST);
         sercom->clearINTFLAG(SERCOM_I2CM_INTFLAG_ERROR);
 #endif // __SAME53__ / __SAME54__
-#if defined(SERCOM_WIRE_TEST_POINTS)
-        ++gSercomWireArbitrationContinuedOwnerCount;
-        sercom->recordTestPointWIRE(
-            SercomWireTestEvent::WireArbitrationContinuedAsOwner);
-#endif
         continueOwnedArbitration = true;
       } else {
 #ifdef USE_ZERODMA
@@ -384,22 +341,11 @@ inline void TwoWire::onService(void)
         // owns the bus, SERCOM remains in BUSY and waits for IDLE before START.
         sercom->clearINTFLAG();
         awaitingAddressAck = true;
-#if defined(SERCOM_WIRE_TEST_POINTS)
-        sercom->recordTestPointWIRE(
-            SercomWireTestEvent::WireArbitrationRestart);
-#endif
         sercom->startTransmissionWIRE();
-#if defined(SERCOM_WIRE_TEST_POINTS)
-        ++gSercomWireArbitrationRetryCount;
-#endif
         return;
       }
     }
 
-#if defined(SERCOM_WIRE_TEST_POINTS)
-    if (isMaster && busError)
-      sercom->recordTestPointWIRE(SercomWireTestEvent::WireBusErrorTerminal);
-#endif
 
     if (!continueOwnedArbitration) {
       SercomWireError error = SercomWireError::UNKNOWN_ERROR;
@@ -471,9 +417,6 @@ inline void TwoWire::onService(void)
     // before the follow-up setup so a combined write/read transaction publishes
     // its request bytes before onRequest prepares the response.
     if (amatch) {
-#if defined(SERCOM_WIRE_TEST_POINTS)
-      sercom->recordTestPointWIRE(SercomWireTestEvent::WireAmatch);
-#endif
       // PREC can arrive with the next AMATCH when the preceding transaction's
       // STOP is recognized just before a new address. It belongs to the
       // completed transaction and must not retire the transaction started by
@@ -544,11 +487,6 @@ inline void TwoWire::onService(void)
       }
       return;
     }
-
-#if defined(SERCOM_WIRE_TEST_POINTS)
-    if (slaveDrdy && !amatch && sercom->isDmaWIRE())
-      sercom->captureDmaDrdySnapshotWIRE();
-#endif
 
   }
 }

@@ -22,7 +22,6 @@
 #include <sam.h>
 #include "SERCOM_PinMux.h"
 #include "SERCOM_Txn.h"
-#include "SERCOM_WireTestPoints.h"
 #include "RingBuffer.h"
 #include <array>
 
@@ -360,11 +359,6 @@ class SERCOM
 		inline const SercomWireCompletionReport& lastCompletionReportWIRE(void) const {
 			return _wire.lastCompletionReport;
 		}
-#if defined(SERCOM_WIRE_TEST_POINTS)
-		void recordTestPointWIRE(SercomWireTestEvent event, int result = 0);
-		void captureDmaDrdySnapshotWIRE(void);
-		void captureDiagnosticSnapshotWIRE(uint32_t reason);
-#endif
 
 		inline bool isDBGSTOP( void ) const;
 		inline void setDBGSTOP( bool stop );
@@ -590,12 +584,6 @@ class SERCOM
 		bool _dmaTxActive = false;
 		bool _dmaRxActive = false;
 		bool _wireRxSuspendPending = false;
-#if defined(SERCOM_WIRE_TEST_POINTS)
-		uint32_t _wireRxDmaGeneration = 0;
-		uint32_t _wireRxSuspendRequestGeneration = 0;
-		uint32_t _wireRxSuspendCallbackGeneration = 0;
-		uint32_t _wireRxAbortGeneration = 0;
-#endif
 		DmaStatus _dmaLastError = DmaStatus::Ok;
 #endif // USE_ZERODMA
 };

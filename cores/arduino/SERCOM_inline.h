@@ -168,17 +168,7 @@ inline bool SERCOM::readDataWIRE( void )
 			                   &sercom->I2CM.DATA.reg,
 			                   _wire.dmaBlockLength);
 #endif // __SAME53__ / __SAME54__
-			if (value == DmaStatus::Ok) {
-#if defined(SERCOM_WIRE_TEST_POINTS)
-				++_wireRxDmaGeneration;
-#endif
-			}
 		}
-#if defined(SERCOM_WIRE_TEST_POINTS)
-		recordTestPointWIRE(SercomWireTestEvent::DmaRxArm,
-		                    value == DmaStatus::Ok ? 1 :
-		                    -static_cast<int>(value));
-#endif
 		return value == DmaStatus::Ok;
 	}
 #endif // USE_ZERODMA
@@ -394,9 +384,6 @@ inline void SERCOM::dmaTxCallbackWIRE(Adafruit_ZeroDMA* dma)
 {
 	SERCOM* inst = findDmaOwner(dma, true);
 	if (!inst) return;
-#if defined(SERCOM_WIRE_TEST_POINTS)
-	inst->recordTestPointWIRE(SercomWireTestEvent::DmaTxComplete);
-#endif
 	if (!inst->_wire.active || inst->_wire.currentTxn == nullptr ||
 			!inst->_wire.useDma) return;
 
@@ -422,9 +409,6 @@ inline void SERCOM::dmaRxCallbackWIRE(Adafruit_ZeroDMA* dma)
 {
 	SERCOM* inst = findDmaOwner(dma, false);
 	if (!inst) return;
-#if defined(SERCOM_WIRE_TEST_POINTS)
-	inst->recordTestPointWIRE(SercomWireTestEvent::DmaRxComplete);
-#endif
 	if (!inst->_wire.active || inst->_wire.currentTxn == nullptr ||
 			!inst->_wire.useDma) return;
 
@@ -454,10 +438,6 @@ inline void SERCOM::dmaErrorCallbackWIRE(Adafruit_ZeroDMA* dma)
 	if (!inst)
 		inst = findDmaOwner(dma, false);
 	if (!inst) return;
-#if defined(SERCOM_WIRE_TEST_POINTS)
-	inst->recordTestPointWIRE(SercomWireTestEvent::DmaError,
-	                         static_cast<int>(SercomWireError::DMA_ERROR));
-#endif
 	if (!inst->_wire.active || inst->_wire.currentTxn == nullptr ||
 			!inst->_wire.useDma) return;
 
