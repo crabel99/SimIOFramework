@@ -5,6 +5,7 @@
 
 #if defined(USE_TINYUSB)
 extern "C" void TinyUSB_Device_Task(void);
+extern "C" void TinyUSB_Device_EventObserved(uint8_t, uint32_t, bool) __attribute__((weak));
 #endif
 
 namespace {
@@ -26,9 +27,8 @@ PendSV &PendSV::instance() {
 
 #if defined(USE_TINYUSB)
 extern "C" void tud_event_hook_cb(uint8_t rhport, uint32_t eventId, bool inIsr) {
-  (void)rhport;
-  (void)eventId;
-  (void)inIsr;
+  if (TinyUSB_Device_EventObserved)
+    TinyUSB_Device_EventObserved(rhport, eventId, inIsr);
   // TinyUSB owns the event queue. PendSV is only its deferred wake signal, so
   // multiple controller events before dispatch require only one service call.
   PendSV::instance().setPendingOnce(PendSVChannels::Usb);
