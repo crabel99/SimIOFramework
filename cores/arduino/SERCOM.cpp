@@ -672,7 +672,27 @@ void SERCOM::initSPIClock(SercomSpiClockMode clockMode, uint32_t baudrate)
 
 void SERCOM::resetSPI()
 {
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+#ifdef USE_ZERODMA
+  dmaAbortTx();
+  dmaAbortRx();
+#endif // USE_ZERODMA
+
+  _txnQueue.clear();
+  _spi.currentTxn = nullptr;
+  _spi.index = 0;
+  _spi.length = 0;
+  _spi.active = false;
+  _spi.useDma = false;
+  _spi.dmaNeedTx = false;
+  _spi.dmaNeedRx = false;
+  _spi.dmaTxDone = false;
+  _spi.dmaRxDone = false;
+  _spi.returnValue = SercomSpiError::SUCCESS;
+
   resetSERCOM();
+  __set_PRIMASK(primask);
 }
 
 void SERCOM::setDataOrderSPI(SercomDataOrder dataOrder)
