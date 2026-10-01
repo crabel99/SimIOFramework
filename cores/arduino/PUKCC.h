@@ -254,6 +254,11 @@ public:
   /** @brief Queue the PUKCL Fill service without blocking. */
   static bool fillCryptoRamAsync(uint16_t offset, uint16_t length,
                                  uint32_t fillValue, ServiceResult &result);
+  /** @brief Run the bounded ROM Fill service; reject overlapping async work.
+   * The caller must first complete the mandatory PUKCL SelfTest.
+   */
+  static bool fillCryptoRam(uint16_t offset, uint16_t length,
+                           uint32_t fillValue, ServiceResult &result);
   /**
    * @brief Queue a known PUKCL ROM service parameter block without blocking.
    *

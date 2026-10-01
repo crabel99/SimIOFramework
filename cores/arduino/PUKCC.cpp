@@ -507,6 +507,59 @@ bool pukcc::fillCryptoRamAsync(uint16_t offset, uint16_t length,
   return true;
 }
 
+bool pukcc::fillCryptoRam(uint16_t offset, uint16_t length, uint32_t fillValue,
+                          ServiceResult& result) {
+  result = {};
+  result.service = FillServiceId;
+
+  if ((offset & 0x3u) != 0u) {
+    result.status = StatusParameterBadAlignment;
+    return false;
+  }
+  if ((length & 0x3u) != 0u || length < 4u || length > CryptoRamUsableSize) {
+    result.status = StatusParameterWrongLength;
+    return false;
+  }
+  if (!validCryptoRamRange(offset, length)) {
+    result.status = StatusParameterNotInPukccRam;
+    return false;
+  }
+  const uint32_t primask = enterCritical();
+  if (asyncState.busy) {
+    exitCritical(primask);
+    result.status = StatusComputationNotStarted;
+    return false;
+  }
+
+  asyncState.busy = true;
+  exitCritical(primask);
+
+  enableClock();
+  if (!ready()) {
+    const uint32_t mask = enterCritical();
+    asyncState.busy = false;
+    exitCritical(mask);
+    result.status = StatusHardwareIssue;
+    return false;
+  }
+
+  PukclFillParam param = {};
+  param.header.service = FillServiceId;
+  param.header.status = StatusComputationNotStarted;
+  param.fill.rBase = cryptoRamNearPointer(offset);
+  param.fill.rLength = length;
+  param.fill.fillValue = fillValue;
+  fillFunction()(&param);
+
+  result.service = param.header.service;
+  result.status = param.header.status;
+  result.specific = param.header.specific;
+  const uint32_t mask = enterCritical();
+  asyncState.busy = false;
+  exitCritical(mask);
+  return result.status == StatusOk;
+}
+
 bool pukcc::serviceAsync(uint8_t serviceId, ServiceParamHeader &param,
                          ServiceResult &result) {
   result = {};
