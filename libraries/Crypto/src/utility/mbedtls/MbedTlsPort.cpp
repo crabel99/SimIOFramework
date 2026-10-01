@@ -41,29 +41,6 @@ constexpr uint16_t EcdhWorkspaceOffset =
     EcdhScalarOffset + MaxEccPukccLength + 4u;
 constexpr uint16_t EcdhWorkspaceLength = MaxEccPukccLength * 6u;
 constexpr uint16_t EcdhWorkspaceEnd = EcdhWorkspaceOffset + EcdhWorkspaceLength;
-constexpr uint16_t EcdsaModulusOffset = 0u;
-constexpr uint16_t EcdsaModulusStorageLength = MaxEccPukccLength + 4u;
-constexpr uint16_t EcdsaConstantOffset =
-    EcdsaModulusOffset + EcdsaModulusStorageLength;
-constexpr uint16_t EcdsaOrderOffset =
-    EcdsaConstantOffset + MaxEccPukccLength + 12u;
-constexpr uint16_t EcdsaSignatureOffset =
-    EcdsaOrderOffset + MaxEccPukccLength + 12u;
-constexpr uint16_t EcdsaHashOffset =
-    EcdsaSignatureOffset + MaxEccPukccLength * 2u + 8u;
-constexpr uint16_t EcdsaBasePointOffset =
-    EcdsaHashOffset + MaxEccPukccLength + 4u;
-constexpr uint16_t EcdsaPublicKeyOffset =
-    EcdsaBasePointOffset + MaxEccCoordinateStorageLength * 3u;
-constexpr uint16_t EcdsaCurveAOffset =
-    EcdsaPublicKeyOffset + MaxEccCoordinateStorageLength * 3u;
-constexpr uint16_t EcdsaCurveBOffset =
-    EcdsaCurveAOffset + MaxEccPukccLength + 4u;
-constexpr uint16_t EcdsaWorkspaceOffset =
-    EcdsaCurveBOffset + MaxEccPukccLength + 4u;
-constexpr uint16_t EcdsaWorkspaceLength = MaxEccPukccLength * 8u + 44u;
-constexpr uint16_t EcdsaWorkspaceEnd =
-    EcdsaWorkspaceOffset + EcdsaWorkspaceLength;
 constexpr uint16_t EcdsaSignModulusOffset = 0u;
 constexpr uint16_t EcdsaSignModulusStorageLength = MaxEccPukccLength + 4u;
 constexpr uint16_t EcdsaSignConstantOffset =
@@ -89,33 +66,6 @@ constexpr uint16_t RsaModulusOffset = 0u;
 constexpr uint16_t RsaExpModAlignment = 4u;
 constexpr uint16_t RsaExponentMaxLength = 8u;
 
-const uint8_t P256Prime[P256Length] = {
-    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x00u, 0x00u, 0x00u, 0x01u,
-    0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
-    0x00u, 0x00u, 0x00u, 0x00u, 0xFFu, 0xFFu, 0xFFu, 0xFFu,
-    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu};
-const uint8_t P256A[P256Length] = {
-    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x00u, 0x00u, 0x00u, 0x01u,
-    0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
-    0x00u, 0x00u, 0x00u, 0x00u, 0xFFu, 0xFFu, 0xFFu, 0xFFu,
-    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFCu};
-const uint8_t P256B[P256Length] = {
-    0x5Au, 0xC6u, 0x35u, 0xD8u, 0xAAu, 0x3Au, 0x93u, 0xE7u,
-    0xB3u, 0xEBu, 0xBDu, 0x55u, 0x76u, 0x98u, 0x86u, 0xBCu,
-    0x65u, 0x1Du, 0x06u, 0xB0u, 0xCCu, 0x53u, 0xB0u, 0xF6u,
-    0x3Bu, 0xCEu, 0x3Cu, 0x3Eu, 0x27u, 0xD2u, 0x60u, 0x4Bu};
-const uint8_t P256Order[P256Length] = {
-    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0x00u, 0x00u, 0x00u, 0x00u, 0xFFu, 0xFFu, 0xFFu,
-    0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xBCu, 0xE6u, 0xFAu, 0xADu, 0xA7u, 0x17u,
-    0x9Eu, 0x84u, 0xF3u, 0xB9u, 0xCAu, 0xC2u, 0xFCu, 0x63u, 0x25u, 0x51u};
-const uint8_t P256Gx[P256Length] = {
-    0x6Bu, 0x17u, 0xD1u, 0xF2u, 0xE1u, 0x2Cu, 0x42u, 0x47u, 0xF8u, 0xBCu, 0xE6u,
-    0xE5u, 0x63u, 0xA4u, 0x40u, 0xF2u, 0x77u, 0x03u, 0x7Du, 0x81u, 0x2Du, 0xEBu,
-    0x33u, 0xA0u, 0xF4u, 0xA1u, 0x39u, 0x45u, 0xD8u, 0x98u, 0xC2u, 0x96u};
-const uint8_t P256Gy[P256Length] = {
-    0x4Fu, 0xE3u, 0x42u, 0xE2u, 0xFEu, 0x1Au, 0x7Fu, 0x9Bu, 0x8Eu, 0xE7u, 0xEBu,
-    0x4Au, 0x7Cu, 0x0Fu, 0x9Eu, 0x16u, 0x2Bu, 0xCEu, 0x33u, 0x57u, 0x6Bu, 0x31u,
-    0x5Eu, 0xCEu, 0xCBu, 0xB6u, 0x40u, 0x68u, 0x37u, 0xBFu, 0x51u, 0xF5u};
 const uint8_t P384Prime[P384Length] = {
     0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu,
     0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 0xFFu,
@@ -220,9 +170,7 @@ const uint8_t P521Gy[P521CoordinateLength] = {
     0x66u, 0x50u};
 const uint8_t ProjectiveOne[1] = {0x01u};
 
-constexpr EccCurveParams P256Curve = {
-    P256Length, P256Length, 32u, P256Prime, P256A, P256B, P256Order, P256Gx,
-    P256Gy};
+using Crypto::PukccEcc::P256Curve;
 constexpr EccCurveParams P384Curve = {
     P384Length, P384Length, 48u, P384Prime, P384A, P384B, P384Order, P384Gx,
     P384Gy};
@@ -1294,10 +1242,7 @@ MbedTlsCryptoProvider::MbedTlsCryptoProvider()
       _ecdsaSignCallbackContext(nullptr), _ecdsaSignCoordinateLength(0),
       _ecdsaSignStep(EcdsaSignStep::Idle),
       _ecdsaSignBusy(false),
-      _ecdsaReductionSetup(), _ecdsaPublicKeyValidation(), _ecdsaVerify(),
-      _ecdsaResult(),
-      _ecdsaCallback(nullptr), _ecdsaCallbackContext(nullptr),
-      _ecdsaStep(EcdsaVerifyStep::Idle), _ecdsaBusy(false), _rsaOperation(),
+      _ecdsaVerifier(), _rsaOperation(),
       _rsaContext(), _rsaHash(nullptr), _rsaSignature(nullptr),
       _rsaEncoded(nullptr), _rsaOutputSignature(nullptr),
       _rsaCallback(nullptr), _rsaCallbackContext(nullptr),
@@ -1346,11 +1291,11 @@ void MbedTlsCryptoProvider::reset() {
   _ccmCallbackContext = nullptr;
   _ccmBusy = false;
 #ifdef CRYPTO_HARDWARE_AVAILABLE
-  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || _rsaBusy)
+  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaVerifier.busy() || _rsaBusy)
     Crypto::clearPukccCallback();
   clearEcdhWorkspace();
   clearEcdsaSignWorkspace();
-  clearEcdsaWorkspace();
+  _ecdsaVerifier.reset();
   clearRsaWorkspace();
   _ecdhOperation = {};
   _ecdhSharedSecret = nullptr;
@@ -1368,14 +1313,6 @@ void MbedTlsCryptoProvider::reset() {
   _ecdsaSignCoordinateLength = 0;
   _ecdsaSignStep = EcdsaSignStep::Idle;
   _ecdsaSignBusy = false;
-  _ecdsaReductionSetup = {};
-  _ecdsaPublicKeyValidation = {};
-  _ecdsaVerify = {};
-  _ecdsaResult = {};
-  _ecdsaCallback = nullptr;
-  _ecdsaCallbackContext = nullptr;
-  _ecdsaStep = EcdsaVerifyStep::Idle;
-  _ecdsaBusy = false;
   _rsaOperation = {};
   _rsaCallback = nullptr;
   _rsaCallbackContext = nullptr;
@@ -1921,7 +1858,7 @@ bool MbedTlsCryptoProvider::startEcdhSharedSecretAsync(
   const uint16_t pukccLength = curve.pukccLength;
   const uint16_t coordinateStorage = coordinateStorageLength(curve);
 
-  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || privateScalar == nullptr ||
+  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaVerifier.busy() || privateScalar == nullptr ||
       peerPublicKey == nullptr || sharedSecret == nullptr ||
       callback == nullptr || peerPublicKey[0] != 0x04u) {
     return false;
@@ -2027,7 +1964,7 @@ bool MbedTlsCryptoProvider::startEcdhPublicKeyAsync(
   const uint16_t pukccLength = curve.pukccLength;
   const uint16_t coordinateStorage = coordinateStorageLength(curve);
 
-  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || privateScalar == nullptr ||
+  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaVerifier.busy() || privateScalar == nullptr ||
       publicKey == nullptr || callback == nullptr)
     return false;
 
@@ -2227,7 +2164,7 @@ bool MbedTlsCryptoProvider::startEcdsaSignAsync(
   const uint16_t pukccLength = curve.pukccLength;
   const uint16_t coordinateStorage = coordinateStorageLength(curve);
 
-  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || privateKey == nullptr ||
+  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaVerifier.busy() || privateKey == nullptr ||
       nonceScalar == nullptr || hash == nullptr || signature == nullptr ||
       callback == nullptr) {
     return false;
@@ -2408,201 +2345,10 @@ void MbedTlsCryptoProvider::clearEcdsaSignWorkspace() {
 
 bool MbedTlsCryptoProvider::startEcdsaVerifyAsync(
     const EccCurveParams &curve, const uint8_t *publicKey, const uint8_t *hash,
-    const uint8_t *signature, Crypto::TlsSignatureCallback callback,
-    void *context) {
-  const uint16_t coordinateLength = curve.coordinateLength;
-  const uint16_t pukccLength = curve.pukccLength;
-  const uint16_t coordinateStorage = coordinateStorageLength(curve);
-
-  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || publicKey == nullptr ||
-      hash == nullptr || signature == nullptr || callback == nullptr ||
-      publicKey[0] != 0x04u) {
-    return false;
-  }
-
-  clearEcdsaWorkspace();
-  if (!Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaModulusOffset, pukccLength + 4u, curve.prime,
-          coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaConstantOffset, pukccLength + 12u, curve.prime, 0u) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaOrderOffset, pukccLength + 12u, curve.order,
-          coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaSignatureOffset, pukccLength + 4u, signature,
-          coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaSignatureOffset + pukccLength + 4u, pukccLength + 4u,
-          signature + coordinateLength, coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaHashOffset, pukccLength + 4u, hash, curve.hashLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaBasePointOffset, coordinateStorage * 3u, curve.prime, 0u) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaBasePointOffset, coordinateStorage, curve.gx,
-          coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaBasePointOffset + coordinateStorage, coordinateStorage,
-          curve.gy, coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaBasePointOffset + coordinateStorage * 2u, coordinateStorage,
-          ProjectiveOne, sizeof(ProjectiveOne)) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaPublicKeyOffset, coordinateStorage * 3u, curve.prime, 0u) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaPublicKeyOffset, coordinateStorage, publicKey + 1u,
-          coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaPublicKeyOffset + coordinateStorage, coordinateStorage,
-          publicKey + 1u + coordinateLength, coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaPublicKeyOffset + coordinateStorage * 2u, coordinateStorage,
-          ProjectiveOne, sizeof(ProjectiveOne)) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaCurveAOffset, pukccLength + 4u, curve.a,
-          coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaCurveBOffset, pukccLength + 4u, curve.b,
-          coordinateLength) ||
-      !Crypto::PukccEcc::copyBigEndianToCryptoRam(
-          EcdsaWorkspaceOffset, pukccLength * 8u + 44u, curve.prime,
-          0u)) {
-    clearEcdsaWorkspace();
-    return false;
-  }
-
-  _ecdsaReductionSetup = {};
-  _ecdsaReductionSetup.modulus =
-      pukcc::cryptoRamNearPointer(EcdsaModulusOffset);
-  _ecdsaReductionSetup.reductionConstant =
-      pukcc::cryptoRamNearPointer(EcdsaConstantOffset);
-  _ecdsaReductionSetup.modulusLength = pukccLength;
-  _ecdsaReductionSetup.scratchR =
-      pukcc::cryptoRamNearPointer(EcdsaWorkspaceOffset);
-  _ecdsaReductionSetup.scratchX = pukcc::cryptoRamNearPointer(
-      static_cast<uint16_t>(EcdsaWorkspaceOffset + pukccLength * 2u + 4u));
-  _ecdsaPublicKeyValidation = {};
-  _ecdsaPublicKeyValidation.modulus =
-      pukcc::cryptoRamNearPointer(EcdsaModulusOffset);
-  _ecdsaPublicKeyValidation.reductionConstant =
-      pukcc::cryptoRamNearPointer(EcdsaConstantOffset);
-  _ecdsaPublicKeyValidation.modulusLength = pukccLength;
-  _ecdsaPublicKeyValidation.curveA =
-      pukcc::cryptoRamNearPointer(EcdsaCurveAOffset);
-  _ecdsaPublicKeyValidation.curveB =
-      pukcc::cryptoRamNearPointer(EcdsaCurveBOffset);
-  _ecdsaPublicKeyValidation.point =
-      pukcc::cryptoRamNearPointer(EcdsaPublicKeyOffset);
-  _ecdsaPublicKeyValidation.workspace =
-      pukcc::cryptoRamNearPointer(EcdsaWorkspaceOffset);
-  _ecdsaVerify = {};
-  _ecdsaVerify.basePoint = pukcc::cryptoRamNearPointer(EcdsaBasePointOffset);
-  _ecdsaVerify.order = pukcc::cryptoRamNearPointer(EcdsaOrderOffset);
-  _ecdsaVerify.modulus = pukcc::cryptoRamNearPointer(EcdsaModulusOffset);
-  _ecdsaVerify.reductionConstant =
-      pukcc::cryptoRamNearPointer(EcdsaConstantOffset);
-  _ecdsaVerify.publicKey = pukcc::cryptoRamNearPointer(EcdsaPublicKeyOffset);
-  _ecdsaVerify.signature = pukcc::cryptoRamNearPointer(EcdsaSignatureOffset);
-  _ecdsaVerify.curveA = pukcc::cryptoRamNearPointer(EcdsaCurveAOffset);
-  _ecdsaVerify.hash = pukcc::cryptoRamNearPointer(EcdsaHashOffset);
-  _ecdsaVerify.workspace = pukcc::cryptoRamNearPointer(EcdsaWorkspaceOffset);
-  _ecdsaVerify.modulusLength = pukccLength;
-  _ecdsaVerify.scalarLength = pukccLength;
-
-  if (!Crypto::registerPukccCallback(MbedTlsCryptoProvider::handleEcdsaService,
-                                     this)) {
-    clearEcdsaWorkspace();
-    return false;
-  }
-
-  _ecdsaResult = {};
-  _ecdsaCallback = callback;
-  _ecdsaCallbackContext = context;
-  _ecdsaStep = EcdsaVerifyStep::ReductionSetup;
-  _ecdsaBusy = true;
-  if (!submitEcdsaStep()) {
-    finishEcdsa(false);
-    return false;
-  }
-
-  return true;
-}
-
-void MbedTlsCryptoProvider::handleEcdsaService(pukcc::EventMask events,
-                                               uint8_t service, uint16_t status,
-                                               void *user) {
-  (void)service;
-  auto *provider = static_cast<MbedTlsCryptoProvider *>(user);
-  if (provider == nullptr || !provider->_ecdsaBusy)
-    return;
-
-  if ((events & pukcc::EventComplete) == 0 || status != pukcc::StatusOk) {
-    provider->finishEcdsa(false);
-    return;
-  }
-
-  switch (provider->_ecdsaStep) {
-  case EcdsaVerifyStep::ReductionSetup:
-    provider->_ecdsaStep = EcdsaVerifyStep::PublicKeyValidation;
-    break;
-  case EcdsaVerifyStep::PublicKeyValidation:
-    provider->_ecdsaStep = EcdsaVerifyStep::Verify;
-    break;
-  case EcdsaVerifyStep::Verify:
-    provider->finishEcdsa(true);
-    return;
-  case EcdsaVerifyStep::Idle:
-  case EcdsaVerifyStep::Complete:
-  case EcdsaVerifyStep::Error:
-    provider->finishEcdsa(false);
-    return;
-  }
-
-  if (!provider->submitEcdsaStep())
-    provider->finishEcdsa(false);
-}
-
-bool MbedTlsCryptoProvider::submitEcdsaStep() {
-  switch (_ecdsaStep) {
-  case EcdsaVerifyStep::ReductionSetup:
-    return Crypto::PukccEcc::startReductionSetupAsync(_ecdsaReductionSetup,
-                                                      _ecdsaResult);
-  case EcdsaVerifyStep::PublicKeyValidation:
-    return Crypto::PukccEcc::startPointIsOnCurveAsync(_ecdsaPublicKeyValidation,
-                                                      _ecdsaResult);
-  case EcdsaVerifyStep::Verify:
-    return Crypto::PukccEcc::startEcdsaVerifyAsync(_ecdsaVerify, _ecdsaResult);
-  case EcdsaVerifyStep::Idle:
-  case EcdsaVerifyStep::Complete:
-  case EcdsaVerifyStep::Error:
-    return false;
-  }
-
-  return false;
-}
-
-void MbedTlsCryptoProvider::finishEcdsa(bool success) {
-  Crypto::TlsSignatureCallback callback = _ecdsaCallback;
-  void *callbackContext = _ecdsaCallbackContext;
-  _ecdsaReductionSetup = {};
-  _ecdsaPublicKeyValidation = {};
-  _ecdsaVerify = {};
-  _ecdsaResult = {};
-  _ecdsaCallback = nullptr;
-  _ecdsaCallbackContext = nullptr;
-  _ecdsaStep = success ? EcdsaVerifyStep::Complete : EcdsaVerifyStep::Error;
-  _ecdsaBusy = false;
-  Crypto::clearPukccCallback();
-  clearEcdsaWorkspace();
-
-  if (callback != nullptr)
-    callback(success, callbackContext);
-}
-
-void MbedTlsCryptoProvider::clearEcdsaWorkspace() {
-  clearCryptoRamRange(EcdsaModulusOffset,
-                      EcdsaWorkspaceEnd - EcdsaModulusOffset);
+    const uint8_t *signature, Crypto::TlsSignatureCallback callback, void *context) {
+  if (_ecdhBusy || _ecdsaSignBusy || _rsaBusy) return false;
+  return _ecdsaVerifier.startEcdsaVerifyAsync(curve, publicKey, hash, signature,
+                                            callback, context);
 }
 
 bool MbedTlsCryptoProvider::startRsaVerifyAsync(
@@ -2610,7 +2356,7 @@ bool MbedTlsCryptoProvider::startRsaVerifyAsync(
     size_t publicKeyLength, const uint8_t *hash, size_t hashLength,
     const uint8_t *signature, size_t signatureLength,
     Crypto::TlsSignatureCallback callback, void *context) {
-  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || _rsaBusy ||
+  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaVerifier.busy() || _rsaBusy ||
       publicKey == nullptr || publicKeyLength == 0 || hash == nullptr ||
       signature == nullptr || callback == nullptr) {
     return false;
@@ -2752,7 +2498,7 @@ bool MbedTlsCryptoProvider::startRsaSignAsync(
     const uint8_t *hash, size_t hashLength, uint8_t *signature,
     size_t signatureLength, Crypto::TlsSignatureCallback callback,
     void *context) {
-  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaBusy || _rsaBusy ||
+  if (_ecdhBusy || _ecdsaSignBusy || _ecdsaVerifier.busy() || _rsaBusy ||
       privateKey == nullptr || privateKeyLength == 0 || hash == nullptr ||
       signature == nullptr || callback == nullptr) {
     return false;

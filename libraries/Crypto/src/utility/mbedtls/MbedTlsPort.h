@@ -8,6 +8,7 @@
 #include <utility/tls/TlsClientSession.h>
 #ifdef CRYPTO_HARDWARE_AVAILABLE
 #include <utility/pukcc/PukccEcc.h>
+#include <utility/pukcc/PukccEcdsa.h>
 #include <utility/pukcc/PukccRsa.h>
 #include <mbedtls/private/rsa.h>
 #endif
@@ -205,17 +206,9 @@ bool aesCcm128DecryptAsync(AesCcm128Context &context, const uint8_t *nonce,
                            const uint8_t *tag, size_t tagLength);
 
 struct EntropyContext;
-struct EccCurveParams {
-  uint16_t coordinateLength;
-  uint16_t pukccLength;
-  uint16_t hashLength;
-  const uint8_t *prime;
-  const uint8_t *a;
-  const uint8_t *b;
-  const uint8_t *order;
-  const uint8_t *gx;
-  const uint8_t *gy;
-};
+#ifdef CRYPTO_HARDWARE_AVAILABLE
+using Crypto::PukccEcc::EccCurveParams;
+#endif
 
 using EntropyCallback =
     void (*)(bool success, EntropyContext &context, void *user);
@@ -382,14 +375,6 @@ public:
 
 private:
 #ifdef CRYPTO_HARDWARE_AVAILABLE
-  enum class EcdsaVerifyStep : uint8_t {
-    Idle,
-    ReductionSetup,
-    PublicKeyValidation,
-    Verify,
-    Complete,
-    Error,
-  };
   enum class EcdsaSignStep : uint8_t {
     Idle,
     ReductionSetup,
@@ -448,11 +433,6 @@ private:
                                  void *user);
   void finishEcdh(bool success);
   void clearEcdhWorkspace();
-  static void handleEcdsaService(pukcc::EventMask events, uint8_t service,
-                                 uint16_t status, void *user);
-  bool submitEcdsaStep();
-  void finishEcdsa(bool success);
-  void clearEcdsaWorkspace();
   static void handleEcdsaSignService(pukcc::EventMask events, uint8_t service,
                                      uint16_t status, void *user);
   bool submitEcdsaSignStep();
@@ -503,14 +483,7 @@ private:
   uint16_t _ecdsaSignCoordinateLength;
   EcdsaSignStep _ecdsaSignStep;
   bool _ecdsaSignBusy;
-  Crypto::PukccEcc::ReductionSetupOperation _ecdsaReductionSetup;
-  Crypto::PukccEcc::PointIsOnCurveOperation _ecdsaPublicKeyValidation;
-  Crypto::PukccEcc::EcdsaVerifyOperation _ecdsaVerify;
-  pukcc::ServiceResult _ecdsaResult;
-  Crypto::TlsSignatureCallback _ecdsaCallback;
-  void *_ecdsaCallbackContext;
-  EcdsaVerifyStep _ecdsaStep;
-  bool _ecdsaBusy;
+  Crypto::PukccEcc::EcdsaVerifier _ecdsaVerifier;
   Crypto::PukccRsa::PublicExpModOperation _rsaOperation;
   mbedtls_rsa_context _rsaContext;
   uint8_t *_rsaHash;
