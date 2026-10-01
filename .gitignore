@@ -12,3 +12,6 @@ bootloaders/*/build/
 # Personal agent skills are provided by the user's global installation.
 .agents/
 skills-lock.json
+
+.venv/
+build/
