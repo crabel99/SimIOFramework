@@ -821,6 +821,12 @@ uint8_t SERCOM::calculateBaudrateSynchronous(uint32_t baudrate)
  */
 void SERCOM::resetWIRE()
 {
+#ifdef USE_ZERODMA
+  dmaAbortTx();
+  dmaAbortRx();
+#endif
+  uint32_t ignored = 0;
+  finishCrcWIRE(false, ignored);
   clearQueueWIRE();  // Drain pending transactions from queue
   resetSERCOM();     // SWRST: hardware reset to default state
   _wire = WireConfig{};  // Reset software state
@@ -945,6 +951,11 @@ void SERCOM::deferReceiveWIRE(void) {
   if (_dmaRxActive)
     return;
 #endif // USE_ZERODMA
+  // The preceding receive owns retirement, even after its DMA buffer fills.
+  // Its completion dispatch also starts this follow-up; do not queue it twice.
+  if (_wire.slaveTransactionActive && _wire.currentTxn &&
+      !(_wire.currentTxn->config & I2C_CFG_READ))
+    return;
   setPending((uint8_t)getSercomIndex());
 }
 
@@ -959,6 +970,11 @@ void SERCOM::deferRequestWIRE(void) {
   if (_wireRxSuspendPending || _dmaRxActive)
     return;
 #endif // USE_ZERODMA
+  // The preceding receive owns retirement, even after its DMA buffer fills.
+  // Its completion dispatch also starts this follow-up; do not queue it twice.
+  if (_wire.slaveTransactionActive && _wire.currentTxn &&
+      !(_wire.currentTxn->config & I2C_CFG_READ))
+    return;
   setPending((uint8_t)getSercomIndex());
 }
 
@@ -1117,6 +1133,87 @@ void SERCOM::setBaudrateWIRE(uint32_t baudrate)
 }
 
 
+bool SERCOM::beginCrcWIRE() {
+  uint32_t ignored = 0;
+  if (_wire.crcActive && !finishCrcWIRE(false, ignored))
+    return false;
+  _wire.crcRetired = false;
+  SercomTxn *txn = _wire.currentTxn;
+  if (!txn || !(txn->config & I2C_CFG_CRC))
+    return true;
+  _wire.crcTransmit = isSlaveWIRE() == ((txn->config & I2C_CFG_READ) != 0);
+  _wire.crcDma = isDmaWIRE();
+  DmacCrc::Status status;
+#ifdef USE_ZERODMA
+  if (_wire.crcDma) {
+    if (!_dmaConfigured || !_dmaTx || !_dmaRx)
+      return false;
+    _wire.crcOwner = (_wire.crcTransmit ? _dmaTx : _dmaRx)->getChannel();
+    status = DmacCrc::begin(_wire.crcOwner, DmacCrc::Polynomial::Crc32, 0xFFFFFFFFu);
+  } else
+#endif
+  {
+    _wire.crcOwner = static_cast<uint8_t>(getSercomIndex());
+    status = DmacCrc::beginInput(_wire.crcOwner, DmacCrc::Polynomial::Crc32, 0xFFFFFFFFu);
+  }
+  _wire.crcActive = status == DmacCrc::Status::Ok;
+  return _wire.crcActive;
+}
+
+bool SERCOM::finishCrcWIRE(bool success, uint32_t &checksum) {
+  if (!_wire.crcActive)
+    return false;
+  const DmacCrc::Status status = _wire.crcDma
+      ? DmacCrc::finish(_wire.crcOwner, success, checksum)
+      : DmacCrc::finishInput(_wire.crcOwner, success, checksum);
+  if (status != DmacCrc::Status::Busy)
+    _wire.crcActive = false;
+  return success ? status == DmacCrc::Status::Ok
+                 : status == DmacCrc::Status::TransferFailed;
+}
+
+bool SERCOM::prepareCrcTxWIRE() {
+  if (_wire.txnIndex != _wire.currentTxn->length || !_wire.crcActive)
+    return true;
+  uint32_t checksum = 0;
+  if (!finishCrcWIRE(true, checksum))
+    return false;
+  for (uint8_t i = 0; i < 4; ++i)
+    _wire.crcTail[i] = static_cast<uint8_t>(checksum >> (8 * i));
+  return true;
+}
+
+SercomWireError SERCOM::retireCrcWIRE(SercomWireError error) {
+  SercomTxn *txn = _wire.currentTxn;
+  if (!txn || !(txn->config & I2C_CFG_CRC) || _wire.crcRetired)
+    return error;
+  const size_t wireLength = _wire.txnIndex;
+  uint32_t checksum = 0;
+  if (error == SercomWireError::SUCCESS && !_wire.crcTransmit && wireLength == 0) {
+    // Address-only discovery probes carry no data or CRC trailer.
+    finishCrcWIRE(false, checksum);
+    _wire.crcRetired = true;
+    _wire.txnLength = txn->length;
+    return error;
+  }
+  if (error == SercomWireError::SUCCESS) {
+    if (_wire.crcTransmit) {
+      if (wireLength != _wire.txnLength || _wire.crcActive)
+        error = SercomWireError::CRC_ERROR;
+    } else if (!finishCrcWIRE(true, checksum) || wireLength < 4 ||
+               checksum != 0x2144DF1Cu) {
+      error = SercomWireError::CRC_ERROR;
+    }
+  }
+  if (_wire.crcActive)
+    finishCrcWIRE(false, checksum);
+  _wire.crcRetired = true;
+  // Failed input is never made available as a partial protobuf message.
+  _wire.txnIndex = error == SercomWireError::SUCCESS ? wireLength - 4 : 0;
+  _wire.txnLength = txn->length;
+  return error;
+}
+
 SercomTxn* SERCOM::startTransmissionWIRE( void )
 {
   // Writing ADDR.ADDR drives different behavior based on BUSSTATE:
@@ -1133,6 +1230,28 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
     SercomTxn *txn = _wire.currentTxn;
     if (txn == nullptr || txn->length == 0)
       return nullptr;
+    const auto failSlave = [this](SercomWireError error) -> SercomTxn * {
+#ifdef USE_ZERODMA
+      dmaAbortTx();
+      dmaAbortRx();
+#endif
+      uint32_t ignored = 0;
+      finishCrcWIRE(false, ignored);
+      prepareNackBitWIRE();
+      prepareSlaveCommandBitsWIRE(WIRE_SLAVE_ACT_COMPLETE);
+      deferStopWIRE(error);
+      return nullptr;
+    };
+#ifdef USE_ZERODMA
+    if (isDmaWIRE()) {
+      if (!_dmaConfigured)
+        dmaInit(getSercomIndex());
+      if (!_dmaConfigured || !_dmaTx || !_dmaRx)
+        return failSlave(SercomWireError::DMA_ERROR);
+    }
+#endif
+    if (!beginCrcWIRE())
+      return failSlave(SercomWireError::CRC_BUSY);
     const bool slaveTransmit = (txn->config & I2C_CFG_READ) != 0;
     const auto clearAmatch = [this]() {
 #if defined(__SAME53__) || defined(__SAME54__)
@@ -1146,17 +1265,12 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
     // Mirror the master engine selection: eligible transactions use DMA;
     // larger transactions remain on the interrupt-driven DATA path.
     if (isDmaWIRE()) {
-      if (!_dmaConfigured)
-        dmaInit(getSercomIndex());
-      if (!_dmaConfigured || !_dmaTx || !_dmaRx)
-        return nullptr;
-
       // AMATCH holds SCL low while software prepares the transfer. Arm the
       // DATA-triggered DMA channel before releasing AMATCH so the first DRDY
       // request cannot arrive before DMAC is ready.
       const bool started = slaveTransmit ? sendDataWIRE() : readDataWIRE();
       if (!started)
-        return nullptr;
+        return failSlave(SercomWireError::DMA_ERROR);
 #if defined(__SAME53__) || defined(__SAME54__)
       enableInterrupts(SERCOM_I2CS_INTENSET_DRDY_Msk |
                        SERCOM_I2CS_INTENSET_PREC_Msk);
@@ -1209,7 +1323,7 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
 
   _wire.currentTxn = txn;
   _wire.txnIndex = 0;
-  _wire.txnLength = txn->length;
+  _wire.txnLength = txn->length + ((txn->config & I2C_CFG_CRC) ? 4u : 0u);
 
   setDmaWIRE(false);  // Reset DMA mode - let code below decide if DMA is used
   const bool read = (txn->config & I2C_CFG_READ) != 0;
@@ -1241,7 +1355,7 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
     stopTransmissionWIRE(SercomWireError::OTHER);
     return nullptr;
 #endif // !USE_ZERODMA
-    if (txn->length > 255) {
+    if (_wire.txnLength > 255) {
       stopTransmissionWIRE(SercomWireError::DATA_TOO_LONG);
       return nullptr;
     }
@@ -1262,7 +1376,7 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
   }
 #ifdef USE_ZERODMA
   else {
-    setDmaWIRE(txn->length > 0 && txn->length < 256 &&
+    setDmaWIRE(_wire.txnLength > 0 && _wire.txnLength < 256 &&
               (txn->config & I2C_CFG_STOP) &&
               !(txn->config & I2C_CFG_NODMA));
   }
@@ -1278,12 +1392,17 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
     }
 
 #if defined(__SAME53__) || defined(__SAME54__)
-    addrReg |= SERCOM_I2CM_ADDR_LENEN_Msk | SERCOM_I2CM_ADDR_LEN((uint8_t)txn->length);
+    addrReg |= SERCOM_I2CM_ADDR_LENEN_Msk | SERCOM_I2CM_ADDR_LEN((uint8_t)_wire.txnLength);
 #else
-    addrReg |= SERCOM_I2CM_ADDR_LENEN | SERCOM_I2CM_ADDR_LEN((uint8_t)txn->length);
+    addrReg |= SERCOM_I2CM_ADDR_LENEN | SERCOM_I2CM_ADDR_LEN((uint8_t)_wire.txnLength);
 #endif // __SAME53__ / __SAME54__
   }
 #endif // USE_ZERODMA
+
+  if (!beginCrcWIRE()) {
+    stopTransmissionWIRE(SercomWireError::CRC_BUSY);
+    return nullptr;
+  }
 
   // Send address (non-blocking; ISR handles ERROR/MB/SB)
   _wire.active = true;
@@ -1419,6 +1538,8 @@ void SERCOM::deferBusErrorRecoveryWIRE(bool arbitrationLost,
   dmaAbortRx();
   setDmaWIRE(false);
 #endif
+  uint32_t ignored = 0;
+  finishCrcWIRE(false, ignored);
   _wire.busErrorRecoveryPending = true;
   _wire.busErrorRecoveryStartedUs = micros();
   if (!_wire.busErrorRecoveryDeadlineActive) {
@@ -1610,7 +1731,8 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
       // A master NACK is the expected physical end of a slave response. Keep
       // NACK_ON_DATA as the stop/release reason, but publish successful request
       // completion after the slave has released the bus.
-      if (error == SercomWireError::NACK_ON_DATA)
+      if (error == SercomWireError::NACK_ON_DATA &&
+          (!(txn->config & I2C_CFG_CRC) || _wire.txnIndex == _wire.txnLength))
         completionError = SercomWireError::SUCCESS;
     }
 
@@ -1628,6 +1750,8 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
       dmaAbortTx();
       dmaAbortRx();
 #endif // USE_ZERODMA
+      completionError = retireCrcWIRE(completionError);
+      report.error = completionError;
       retireSlaveTransactionWIRE(followupPending);
       refreshCompletionReport();
       if (txn->onComplete)
@@ -1721,6 +1845,14 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
       setMasterWIRE();
     }
   }
+#ifdef USE_ZERODMA
+  if (txn && (txn->config & I2C_CFG_CRC)) {
+    dmaAbortTx();
+    dmaAbortRx();
+  }
+#endif
+  completionError = retireCrcWIRE(completionError);
+  report.error = completionError;
   refreshCompletionReport();
   // Preserve the tested async-DMA master retirement order: publish the
   // callback before inspecting chainNext, dequeuing, or restoring slave mode.

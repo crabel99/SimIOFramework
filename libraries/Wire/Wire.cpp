@@ -249,7 +249,8 @@ uint8_t TwoWire::requestFrom(uint8_t address, size_t quantity, bool stopBit, uin
   }
 
   loader.config = I2C_CFG_READ | (stopBit ? I2C_CFG_STOP : 0) |
-                  (replaySafe ? I2C_CFG_REPLAY_SAFE : 0);
+                  (replaySafe ? I2C_CFG_REPLAY_SAFE : 0) |
+                  (crcEnabled ? I2C_CFG_CRC : 0);
   loader.address = address;
 
   // Allocate fresh transaction from pool and copy loader data
@@ -344,7 +345,8 @@ uint8_t TwoWire::endTransmission(bool stopBit,
 
   // Set parameters that weren't known during beginTransmission/write
   txn->config = (loader.config & I2C_CFG_REPLAY_SAFE) |
-                (stopBit ? I2C_CFG_STOP : 0);
+                (stopBit ? I2C_CFG_STOP : 0) |
+                (crcEnabled && txn->length != 0 ? I2C_CFG_CRC : 0);
   if (onComplete) {
     txn->onComplete = onComplete;
     txn->user = (user == nullptr) ? txn : user;
@@ -575,7 +577,7 @@ void TwoWire::prepareSlaveReceive() {
   slaveTxn = SercomTxn{};
   slaveTxn.rxPtr = rxBufferPtr;
   slaveTxn.length = rxBufferCapacity;
-  slaveTxn.config = 0;
+  slaveTxn.config = crcEnabled ? I2C_CFG_CRC : 0;
   slaveTxn.onComplete = &TwoWire::onSlaveReceiveComplete;
   slaveTxn.user = this;
   sercom->setSlaveTxnWIRE(&slaveTxn);
@@ -588,10 +590,7 @@ void TwoWire::onDeferredReceive(void *user) {
   self->prepareSlaveReceive();
   self->sercom->setTxnWIRE(&self->slaveTxn);
   self->sercom->markSlaveTransactionActiveWIRE();
-  if (!self->sercom->startTransmissionWIRE()) {
-    self->sercom->deferStopWIRE(SercomWireError::DMA_ERROR);
-    return;
-  }
+  self->sercom->startTransmissionWIRE();
 }
 
 void TwoWire::onDeferredRequest(void *user) {
@@ -610,15 +609,13 @@ void TwoWire::onDeferredRequest(void *user) {
     return;
   }
   self->slaveTxn = self->loader;
-  self->slaveTxn.config |= I2C_CFG_READ;
+  self->slaveTxn.config |= I2C_CFG_READ |
+                           (self->crcEnabled ? I2C_CFG_CRC : 0);
   self->slaveTxn.onComplete = &TwoWire::onSlaveRequestComplete;
   self->slaveTxn.user = self;
   self->sercom->setTxnWIRE(&self->slaveTxn);
   self->sercom->markSlaveTransactionActiveWIRE();
-  if (!self->sercom->startTransmissionWIRE()) {
-    self->sercom->deferStopWIRE(SercomWireError::DMA_ERROR);
-    return;
-  }
+  self->sercom->startTransmissionWIRE();
 }
 
 void TwoWire::onSlaveReceiveComplete(void *user, int status) {

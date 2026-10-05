@@ -22,6 +22,7 @@
 #include <sam.h>
 #include "SERCOM_PinMux.h"
 #include "SERCOM_Txn.h"
+#include "DmacCrc.h"
 #include "RingBuffer.h"
 #include <array>
 
@@ -496,6 +497,10 @@ class SERCOM
 		uint32_t division(uint32_t dividend, uint32_t divisor) ;
 		void initClockNVIC( void ) ;
 		void initWIRE(void) ;
+		bool beginCrcWIRE();
+		bool finishCrcWIRE(bool success, uint32_t &checksum);
+		bool prepareCrcTxWIRE();
+		SercomWireError retireCrcWIRE(SercomWireError error);
 
 		// Cached I2C master/slave configuration for fast role switching.
 		// This can be expanded to support additional configuration options
@@ -533,6 +538,12 @@ class SERCOM
 			size_t txnIndex = 0;
 			size_t txnLength = 0;
 			size_t dmaBlockLength = 0;
+			bool crcActive = false;
+			bool crcDma = false;
+			bool crcTransmit = false;
+			bool crcRetired = false;
+			uint8_t crcOwner = 0;
+			uint8_t crcTail[4] = {};
 			SercomWireCompletionReport lastCompletionReport = {};
 		} _wire;
 

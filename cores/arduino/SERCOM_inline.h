@@ -87,20 +87,29 @@ inline bool SERCOM::sendDataWIRE( void )
 {
 	SercomTxn* txn = _wire.currentTxn;
 	if (txn == nullptr || txn->txPtr == nullptr) return false;
+	const bool crc = (txn->config & I2C_CFG_CRC) != 0;
+	if (crc && !prepareCrcTxWIRE()) {
+		abortWIRE(SercomWireError::CRC_ERROR);
+		return false;
+	}
+	const bool trailer = crc && _wire.txnIndex >= txn->length;
+	const uint8_t *source = trailer
+		? _wire.crcTail + (_wire.txnIndex - txn->length)
+		: txn->txPtr + _wire.txnIndex;
 
 #ifdef USE_ZERODMA
 	if (isDmaWIRE()) {
 		DmaStatus value  = DmaStatus::StartFailed;
 		if (!_dmaTxActive && !_dmaRxActive) {
-			const size_t remaining = _wire.txnLength - _wire.txnIndex;
+			const size_t remaining = (crc && !trailer ? txn->length : _wire.txnLength) - _wire.txnIndex;
 			_wire.dmaBlockLength =
 				isSlaveWIRE() && remaining > 255u ? 255u : remaining;
 #if defined(__SAME53__) || defined(__SAME54__)
-			value = dmaStartTx(txn->txPtr + _wire.txnIndex,
+			value = dmaStartTx(source,
 			                   &sercom->I2CM.SERCOM_DATA,
 			                   _wire.dmaBlockLength);
 #else
-			value = dmaStartTx(txn->txPtr + _wire.txnIndex,
+			value = dmaStartTx(source,
 			                   &sercom->I2CM.DATA.reg,
 			                   _wire.dmaBlockLength);
 #endif // __SAME53__ / __SAME54__
@@ -109,11 +118,17 @@ inline bool SERCOM::sendDataWIRE( void )
 	}
 #endif // USE_ZERODMA
 
+	if (crc && !trailer &&
+		DmacCrc::writeInput(_wire.crcOwner, *source) != DmacCrc::Status::Ok) {
+		abortWIRE(SercomWireError::CRC_ERROR);
+		return false;
+	}
+	++_wire.txnIndex;
 	// Wait for DATA to sync out of the ISR and clear MB
 #if defined(__SAME53__) || defined(__SAME54__)
-	sercom->I2CM.SERCOM_DATA = txn->txPtr[_wire.txnIndex++];
+	sercom->I2CM.SERCOM_DATA = *source;
 #else
-	sercom->I2CM.DATA.reg = txn->txPtr[_wire.txnIndex++];
+	sercom->I2CM.DATA.reg = *source;
 #endif // __SAME53__ / __SAME54__
 
 	// Return false when the last byte has been consumed so the caller can
@@ -151,20 +166,25 @@ inline bool SERCOM::readDataWIRE( void )
 {
 	SercomTxn* txn = _wire.currentTxn;
 	if (txn == nullptr || txn->rxPtr == nullptr) return false;
+	const bool crc = (txn->config & I2C_CFG_CRC) != 0;
+	const bool tail = crc && _wire.txnIndex >= txn->length;
+	uint8_t *destination = tail
+		? _wire.crcTail + (_wire.txnIndex - txn->length)
+		: txn->rxPtr + _wire.txnIndex;
 
 #ifdef USE_ZERODMA
 	if (isDmaWIRE()) {
 		DmaStatus value = DmaStatus::StartFailed;
 		if (!_dmaRxActive && !_dmaTxActive) {
-			const size_t remaining = _wire.txnLength - _wire.txnIndex;
+			const size_t remaining = (crc && !tail ? txn->length : _wire.txnLength) - _wire.txnIndex;
 			_wire.dmaBlockLength =
 				isSlaveWIRE() && remaining > 255u ? 255u : remaining;
 #if defined(__SAME53__) || defined(__SAME54__)
-			value = dmaStartRx(txn->rxPtr + _wire.txnIndex,
+			value = dmaStartRx(destination,
 			                   &sercom->I2CM.SERCOM_DATA,
 			                   _wire.dmaBlockLength);
 #else
-			value = dmaStartRx(txn->rxPtr + _wire.txnIndex,
+			value = dmaStartRx(destination,
 			                   &sercom->I2CM.DATA.reg,
 			                   _wire.dmaBlockLength);
 #endif // __SAME53__ / __SAME54__
@@ -202,11 +222,16 @@ inline bool SERCOM::readDataWIRE( void )
 
 	// Read DATA register (accesses auto-trigger bus operation based on ACKACT/SMEN)
 #if defined(__SAME53__) || defined(__SAME54__)
-	txn->rxPtr[_wire.txnIndex++] = sercom->I2CM.SERCOM_DATA;
+	*destination = sercom->I2CM.SERCOM_DATA;
 #else
-	txn->rxPtr[_wire.txnIndex++] = sercom->I2CM.DATA.reg;
+	*destination = sercom->I2CM.DATA.reg;
 #endif // __SAME53__ / __SAME54__
 
+	++_wire.txnIndex;
+	if (crc && DmacCrc::writeInput(_wire.crcOwner, *destination) != DmacCrc::Status::Ok) {
+		abortWIRE(SercomWireError::CRC_ERROR);
+		return false;
+	}
 	return (_wire.txnIndex < _wire.txnLength);
 }
 
@@ -276,7 +301,7 @@ inline void SERCOM::setTxnWIRE(SercomTxn* txn)
 	_wire.returnValue = SercomWireError::SUCCESS;
 
 	if (txn)
-		_wire.txnLength = txn->length;
+		_wire.txnLength = txn->length + ((txn->config & I2C_CFG_CRC) ? 4u : 0u);
 #ifdef USE_ZERODMA
 #if defined(__SAME53__) || defined(__SAME54__)
 	const bool sclsm =
@@ -393,11 +418,13 @@ inline void SERCOM::dmaTxCallbackWIRE(Adafruit_ZeroDMA* dma)
 	// is generated automatically and STATUS.LENERR is raised with INTFLAG.ERROR.
 
 	inst->_dmaTxActive = false;
-	if (inst->isSlaveWIRE()) {
+	if (inst->isSlaveWIRE() || (inst->_wire.currentTxn->config & I2C_CFG_CRC)) {
 		inst->_wire.txnIndex += inst->_wire.dmaBlockLength;
 		if (inst->_wire.txnIndex < inst->_wire.txnLength) {
 			if (!inst->sendDataWIRE())
 				inst->abortWIRE(SercomWireError::DMA_ERROR);
+		} else if (!inst->isSlaveWIRE()) {
+			inst->deferStopWIRE(SercomWireError::SUCCESS);
 		}
 	} else {
 		inst->_wire.txnIndex = inst->_wire.txnLength;
@@ -423,10 +450,18 @@ inline void SERCOM::dmaRxCallbackWIRE(Adafruit_ZeroDMA* dma)
 	// the abandoned suspend intent suppress suspension of the next RX phase.
 	inst->_wireRxSuspendPending = false;
 	inst->_wire.txnIndex += inst->_wire.dmaBlockLength;
-	if (inst->isSlaveWIRE() &&
+	if ((inst->isSlaveWIRE() || (inst->_wire.currentTxn->config & I2C_CFG_CRC)) &&
 	    inst->_wire.txnIndex < inst->_wire.txnLength) {
 		if (!inst->readDataWIRE())
 			inst->abortWIRE(SercomWireError::DMA_ERROR);
+	} else if (inst->isSlaveWIRE() && (inst->_wire.currentTxn->config & I2C_CFG_CRC)) {
+		// Capacity is not a frame boundary. STOP or repeated START retires RX.
+		// Re-enable DRDY so an excess byte can be NACKed as overflow.
+#if defined(__SAME53__) || defined(__SAME54__)
+		inst->enableInterrupts(SERCOM_I2CS_INTENSET_DRDY_Msk);
+#else
+		inst->enableInterrupts(SERCOM_I2CS_INTENSET_DRDY);
+#endif
 	} else {
 		inst->deferStopWIRE(SercomWireError::SUCCESS);
 	}
