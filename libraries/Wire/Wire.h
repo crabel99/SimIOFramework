@@ -48,6 +48,10 @@ public:
              bool enable10Bit = false);
   void end();
   void setClock(uint32_t);
+  // Opt-in CRC-32/IEEE in both bus roles, seed 0xFFFFFFFF, little-endian trailer.
+  // Configure before begin(); payload capacity excludes the four CRC bytes.
+  // Empty address probes carry no trailer. Other devices on this bus must agree.
+  void setCrcEnabled(bool enabled) { crcEnabled = enabled; }
 
   void beginTransmission(uint8_t);
   void setTransactionReplaySafe(bool replaySafe = true);
@@ -110,6 +114,7 @@ private:
     uint8_t _uc_pinSCL;
 
     bool transmissionBegun;
+    bool crcEnabled = false;
 
     // RX/TX buffers (sync compatibility, async staging)
     static constexpr size_t WIRE_BUFFER_LENGTH = 255;
@@ -461,6 +466,15 @@ inline void TwoWire::onService(void)
         sercom->setTxnWIRE(&slaveTxn);
         sercom->startTransmissionWIRE();
       }
+      return;
+    }
+
+    if (slaveDrdy && activeTxn && (activeTxn->config & I2C_CFG_CRC) &&
+        !(activeTxn->config & I2C_CFG_READ) &&
+        sercom->getTxnIndexWIRE() >= sercom->getTxnLengthWIRE()) {
+      sercom->prepareNackBitWIRE();
+      sercom->prepareSlaveCommandBitsWIRE(WIRE_SLAVE_ACT_COMPLETE);
+      sercom->deferStopWIRE(SercomWireError::DATA_TOO_LONG);
       return;
     }
 

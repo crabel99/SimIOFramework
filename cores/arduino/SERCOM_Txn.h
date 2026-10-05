@@ -55,6 +55,8 @@ enum class SercomWireError : uint8_t
   LENGTH_ERROR = 12,     // LENERR when LEN/LENEN mismatch (STATUS.LENERR)
   UNKNOWN_ERROR = 13,    // Error flag set but no specific bit matched
   DMA_ERROR = 14,        // DMAC transfer/descriptor bus error
+  CRC_ERROR = 16,        // Invalid or incomplete CRC-32 frame
+  CRC_BUSY = 17,         // Shared hardware CRC engine unavailable
   BUS_RELEASE_TIMEOUT = 15 // STOP issued but BUSSTATE did not return to IDLE
 };
 
