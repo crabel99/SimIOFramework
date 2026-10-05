@@ -944,6 +944,11 @@ void SERCOM::deferReceiveWIRE(void) {
   if (_dmaRxActive)
     return;
 #endif // USE_ZERODMA
+  // The preceding receive owns retirement, even after its DMA buffer fills.
+  // Its completion dispatch also starts this follow-up; do not queue it twice.
+  if (_wire.slaveTransactionActive && _wire.currentTxn &&
+      !(_wire.currentTxn->config & I2C_CFG_READ))
+    return;
   setPending((uint8_t)getSercomIndex());
 }
 
@@ -958,6 +963,11 @@ void SERCOM::deferRequestWIRE(void) {
   if (_wireRxSuspendPending || _dmaRxActive)
     return;
 #endif // USE_ZERODMA
+  // The preceding receive owns retirement, even after its DMA buffer fills.
+  // Its completion dispatch also starts this follow-up; do not queue it twice.
+  if (_wire.slaveTransactionActive && _wire.currentTxn &&
+      !(_wire.currentTxn->config & I2C_CFG_READ))
+    return;
   setPending((uint8_t)getSercomIndex());
 }
 
