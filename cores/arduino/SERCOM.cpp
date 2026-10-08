@@ -1775,6 +1775,9 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
     // the idle handoff before restoring the cached slave descriptor, whose
     // active/current state would otherwise make startNextQueuedWIRE() refuse
     // to run it.
+    // Wire's request-completion callback may re-arm the idle slave descriptor.
+    // Release that cached descriptor before handing off queued master work.
+    discardIdleSlaveTransactionWIRE();
     if (_wire.currentTxn == nullptr)
       startNextQueuedWIRE();
 
