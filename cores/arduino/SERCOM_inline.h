@@ -208,6 +208,7 @@ inline bool SERCOM::readDataWIRE( void )
 #else
 			sercom->I2CM.CTRLB.reg |= SERCOM_I2CM_CTRLB_ACKACT | SERCOM_I2CM_CTRLB_CMD(cmd); // NACK the last byte and send STOP if requested
 #endif // __SAME53__ / __SAME54__
+			waitSyncBusySysOp();
 		}
 		else
 			prepareAckBitWIRE(); // ACK bytes otherwise for non-SCLSM mode
