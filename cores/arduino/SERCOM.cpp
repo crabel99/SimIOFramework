@@ -27,6 +27,7 @@
 #include <Adafruit_ZeroDMA.h>
 #endif // USE_ZERODMA
 
+
 #ifndef WIRE_RISE_TIME_NANOSECONDS
 // Default rise time in nanoseconds, based on 4.7K ohm pull up resistors
 // you can override this value in your variant if needed
@@ -1141,7 +1142,9 @@ bool SERCOM::beginCrcWIRE() {
   if (!txn || !(txn->config & I2C_CFG_CRC))
     return true;
   _wire.crcTransmit = isSlaveWIRE() == ((txn->config & I2C_CFG_READ) != 0);
-  _wire.crcDma = isDmaWIRE();
+  _wire.crcDma = isDmaWIRE() && !_wire.crcTransmit;
+  if (isDmaWIRE() && _wire.crcTransmit)
+    return true;
   DmacCrc::Status status;
 #ifdef USE_ZERODMA
   if (_wire.crcDma) {
@@ -1172,7 +1175,9 @@ bool SERCOM::finishCrcWIRE(bool success, uint32_t &checksum) {
 }
 
 bool SERCOM::prepareCrcTxWIRE() {
-  if (_wire.txnIndex != _wire.currentTxn->length || !_wire.crcActive)
+  if (!_wire.crcActive)
+    return true;
+  if (_wire.txnIndex != _wire.currentTxn->length)
     return true;
   uint32_t checksum = 0;
   if (!finishCrcWIRE(true, checksum))
@@ -1253,6 +1258,7 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
       return failSlave(SercomWireError::CRC_BUSY);
     const bool slaveTransmit = (txn->config & I2C_CFG_READ) != 0;
     const auto clearAmatch = [this]() {
+      prepareAckBitWIRE();
 #if defined(__SAME53__) || defined(__SAME54__)
       clearINTFLAG(SERCOM_I2CS_INTFLAG_AMATCH_Msk);
 #else
@@ -1623,9 +1629,7 @@ SercomTxn* SERCOM::stopTransmissionWIRE( void )
   return stopTransmissionWIRE( _wire.returnValue );
 }
 
-SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
-{
-  constexpr uint32_t kWireStopSettleTimeoutUs = 100u;
+SercomTxn *SERCOM::stopTransmissionWIRE(SercomWireError error) {
   if (_wire.busErrorRecoveryPending)
     return serviceBusErrorRecoveryWIRE();
   // Policy: only auto-retry recoverable bus-state errors here. All other
@@ -1782,14 +1786,10 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
 
     if (_wire.currentTxn == nullptr && _wire.slaveTxn != nullptr)
       setTxnWIRE(_wire.slaveTxn);
-#if defined(SERCOM_WIRE_TEST_POINTS)
-    recordTestPointWIRE(SercomWireTestEvent::StopSlaveComplete,
-                        static_cast<int>(completionError));
-#endif
     return _wire.currentTxn;
   }
 
-  // Everything below is master-only: retry, bus-state recovery, STOP wait,
+  // Everything below is master-only: retry, bus-state recovery,
   // queue retirement, transaction chaining, and return to slave mode.
   constexpr uint8_t kMaxWireRetries = 3;
 
@@ -1818,39 +1818,25 @@ SercomTxn* SERCOM::stopTransmissionWIRE( SercomWireError error )
 
   SercomWireError completionError = error;
 
-  // Undocumented HW limitation: DMA transfers must terminate with STOP and bus release.
-  // After a DMA write, the host holds the bus ~7.33 us before the next transfer (Sr window).
-  // Writing ADDR during that window leaves the bus in an undefined state and breaks
-  // subsequent DMA/non-DMA transactions. To avoid this, we must wait for BUSSTATE
-  // to return to IDLE after a STOP returning the hardware to a known state.
-  // At the tested 48 MHz, this busy-wait is ~350 cycles corresponding to a 3.5 us delay
-  // at 100 MHz. This wait must occur BEFORE the callback to ensure the bus is stable
-  // before user code can enqueue the next transaction.
   if (txn && (txn->config & I2C_CFG_STOP) &&
-      error == SercomWireError::SUCCESS) {
-    const uint32_t stopSettleStart = micros();
-    const auto busIsIdle = [this]() {
-#if defined(__SAME53__) || defined(__SAME54__)
-      return ((sercom->I2CM.SERCOM_STATUS & SERCOM_I2CM_STATUS_BUSSTATE_Msk) >>
-              SERCOM_I2CM_STATUS_BUSSTATE_Pos) <= WIRE_IDLE_STATE;
-#else
-      return sercom->I2CM.STATUS.bit.BUSSTATE <= WIRE_IDLE_STATE;
-#endif // __SAME53__ / __SAME54__
-    };
-
-    while (!busIsIdle() && static_cast<uint32_t>(micros() - stopSettleStart) <
-                               kWireStopSettleTimeoutUs)
+      error == SercomWireError::SUCCESS &&
+      (_wire.releasePending
+#ifdef USE_ZERODMA
+       || _wire.useDma
+#endif
+      )) {
+    // A STOP request or final DMA DATA write can precede physical bus release.
+    const uint32_t releaseStarted = micros();
+    while (isBusOwnerWIRE() &&
+           static_cast<uint32_t>(micros() - releaseStarted) < 1000u)
       ;
-
-    if (!busIsIdle()) {
+    if (isBusOwnerWIRE()) {
       completionError = SercomWireError::BUS_RELEASE_TIMEOUT;
-      // The device datasheet identifies CTRLA.SWRST as recovery for an I2C
-      // protocol hang. Preserve the cached Wire configuration and transaction
-      // queue, reset only the peripheral, then restore a known master state.
       resetSERCOM();
       setMasterWIRE();
     }
   }
+  _wire.releasePending = false;
 #ifdef USE_ZERODMA
   if (txn && (txn->config & I2C_CFG_CRC)) {
     dmaAbortTx();
@@ -2160,8 +2146,8 @@ void SERCOM::dmaSetCallbacks(DmaCallback txCb, DmaCallback rxCb,
   }
 }
 
-SERCOM::DmaStatus SERCOM::dmaStartTx(const void* src, volatile void* dstReg, size_t len)
-{
+SERCOM::DmaStatus SERCOM::dmaStartTx(const void *src, volatile void *dstReg,
+                                     size_t len, uint8_t *crcTail) {
   if (!_dmaConfigured || !_dmaTx) {
     _dmaLastError = DmaStatus::NotConfigured;
     return _dmaLastError;
@@ -2181,6 +2167,40 @@ SERCOM::DmaStatus SERCOM::dmaStartTx(const void* src, volatile void* dstReg, siz
 
   _dmaTx->changeDescriptor(_dmaTxDesc, const_cast<void*>(src),
                            const_cast<void*>(dstReg), len);
+
+  if (crcTail) {
+    uint32_t checksum = 0xFFFFFFFFu;
+    const uint8_t *payload = static_cast<const uint8_t *>(src);
+    for (size_t i = 0; i < len; ++i) {
+      checksum ^= payload[i];
+      for (uint8_t bit = 0; bit < 8; ++bit)
+        checksum = (checksum >> 1) ^ (0xEDB88320u & (0u - (checksum & 1u)));
+    }
+    checksum = ~checksum;
+    for (uint8_t i = 0; i < 4; ++i)
+      crcTail[i] = static_cast<uint8_t>(checksum >> (8 * i));
+    if (!_dmaTxTailDesc)
+      _dmaTxTailDesc = _dmaTx->addDescriptor(crcTail,
+                                             const_cast<void *>(dstReg), 4,
+                                             DMA_BEAT_SIZE_BYTE, true, false);
+    if (!_dmaTxTailDesc) {
+      _dmaLastError = DmaStatus::DescriptorFailed;
+      return _dmaLastError;
+    }
+    _dmaTx->changeDescriptor(_dmaTxTailDesc, crcTail,
+                             const_cast<void *>(dstReg), 4);
+  }
+#if defined(__SAME53__) || defined(__SAME54__)
+  _dmaTxDesc->DMAC_DESCADDR =
+      crcTail ? reinterpret_cast<uint32_t>(_dmaTxTailDesc) : 0;
+  if (_dmaTxTailDesc)
+    _dmaTxTailDesc->DMAC_DESCADDR = 0;
+#else
+  _dmaTxDesc->DESCADDR.reg =
+      crcTail ? reinterpret_cast<uint32_t>(_dmaTxTailDesc) : 0;
+  if (_dmaTxTailDesc)
+    _dmaTxTailDesc->DESCADDR.reg = 0;
+#endif
 
   if (_dmaTx->startJob() != DMA_STATUS_OK) {
     _dmaTx->abort();
@@ -2308,6 +2328,10 @@ void SERCOM::dmaRelease()
 
 void SERCOM::dmaResetDescriptors()
 {
+  if (_dmaTxTailDesc) {
+    free(_dmaTxTailDesc);
+    _dmaTxTailDesc = nullptr;
+  }
   _dmaTxDesc = nullptr;
   _dmaRxDesc = nullptr;
 }

@@ -413,7 +413,9 @@ class SERCOM
 		DmaStatus dmaInit(int8_t sercomId, uint8_t beatSize = 0); // beatSize: 0=byte (default), 1=halfword, 2=word
 		void dmaSetCallbacks(DmaCallback txCb, DmaCallback rxCb,
 		                     DmaCallback errorCb = nullptr);
-		DmaStatus dmaStartTx(const void* src, volatile void* dstReg, size_t len);
+		// Nonnull crcTail provides four writable bytes retained until DMA completes.
+		DmaStatus dmaStartTx(const void* src, volatile void* dstReg, size_t len,
+		                     uint8_t* crcTail = nullptr);
 		DmaStatus dmaStartRx(void* dst, volatile void* srcReg, size_t len);
 		DmaStatus dmaStartDuplex(const void* txSrc, void* rxDst, volatile void* txReg, volatile void* rxReg, size_t len,
 		                 const uint8_t* dummyTx = nullptr);
@@ -584,6 +586,7 @@ class SERCOM
 		Adafruit_ZeroDMA* _dmaTx = nullptr;
 		Adafruit_ZeroDMA* _dmaRx = nullptr;
 		DmacDescriptor* _dmaTxDesc = nullptr;
+		DmacDescriptor* _dmaTxTailDesc = nullptr;
 		DmacDescriptor* _dmaRxDesc = nullptr;
 		DmaCallback _dmaTxCb = nullptr;
 		DmaCallback _dmaRxCb = nullptr;
