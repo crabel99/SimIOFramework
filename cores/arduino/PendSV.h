@@ -174,6 +174,16 @@ public:
   void setPending(uint8_t serviceId);
   void setPendingOnce(uint8_t serviceId);
 
+  // One coalesced wake per registered service. Rearming replaces its deadline.
+  // Uses millis() ticks: 1 means the next tick, not at least 1 ms elapsed.
+  // Zero wakes immediately through PendSV. Delays must be <= INT32_MAX ticks.
+  // Existing immediate work remains pending and may run before the deadline.
+  bool setPendingAfter(uint8_t serviceId, uint32_t delayMs);
+  // Cancels an unexpired deadline; does not retract already-pending work.
+  void cancelPendingAfter(uint8_t serviceId);
+  // Called by the core millisecond tick. Only queues work, never runs callbacks.
+  void onSysTick(uint32_t now);
+
 private:
   static uint32_t enterCritical();
   static void exitCritical(uint32_t primask);
@@ -186,4 +196,6 @@ private:
   std::array<ServiceEntry, kMaxServices> services_{};
   std::array<uint16_t, kMaxServices> pendingCount_{};
   volatile uint32_t pendingMask_ = 0;
+  std::array<uint32_t, kMaxServices> deadlines_{};
+  volatile uint32_t delayedMask_ = 0;
 };

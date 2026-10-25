@@ -18,6 +18,7 @@
 
 #define ARDUINO_MAIN
 #include "Arduino.h"
+#include "PendSV.h"
 
 // Weak empty variant initialization function.
 // May be redefined by variant files.
@@ -39,6 +40,8 @@ int main( void )
   initVariant();
 
   delay(1);
+
+  PendSV::initializeCoreServices();
 
 #if defined(USE_TINYUSB)
   TinyUSB_Device_Init(0);

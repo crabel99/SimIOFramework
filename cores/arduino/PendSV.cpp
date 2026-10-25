@@ -61,6 +61,7 @@ bool PendSV::registerService(uint8_t serviceId, ServiceFn fn, void *context) {
   const uint32_t primask = enterCritical();
   pendingCount_[serviceId] = 0;
   pendingMask_ &= ~(1u << serviceId);
+  delayedMask_ &= ~(1u << serviceId);
   services_[serviceId].fn = fn;
   services_[serviceId].context = context;
   exitCritical(primask);
@@ -77,6 +78,7 @@ void PendSV::clearService(uint8_t serviceId) {
   services_[serviceId].context = nullptr;
   pendingCount_[serviceId] = 0;
   pendingMask_ &= ~(1u << serviceId);
+  delayedMask_ &= ~(1u << serviceId);
   exitCritical(primask);
 }
 
@@ -106,6 +108,76 @@ void PendSV::setPendingOnce(uint8_t serviceId) {
 
   __DMB();
   SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;
+}
+
+bool PendSV::setPendingAfter(uint8_t serviceId, uint32_t delayMs) {
+  if (serviceId >= kMaxServices || delayMs > INT32_MAX)
+    return false;
+
+  const uint32_t primask = enterCritical();
+  if (services_[serviceId].fn == nullptr) {
+    exitCritical(primask);
+    return false;
+  }
+
+  const uint32_t bit = 1u << serviceId;
+  if (delayMs != 0) {
+    deadlines_[serviceId] = static_cast<uint32_t>(millis()) + delayMs;
+    delayedMask_ |= bit;
+  } else {
+    delayedMask_ &= ~bit;
+    if (pendingCount_[serviceId] == 0)
+      pendingCount_[serviceId] = 1;
+    pendingMask_ |= bit;
+  }
+  exitCritical(primask);
+
+  if (delayMs == 0) {
+    __DMB();
+    SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;
+  }
+  return true;
+}
+
+void PendSV::cancelPendingAfter(uint8_t serviceId) {
+  if (serviceId >= kMaxServices)
+    return;
+
+  const uint32_t primask = enterCritical();
+  delayedMask_ &= ~(1u << serviceId);
+  exitCritical(primask);
+}
+
+void PendSV::onSysTick(uint32_t now) {
+  if (delayedMask_ == 0)
+    return;
+
+  const uint32_t primask = enterCritical();
+  uint32_t remaining = delayedMask_;
+  uint32_t ready = 0;
+  while (remaining != 0) {
+    const uint8_t serviceId = static_cast<uint8_t>(__builtin_ctz(remaining));
+    const uint32_t bit = 1u << serviceId;
+    remaining &= ~bit;
+    if (static_cast<int32_t>(now - deadlines_[serviceId]) < 0)
+      continue;
+
+    delayedMask_ &= ~bit;
+    if (pendingCount_[serviceId] == 0)
+      pendingCount_[serviceId] = 1;
+    ready |= bit;
+  }
+  pendingMask_ |= ready;
+  exitCritical(primask);
+
+  if (ready != 0) {
+    __DMB();
+    SCB->ICSR = SCB_ICSR_PENDSVSET_Msk;
+  }
+}
+
+extern "C" void PendSV_Tick(uint32_t now) {
+  PendSV::instance().onSysTick(now);
 }
 
 void PendSV::dispatchPending() {

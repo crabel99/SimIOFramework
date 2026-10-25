@@ -110,11 +110,15 @@ void delay( unsigned long ms )
 
 #include "Reset.h" // for tickReset()
 
+extern void PendSV_Tick(uint32_t now) __attribute__((weak));
+
 void SysTick_DefaultHandler(void)
 {
   // Increment tick count each ms
   _ulTickCount++;
   tickReset();
+  if (PendSV_Tick)
+    PendSV_Tick(_ulTickCount);
 }
 
 #if defined(USE_TINYUSB)
