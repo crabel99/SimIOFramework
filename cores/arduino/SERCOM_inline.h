@@ -65,21 +65,12 @@ inline void SERCOM::disableSERCOM( void )
 inline void SERCOM::enableWIRE( void )
 {
 	enableSERCOM();
-
-	// Setting bus idle mode
-#if defined(__SAME53__) || defined(__SAME54__)
-	sercom->I2CM.SERCOM_STATUS =
-		(sercom->I2CM.SERCOM_STATUS & ~SERCOM_I2CM_STATUS_BUSSTATE_Msk) |
-		SERCOM_I2CM_STATUS_BUSSTATE(WIRE_IDLE_STATE);
-#else
-	sercom->I2CM.STATUS.bit.BUSSTATE = 1;
-#endif // __SAME53__ / __SAME54__
-	waitSyncBusySysOp();
 }
 
 inline void SERCOM::deferStopWIRE(SercomWireError error)
 {
 	_wire.returnValue = error;
+	_wire.stopPending = true;
 	setPending((uint8_t)getSercomIndex());
 }
 
@@ -304,16 +295,9 @@ inline void SERCOM::setTxnWIRE(SercomTxn* txn)
 	if (txn)
 		_wire.txnLength = txn->length + ((txn->config & I2C_CFG_CRC) ? 4u : 0u);
 #ifdef USE_ZERODMA
-#if defined(__SAME53__) || defined(__SAME54__)
-	const bool sclsm =
-	    (sercom->I2CM.SERCOM_CTRLA & SERCOM_I2CM_CTRLA_SCLSM_Msk) != 0;
-#else
-	const bool sclsm = sercom->I2CM.CTRLA.bit.SCLSM;
-#endif // __SAME53__ / __SAME54__
 	const size_t length = txn ? txn->length : 0u;
 	const bool dmaEligible = length > 0u;
 	setDmaWIRE(dmaEligible);
-	(void)sclsm;
 #else
 	_wire.useDma = false;
 
@@ -324,9 +308,6 @@ inline void SERCOM::setTxnWIRE(SercomTxn* txn)
 #endif // __SAME53__ / __SAME54__
 		_wire.returnValue = SercomWireError::DATA_TOO_LONG;
 #endif // USE_ZERODMA
-	if (!_wire.active)
-		_wire.retryCount = 0;
-
 	_wire.active = true;
 }
 

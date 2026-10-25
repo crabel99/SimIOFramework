@@ -60,6 +60,12 @@ enum class SercomWireError : uint8_t
   BUS_RELEASE_TIMEOUT = 15 // STOP issued but BUSSTATE did not return to IDLE
 };
 
+enum class SercomWireAbortTarget : uint8_t {
+  None,
+  Current,
+  Master,
+};
+
 enum class SercomWireRole : uint8_t {
   Master,
   Slave,

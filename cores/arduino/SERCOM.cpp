@@ -834,6 +834,9 @@ void SERCOM::resetWIRE()
 
 void SERCOM::clearQueueWIRE(void)
 {
+  PendSV::instance().cancelPendingAfter(PendSVChannels::sercom(getSercomIndex()));
+  _wire.stopPending = false;
+  _wire.startPending = false;
   // Drain all pending transactions from the queue without invoking callbacks
   // This is needed for test teardown to ensure no stale transactions carry over
   SercomTxn* txn = nullptr;
@@ -851,15 +854,12 @@ void SERCOM::clearQueueWIRE(void)
   _wire.txnIndex = 0;
   _wire.txnLength = 0;
   _wire.returnValue = SercomWireError::SUCCESS;
-  _wire.retryCount = 0;
   _wire.releasePending = false;
-  _wire.abortPending = false;
+  _wire.abortPending = SercomWireAbortTarget::None;
   _wire.busErrorRecoveryPending = false;
   _wire.busErrorRecoveryStartedUs = 0;
   _wire.busErrorRecoveryDeadlineActive = false;
   _wire.busErrorRecoveryDeadlineStartedUs = 0;
-  _wire.busErrorRecoveryArbitrationLost = false;
-  _wire.busErrorRecoveryCommandReady = false;
 #ifdef USE_ZERODMA
   _wireRxSuspendPending = false;
 #endif
@@ -1025,7 +1025,6 @@ void SERCOM::dmaRxSuspendCallbackWIRE(Adafruit_ZeroDMA *dma) {
 
 SercomTxn *SERCOM::retireSlaveTransactionWIRE(bool reserveForFollowup) {
   SercomTxn *txn = _wire.currentTxn;
-  _wire.retryCount = 0;
   _wire.active = reserveForFollowup;
   _wire.slaveTransactionActive = false;
   _wire.currentTxn = nullptr;
@@ -1042,10 +1041,16 @@ void SERCOM::setMasterWIRE(void)
   sercom->I2CM.SERCOM_CTRLA = _wire.ctrla                                  |
                               SERCOM_I2CM_CTRLA_MODE(I2C_MASTER_OPERATION) |
                               SERCOM_I2CM_CTRLA_SPEED(_wire.masterSpeed)   |
+                              SERCOM_I2CM_CTRLA_INACTOUT(3)                |
                               (sclsm ? SERCOM_I2CM_CTRLA_SCLSM(1) : 0);
   sercom->I2CM.SERCOM_CTRLB = _wire.ctrlb;
   sercom->I2CM.SERCOM_BAUD = _wire.baud;
   enableWIRE();
+  const uint8_t initialBusState =
+      (getSTATUS() & SERCOM_I2CM_STATUS_BUSSTATE_Msk) >>
+      SERCOM_I2CM_STATUS_BUSSTATE_Pos;
+  _wire.masterStartupQualified = initialBusState == WIRE_UNKNOWN_STATE ||
+                                 initialBusState == WIRE_BUSY_STATE;
   sercom->I2CS.SERCOM_INTENCLR = SERCOM_I2CS_INTENCLR_ERROR_Msk  |
                                  SERCOM_I2CS_INTENCLR_AMATCH_Msk |
                                  SERCOM_I2CS_INTENCLR_DRDY_Msk   |
@@ -1054,10 +1059,16 @@ void SERCOM::setMasterWIRE(void)
   sercom->I2CM.CTRLA.reg = _wire.ctrla                                  |
                            SERCOM_I2CM_CTRLA_MODE(I2C_MASTER_OPERATION) |
                            SERCOM_I2CM_CTRLA_SPEED(_wire.masterSpeed)   |
+                           SERCOM_I2CM_CTRLA_INACTOUT(3)                |
                            (sclsm ? SERCOM_I2CM_CTRLA_SCLSM : 0 );
   sercom->I2CM.CTRLB.reg = _wire.ctrlb;
   sercom->I2CM.BAUD.reg = _wire.baud;
   enableWIRE();
+  const uint8_t initialBusState =
+      (getSTATUS() & SERCOM_I2CM_STATUS_BUSSTATE_Msk) >>
+      SERCOM_I2CM_STATUS_BUSSTATE_Pos;
+  _wire.masterStartupQualified = initialBusState == WIRE_UNKNOWN_STATE ||
+                                 initialBusState == WIRE_BUSY_STATE;
   // Disable slave interrupts.
   // Master interrupts are set in startTransmissionWIRE() when the transaction is enqueued,
   // so we don't want to enable them here.
@@ -1150,7 +1161,7 @@ bool SERCOM::beginCrcWIRE() {
   if (_wire.crcDma) {
     if (!_dmaConfigured || !_dmaTx || !_dmaRx)
       return false;
-    _wire.crcOwner = (_wire.crcTransmit ? _dmaTx : _dmaRx)->getChannel();
+    _wire.crcOwner = _dmaRx->getChannel();
     status = DmacCrc::begin(_wire.crcOwner, DmacCrc::Polynomial::Crc32, 0xFFFFFFFFu);
   } else
 #endif
@@ -1276,25 +1287,11 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
       const bool started = slaveTransmit ? sendDataWIRE() : readDataWIRE();
       if (!started)
         return failSlave(SercomWireError::DMA_ERROR);
-#if defined(__SAME53__) || defined(__SAME54__)
-      enableInterrupts(SERCOM_I2CS_INTENSET_DRDY_Msk |
-                       SERCOM_I2CS_INTENSET_PREC_Msk);
-#else
-      enableInterrupts(SERCOM_I2CS_INTENSET_DRDY | SERCOM_I2CS_INTENSET_PREC);
-#endif // __SAME53__ / __SAME54__
-      clearAmatch();
-    } else {
-#if defined(__SAME53__) || defined(__SAME54__)
-      enableInterrupts(SERCOM_I2CS_INTENSET_DRDY_Msk |
-                       SERCOM_I2CS_INTENSET_PREC_Msk);
-#else
-      enableInterrupts(SERCOM_I2CS_INTENSET_DRDY | SERCOM_I2CS_INTENSET_PREC);
-#endif // __SAME53__ / __SAME54__
-      clearAmatch();
     }
 #else
     // The no-DMA build advances this transaction from slave DRDY interrupts.
     setDmaWIRE(false);
+#endif // USE_ZERODMA
 #if defined(__SAME53__) || defined(__SAME54__)
     enableInterrupts(SERCOM_I2CS_INTENSET_DRDY_Msk |
                      SERCOM_I2CS_INTENSET_PREC_Msk);
@@ -1302,7 +1299,6 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
     enableInterrupts(SERCOM_I2CS_INTENSET_DRDY | SERCOM_I2CS_INTENSET_PREC);
 #endif // __SAME53__ / __SAME54__
     clearAmatch();
-#endif // USE_ZERODMA
 #if defined(__SAME53__) || defined(__SAME54__)
     enableInterrupts(SERCOM_I2CS_INTENSET_AMATCH_Msk);
 #else
@@ -1311,18 +1307,20 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
     return txn;
   }
 
-  if (isBusUnknownWIRE()) {
-    stopTransmissionWIRE(SercomWireError::BUS_STATE_UNKNOWN);
-    return nullptr;
-  }
-
   SercomTxn* txn = nullptr;
-
   if (!_txnQueue.peek(txn))
     return nullptr;
 
+  const uint8_t serviceId = PendSVChannels::sercom(getSercomIndex());
+  if (!_wire.masterStartupQualified || isBusUnknownWIRE()) {
+    _wire.startPending = true;
+    PendSV::instance().setPendingAfter(serviceId, 1);
+    return nullptr;
+  }
+  PendSV::instance().cancelPendingAfter(serviceId);
+  _wire.startPending = false;
+
   if (txn != _wire.currentTxn) {
-    _wire.retryCount = 0;
     _wire.busErrorRecoveryDeadlineActive = false;
   }
 
@@ -1334,13 +1332,6 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
   const bool read = (txn->config & I2C_CFG_READ) != 0;
   uint16_t addr = (txn->config & I2C_CFG_10BIT) ? I2C_ADDR(txn->address) : I2C_ADDR7(txn->address);
   addr = (uint16_t)((addr << 1) | (read ? 1u : 0u));
-
-  if (!isBusOwnerWIRE()) {
-    if (isBusUnknownWIRE()) {
-      stopTransmissionWIRE(SercomWireError::BUS_STATE_UNKNOWN);
-      return nullptr;
-    }
-  }
 
   bool hsMode = (_wire.masterSpeed == 0x2);
 #if defined(__SAME53__) || defined(__SAME54__)
@@ -1409,6 +1400,12 @@ SercomTxn* SERCOM::startTransmissionWIRE( void )
     return nullptr;
   }
 
+  // ADDR clears BUSERR/ARBLOST and MB/SB, but not a preceding ERROR flag.
+#if defined(__SAME53__) || defined(__SAME54__)
+  clearINTFLAG(SERCOM_I2CM_INTFLAG_ERROR_Msk);
+#else
+  clearINTFLAG(SERCOM_I2CM_INTFLAG_ERROR);
+#endif
   // Send address (non-blocking; ISR handles ERROR/MB/SB)
   _wire.active = true;
 #if defined(__SAME53__) || defined(__SAME54__)
@@ -1439,8 +1436,6 @@ bool SERCOM::enqueueWIRE(SercomTxn* txn)
       !_wire.slaveTransactionActive) {
     _wire.active = false;
     _wire.currentTxn = nullptr;
-    setMasterWIRE();
-    return startTransmissionWIRE() != nullptr;
   }
 
   if (!_wire.active) {
@@ -1450,7 +1445,8 @@ bool SERCOM::enqueueWIRE(SercomTxn* txn)
     if (!isMasterWIRE())
       setMasterWIRE();
 
-    return startTransmissionWIRE() != nullptr;
+    startTransmissionWIRE();
+    return true;
   }
 
   return true;
@@ -1470,19 +1466,59 @@ bool SERCOM::startNextQueuedWIRE(void) {
   return true;
 }
 
-bool SERCOM::abortWIRE(SercomWireError error) {
-  if (!_wire.active || _wire.currentTxn == nullptr)
+bool SERCOM::abortWIRE(SercomWireError error, SercomWireAbortTarget target) {
+  if (target == SercomWireAbortTarget::Master) {
+    SercomTxn *master = nullptr;
+    if (!_txnQueue.peek(master) || master == nullptr)
+      return false;
+  } else if (!_wire.active || _wire.currentTxn == nullptr) {
     return false;
+  }
 
-  _wire.abortPending = true;
+  _wire.abortPending = target;
   _wire.abortError = error;
   setPending((uint8_t)getSercomIndex());
   return true;
 }
 
 bool SERCOM::serviceAbortWIRE(void) {
-  if (!_wire.abortPending)
+  if (!isAbortPendingWIRE())
     return false;
+
+  if (_wire.abortPending == SercomWireAbortTarget::Master) {
+    SercomTxn *master = nullptr;
+    if (!_txnQueue.peek(master) || master == nullptr) {
+      _wire.abortPending = SercomWireAbortTarget::None;
+      return false;
+    }
+    if (master != _wire.currentTxn) {
+      _txnQueue.read(master);
+      const SercomWireError error = _wire.abortError;
+      _wire.abortPending = SercomWireAbortTarget::None;
+      SercomWireCompletionReport &report = _wire.lastCompletionReport;
+      report = {};
+      report.error = error;
+      report.address = master->address;
+      report.requestedLength = static_cast<uint16_t>(master->length);
+      report.role = SercomWireRole::Master;
+      report.bus = isSlaveWIRE() && _wire.slaveTransactionActive
+                       ? SercomWireBusDisposition::OtherOwner
+                       : SercomWireBusDisposition::Unknown;
+      report.delivery = SercomWireDelivery::None;
+      report.read = (master->config & I2C_CFG_READ) != 0;
+      master->chainNext = false;
+      if (master->onComplete)
+        master->onComplete(master->user, static_cast<int>(error));
+      if (_wire.currentTxn == nullptr) {
+        const bool queued = !isAbortPendingWIRE() && startNextQueuedWIRE();
+        if (!queued && _wire.currentTxn == nullptr && _wire.slaveConfigured) {
+          setSlaveWIRE();
+          setTxnWIRE(_wire.slaveTxn);
+        }
+      }
+      return true;
+    }
+  }
 
 #ifdef USE_ZERODMA
   dmaAbortTx();
@@ -1517,7 +1553,7 @@ bool SERCOM::serviceAbortWIRE(void) {
   }
 
   const SercomWireError error = _wire.abortError;
-  _wire.abortPending = false;
+  _wire.abortPending = SercomWireAbortTarget::None;
 
   if (isMasterWIRE()) {
 
@@ -1536,8 +1572,7 @@ bool SERCOM::serviceAbortWIRE(void) {
   return true;
 }
 
-void SERCOM::deferBusErrorRecoveryWIRE(bool arbitrationLost,
-                                       bool commandReady) {
+void SERCOM::deferBusErrorRecoveryWIRE(void) {
 #ifdef USE_ZERODMA
   dmaAbortTx();
   dmaAbortRx();
@@ -1551,8 +1586,6 @@ void SERCOM::deferBusErrorRecoveryWIRE(bool arbitrationLost,
     _wire.busErrorRecoveryDeadlineActive = true;
     _wire.busErrorRecoveryDeadlineStartedUs = _wire.busErrorRecoveryStartedUs;
   }
-  _wire.busErrorRecoveryArbitrationLost = arbitrationLost;
-  _wire.busErrorRecoveryCommandReady = commandReady;
   setPending((uint8_t)getSercomIndex());
 }
 
@@ -1560,7 +1593,7 @@ SercomTxn *SERCOM::serviceBusErrorRecoveryWIRE(void) {
   if (!_wire.busErrorRecoveryPending)
     return _wire.currentTxn;
 
-  if (_wire.abortPending) {
+  if (isAbortPendingWIRE()) {
     _wire.busErrorRecoveryPending = false;
     return serviceAbortWIRE() ? _wire.currentTxn : nullptr;
   }
@@ -1587,25 +1620,16 @@ SercomTxn *SERCOM::serviceBusErrorRecoveryWIRE(void) {
   else if (isBusBusyWIRE())
     busState = simio::wire::BusState::Busy;
 
-  const auto action = simio::wire::decideBusErrorAction(
-      {true, busState, _wire.busErrorRecoveryArbitrationLost,
-       _wire.busErrorRecoveryCommandReady, false, true, true});
-  if (action == simio::wire::BusErrorAction::RestartQueueHead) {
+  if (busState == simio::wire::BusState::Busy ||
+      busState == simio::wire::BusState::Idle) {
     _wire.busErrorRecoveryPending = false;
     return startTransmissionWIRE();
   }
 
-  if (action == simio::wire::BusErrorAction::EstablishIdle) {
-#if defined(__SAME53__) || defined(__SAME54__)
-    sercom->I2CM.SERCOM_STATUS =
-        (sercom->I2CM.SERCOM_STATUS & ~SERCOM_I2CM_STATUS_BUSSTATE_Msk) |
-        SERCOM_I2CM_STATUS_BUSSTATE(WIRE_IDLE_STATE);
-#else
-    sercom->I2CM.STATUS.bit.BUSSTATE = WIRE_IDLE_STATE;
-#endif // __SAME53__ / __SAME54__
-    waitSyncBusySysOp();
-    _wire.busErrorRecoveryPending = false;
-    return startTransmissionWIRE();
+  if (busState == simio::wire::BusState::Unknown) {
+    PendSV::instance().setPendingAfter(
+        PendSVChannels::sercom(getSercomIndex()), 1);
+    return txn;
   }
 
   constexpr uint32_t kBusErrorRecoveryTimeoutUs = 100u;
@@ -1626,16 +1650,29 @@ SercomTxn *SERCOM::serviceBusErrorRecoveryWIRE(void) {
 
 SercomTxn* SERCOM::stopTransmissionWIRE( void )
 {
+  if (!_wire.stopPending && !_wireReceivePending && !_wireRequestPending &&
+      !isAbortPendingWIRE() && !_wire.busErrorRecoveryPending) {
+    if (_wire.startPending) {
+      _wire.startPending = false;
+      PendSV::instance().cancelPendingAfter(
+          PendSVChannels::sercom(getSercomIndex()));
+      SercomTxn *queued = nullptr;
+      if (isMasterWIRE() && _txnQueue.peek(queued)) {
+        if (!_wire.masterStartupQualified)
+          setMasterWIRE();
+        return startTransmissionWIRE();
+      }
+    }
+    startNextQueuedWIRE();
+    return _wire.currentTxn;
+  }
+  _wire.stopPending = false;
   return stopTransmissionWIRE( _wire.returnValue );
 }
 
 SercomTxn *SERCOM::stopTransmissionWIRE(SercomWireError error) {
   if (_wire.busErrorRecoveryPending)
     return serviceBusErrorRecoveryWIRE();
-  // Policy: only auto-retry recoverable bus-state errors here. All other
-  // errors are surfaced to the transaction callback for protocol handling.
-  // Retry/backoff policy is intentionally deferred; a future change may add
-  // a retry budget or tick-based delay if needed.
   SercomTxn *txn = _wire.currentTxn;
 
   SercomWireCompletionReport &report = _wire.lastCompletionReport;
@@ -1705,7 +1742,7 @@ SercomTxn *SERCOM::stopTransmissionWIRE(SercomWireError error) {
   // Explicit timeout cancellation is a newer entrance into the shared
   // PendSV retirement service. Keep it outside the tested normal master
   // completion sequence below.
-  if (_wire.abortPending) {
+  if (isAbortPendingWIRE()) {
     serviceAbortWIRE();
     return txn;
   }
@@ -1784,36 +1821,13 @@ SercomTxn *SERCOM::stopTransmissionWIRE(SercomWireError error) {
     if (_wire.currentTxn == nullptr)
       startNextQueuedWIRE();
 
-    if (_wire.currentTxn == nullptr && _wire.slaveTxn != nullptr)
+    if (_wire.currentTxn == nullptr && !isMasterWIRE() && _wire.slaveTxn != nullptr)
       setTxnWIRE(_wire.slaveTxn);
     return _wire.currentTxn;
   }
 
   // Everything below is master-only: retry, bus-state recovery,
   // queue retirement, transaction chaining, and return to slave mode.
-  constexpr uint8_t kMaxWireRetries = 3;
-
-  if (error == SercomWireError::BUS_STATE_UNKNOWN) {
-    if (_wire.retryCount < kMaxWireRetries) {
-      ++_wire.retryCount;
-
-#if defined(__SAME53__) || defined(__SAME54__)
-      sercom->I2CM.SERCOM_STATUS =
-          (sercom->I2CM.SERCOM_STATUS & ~SERCOM_I2CM_STATUS_BUSSTATE_Msk) |
-          SERCOM_I2CM_STATUS_BUSSTATE(WIRE_IDLE_STATE);
-#else
-      sercom->I2CM.STATUS.bit.BUSSTATE = 1;
-#endif // __SAME53__ / __SAME54__
-      waitSyncBusySysOp();
-      startTransmissionWIRE();
-
-      return txn;
-    }
-  }
-
-  if (error == SercomWireError::BUS_STATE_UNKNOWN)
-    _wire.retryCount = 0;
-
   waitSyncBusySysOp();
 
   SercomWireError completionError = error;
@@ -1846,14 +1860,32 @@ SercomTxn *SERCOM::stopTransmissionWIRE(SercomWireError error) {
   completionError = retireCrcWIRE(completionError);
   report.error = completionError;
   refreshCompletionReport();
-  // Preserve the tested async-DMA master retirement order: publish the
-  // callback before inspecting chainNext, dequeuing, or restoring slave mode.
+  const bool slaveRestored = txn && (txn->config & I2C_CFG_STOP) &&
+      completionError == SercomWireError::SUCCESS && _wire.slaveConfigured;
+  if (slaveRestored) {
+#if defined(__SAME53__) || defined(__SAME54__)
+    disableInterrupts(SERCOM_I2CM_INTENCLR_ERROR_Msk |
+                      SERCOM_I2CM_INTENCLR_MB_Msk |
+                      SERCOM_I2CM_INTENCLR_SB_Msk);
+#else
+    disableInterrupts(SERCOM_I2CM_INTENCLR_ERROR |
+                      SERCOM_I2CM_INTENCLR_MB |
+                      SERCOM_I2CM_INTENCLR_SB);
+#endif
+    setSlaveWIRE();
+  }
   if (txn && txn->onComplete)
     txn->onComplete(txn->user, static_cast<int>(completionError));
 
   // Allow multi-phase I2C transactions to chain without dequeuing.
-  if (txn && completionError == SercomWireError::SUCCESS && txn->chainNext) {
+  if (txn && completionError == SercomWireError::SUCCESS && txn->chainNext &&
+      !isAbortPendingWIRE()) {
     txn->chainNext = false; // reset for next iteration
+    if (_wire.slaveTransactionActive ||
+        (slaveRestored && isAddressMatch()))
+      return txn;
+    if (!isMasterWIRE())
+      setMasterWIRE();
     startTransmissionWIRE();
     return txn;
   }
@@ -1864,30 +1896,39 @@ SercomTxn *SERCOM::stopTransmissionWIRE(SercomWireError error) {
   if (_txnQueue.peek(headTxn) && headTxn == txn)
     _txnQueue.read(txn); // remove completed master queue head
 
-  _wire.retryCount = 0;
+  if (_wire.slaveTransactionActive)
+    return txn;
+
+  _wire.startPending = false;
   _wire.active = false;
   _wire.currentTxn = nullptr;
   _wire.busErrorRecoveryPending = false;
   _wire.busErrorRecoveryDeadlineActive = false;
 
-  SercomTxn *next = nullptr;
-  if (_txnQueue.peek(next))
-    startTransmissionWIRE();
-  else {
+  if (isAbortPendingWIRE())
+    return txn;
+
+  if (slaveRestored && isAddressMatch()) {
+    setTxnWIRE(_wire.slaveTxn);
+    return txn;
+  }
+  if (!startNextQueuedWIRE()) {
+    if (!slaveRestored) {
 #if defined(__SAME53__) || defined(__SAME54__)
-    sercom->I2CM.SERCOM_INTENCLR = SERCOM_I2CM_INTENCLR_ERROR_Msk |
-                                   SERCOM_I2CM_INTENCLR_MB_Msk    |
-                                   SERCOM_I2CM_INTENCLR_SB_Msk;
+      sercom->I2CM.SERCOM_INTENCLR = SERCOM_I2CM_INTENCLR_ERROR_Msk |
+                                     SERCOM_I2CM_INTENCLR_MB_Msk    |
+                                     SERCOM_I2CM_INTENCLR_SB_Msk;
 #else
-    sercom->I2CM.INTENCLR.reg = SERCOM_I2CM_INTENCLR_ERROR |
-                                SERCOM_I2CM_INTENCLR_MB    |
-                                SERCOM_I2CM_INTENCLR_SB;
+      sercom->I2CM.INTENCLR.reg = SERCOM_I2CM_INTENCLR_ERROR |
+                                  SERCOM_I2CM_INTENCLR_MB    |
+                                  SERCOM_I2CM_INTENCLR_SB;
 #endif // __SAME53__ / __SAME54__
 
-    if (_wire.slaveConfigured) {
-      setSlaveWIRE();
-      setTxnWIRE(_wire.slaveTxn);
+      if (_wire.slaveConfigured)
+        setSlaveWIRE();
     }
+    if (_wire.slaveConfigured)
+      setTxnWIRE(_wire.slaveTxn);
   }
 
   return txn;

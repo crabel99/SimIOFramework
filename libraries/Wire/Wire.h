@@ -88,6 +88,10 @@ public:
     virtual void flush(void);
     void onReceive(void (*)(int));
     void onReceive(void (*)(SercomWireError, int));
+    // Called at write address match. A null buffer or zero capacity NACKs it.
+    void onReceiveBuffer(uint8_t *(*callback)(size_t &capacity)) {
+      onReceiveBufferCallback = callback;
+    }
     void onRequest(void (*)(void));
     void onRequest(void (*)(void), RequestCompletion completion,
                    void *user = nullptr);
@@ -138,12 +142,12 @@ private:
     uint8_t txnPoolHead;
 
     SercomTxn *allocateTxn();
-    void freeTxn(SercomTxn *txn);
 
     // Callback user functions
     void (*onRequestCallback)(void);
     void (*onReceiveCallback)(int);
     void (*onReceiveResultCallback)(SercomWireError, int);
+    uint8_t *(*onReceiveBufferCallback)(size_t &capacity) = nullptr;
     RequestCompletion requestCompletionCallback;
     void *requestCompletionUser;
 
@@ -306,8 +310,15 @@ inline void TwoWire::onService(void)
           {true, capturedBusState, arbitrationLost, commandReady,
            terminalCondition,
            replayAllowed, activeTxn != nullptr});
-      if (busErrorAction != simio::wire::BusErrorAction::RetireAmbiguous &&
-          busErrorAction != simio::wire::BusErrorAction::RetireTerminal) {
+      // An isolated BUSERR can precede the address ACK while SERCOM remains
+      // OWNER. Preserve that pending transfer; it has no command point yet.
+      const bool addressStillPending =
+          activeTxn && awaitingAddressAck && sercom->getTxnIndexWIRE() == 0 &&
+          busState == WIRE_OWNER_STATE && !arbitrationLost && !commandReady &&
+          !terminalCondition;
+      if (addressStillPending ||
+          (busErrorAction != simio::wire::BusErrorAction::RetireAmbiguous &&
+           busErrorAction != simio::wire::BusErrorAction::RetireTerminal)) {
 #if defined(__SAME53__) || defined(__SAME54__)
         sercom->clearStatusWIRE(SERCOM_I2CM_STATUS_BUSERR_Msk |
                                 SERCOM_I2CM_STATUS_ARBLOST_Msk);
@@ -317,7 +328,8 @@ inline void TwoWire::onService(void)
                                 SERCOM_I2CM_STATUS_ARBLOST);
         sercom->clearINTFLAG(SERCOM_I2CM_INTFLAG_ERROR);
 #endif // __SAME53__ / __SAME54__
-        sercom->deferBusErrorRecoveryWIRE(arbitrationLost, commandReady);
+        if (!addressStillPending)
+          sercom->deferBusErrorRecoveryWIRE();
         return;
       }
     }
@@ -453,8 +465,8 @@ inline void TwoWire::onService(void)
         sercom->deferReceiveCompleteWIRE();
         return;
       }
-      sercom->markSlaveTransactionActiveWIRE();
       if (isMasterRead) {
+        sercom->markSlaveTransactionActiveWIRE();
 #if defined(__SAME53__) || defined(__SAME54__)
         sercom->disableInterrupts(SERCOM_I2CS_INTENCLR_AMATCH_Msk);
 #else
@@ -462,9 +474,7 @@ inline void TwoWire::onService(void)
 #endif // __SAME53__ / __SAME54__
         sercom->deferRequestWIRE();
       } else {
-        prepareSlaveReceive();
-        sercom->setTxnWIRE(&slaveTxn);
-        sercom->startTransmissionWIRE();
+        onDeferredReceive(this);
       }
       return;
     }
