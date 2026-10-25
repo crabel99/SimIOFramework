@@ -226,7 +226,8 @@ void TwoWire::end() {
 }
 
 bool TwoWire::abortTransmission(int status) {
-  return sercom->abortWIRE(static_cast<SercomWireError>(status));
+  return sercom->abortWIRE(static_cast<SercomWireError>(status),
+                           SercomWireAbortTarget::Master);
 }
 
 uint8_t TwoWire::requestFrom(uint8_t address, size_t quantity, bool stopBit, uint8_t* rxBuffer,
@@ -297,12 +298,6 @@ SercomTxn* TwoWire::allocateTxn() {
   txnPoolHead = (txnPoolHead + 1) % TXN_POOL_SIZE;
   *txn = SercomTxn{};  // Clear the transaction
   return txn;
-}
-
-void TwoWire::freeTxn(SercomTxn* txn) {
-  // Transactions are freed when removed from SERCOM queue
-  // Pool allocation is round-robin, so no explicit free needed
-  (void)txn;
 }
 
 void TwoWire::beginTransmission(uint8_t address) {
@@ -587,6 +582,27 @@ void TwoWire::onDeferredReceive(void *user) {
   if (!user)
     return;
   TwoWire *self = static_cast<TwoWire *>(user);
+  if (self->onReceiveBufferCallback) {
+    size_t capacity = 0;
+    uint8_t *buffer = self->onReceiveBufferCallback(capacity);
+    if (!buffer || capacity == 0) {
+      self->sercom->prepareNackBitWIRE();
+#if defined(__SAME53__) || defined(__SAME54__)
+      self->sercom->clearINTFLAG(SERCOM_I2CS_INTFLAG_AMATCH_Msk);
+#else
+      self->sercom->clearINTFLAG(SERCOM_I2CS_INTFLAG_AMATCH);
+#endif
+      self->sercom->retireSlaveTransactionWIRE(false);
+#if defined(__SAME53__) || defined(__SAME54__)
+      self->sercom->enableInterrupts(SERCOM_I2CS_INTENSET_AMATCH_Msk);
+#else
+      self->sercom->enableInterrupts(SERCOM_I2CS_INTENSET_AMATCH);
+#endif
+      return;
+    }
+    self->rxBufferPtr = buffer;
+    self->rxBufferCapacity = capacity;
+  }
   self->prepareSlaveReceive();
   self->sercom->setTxnWIRE(&self->slaveTxn);
   self->sercom->markSlaveTransactionActiveWIRE();

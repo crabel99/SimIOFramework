@@ -19,7 +19,6 @@ enum class BusErrorAction : uint8_t {
   WaitForBusState,
   WaitForArbitrationRelease,
   WaitAtCommandPoint,
-  EstablishIdle,
   ResetPeripheralAndRestart,
   RetireAmbiguous,
   RetireTerminal,
@@ -46,7 +45,7 @@ constexpr BusErrorAction decideBusErrorAction(BusErrorContext context) {
                    context.busState == BusState::Idle
              ? BusErrorAction::RestartQueueHead
          : context.busState == BusState::Unknown
-             ? BusErrorAction::EstablishIdle
+             ? BusErrorAction::WaitForBusState
          : context.arbitrationLost
              ? BusErrorAction::WaitForArbitrationRelease
          : context.commandReady ? BusErrorAction::WaitAtCommandPoint
@@ -66,6 +65,7 @@ constexpr BusErrorAction decideBusErrorWaitAction(BusState busState,
                                                    bool timedOut) {
   return busState == BusState::Busy || busState == BusState::Idle
              ? BusErrorAction::RestartQueueHead
+         : busState == BusState::Unknown ? BusErrorAction::WaitForBusState
          : timedOut ? BusErrorAction::ResetPeripheralAndRestart
                     : BusErrorAction::WaitForBusState;
 }

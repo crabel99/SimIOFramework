@@ -328,12 +328,11 @@ class SERCOM
 		SercomTxn* stopTransmissionWIRE( SercomWireError error ) ;
 		bool enqueueWIRE(SercomTxn* txn);
 		inline bool canEnqueueWIRE(void) { return !_txnQueue.isFull(); }
-		bool abortWIRE(SercomWireError error = SercomWireError::MASTER_TIMEOUT);
-		inline bool isAbortPendingWIRE(void) const { return _wire.abortPending; }
+		bool abortWIRE(SercomWireError error = SercomWireError::MASTER_TIMEOUT, SercomWireAbortTarget target = SercomWireAbortTarget::Current);
+		inline bool isAbortPendingWIRE(void) const { return _wire.abortPending != SercomWireAbortTarget::None; }
 		bool serviceAbortWIRE(void);
 		void deferStopWIRE(SercomWireError error);
-		void deferBusErrorRecoveryWIRE(bool arbitrationLost,
-		                               bool commandReady);
+		void deferBusErrorRecoveryWIRE(void);
 		SercomTxn* serviceBusErrorRecoveryWIRE(void);
 
 		inline bool sendDataWIRE( void ) ;
@@ -524,16 +523,16 @@ class SERCOM
 			bool useDma = false;		             // per-transaction DMA use for master/slave modes
 			bool active = false;                     // active transaction in progress
 			bool slaveTransactionActive = false;     // AMATCH observed for cached slave descriptor
+			bool stopPending = false;                  // deferred transfer completion, separate from a retry wake
 			bool releasePending = false;              // STOP requested; callback waits until OWNER clears
-			bool abortPending = false;                // wait for MB/SB before issuing timeout STOP
+			SercomWireAbortTarget abortPending = SercomWireAbortTarget::None;
 			bool busErrorRecoveryPending = false;
+			bool startPending = false;
+			bool masterStartupQualified = true;        // fresh master activation observed UNKNOWN or BUSY
 			uint32_t busErrorRecoveryStartedUs = 0;
 			bool busErrorRecoveryDeadlineActive = false;
 			uint32_t busErrorRecoveryDeadlineStartedUs = 0;
-			bool busErrorRecoveryArbitrationLost = false;
-			bool busErrorRecoveryCommandReady = false;
 			SercomWireError abortError = SercomWireError::MASTER_TIMEOUT;
-			uint8_t retryCount = 0;                  // retry count for recoverable bus errors
 			SercomWireError returnValue = SercomWireError::SUCCESS;
 			SercomTxn* currentTxn = nullptr;
 			SercomTxn* slaveTxn = nullptr;
